@@ -1,10 +1,10 @@
 # Homebrew formula for EPMA Windows 11 Creator USB
 #
-# Homebrew only installs formulae from a tap, so this file must be published to
-# a repository named `homebrew-<name>` before it can be used. Once that repo
-# exists, users install with:
+# Homebrew only installs formulae from a tap, so this file is published to
+# https://github.com/1985epma/homebrew-tap. Users install with:
 #
 #   brew tap 1985epma/tap
+#   brew trust 1985epma/tap        # required for third-party taps
 #   brew install epma-windows-usb-creator
 #
 # Development version, straight from the main branch:

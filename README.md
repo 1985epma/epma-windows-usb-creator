@@ -81,6 +81,23 @@ On Linux, partitioning/formatting/mounting a raw block device requires root, so 
 
 ## Installation
 
+### Homebrew (macOS — recommended)
+
+```bash
+brew tap 1985epma/tap
+brew trust 1985epma/tap
+brew install epma-windows-usb-creator
+```
+
+Then run it with `epma-windows-usb-creator`.
+
+Homebrew pulls in `wimlib` and a Python build with Tkinter automatically, so
+there is nothing else to install. `brew trust` is required by Homebrew for any
+third-party tap — it is a one-time confirmation that you accept code from this
+tap.
+
+### From source
+
 ```bash
 git clone https://github.com/1985epma/epma-windows-usb-creator.git
 cd epma-windows-usb-creator
