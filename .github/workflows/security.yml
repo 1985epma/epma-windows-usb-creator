@@ -116,7 +116,7 @@ jobs:
 
       - name: Guardar o relatório
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: bandit-relatorio
           path: bandit-relatorio.json
@@ -158,7 +158,7 @@ jobs:
       - name: Guardar o relatório
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: semgrep-relatorio
           path: semgrep.sarif
