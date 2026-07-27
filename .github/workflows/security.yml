@@ -54,7 +54,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o Python
         uses: actions/setup-python@v5
@@ -86,7 +86,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o Python
         uses: actions/setup-python@v5
@@ -131,7 +131,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o Python
         uses: actions/setup-python@v5
@@ -177,7 +177,7 @@ jobs:
       actions: read
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o CodeQL
         uses: github/codeql-action/init@v3
@@ -199,7 +199,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Baixar o código com todo o histórico
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # fetch-depth 0 traz TODOS os commits: um segredo apagado depois
           # continua no histórico e continua vazado.

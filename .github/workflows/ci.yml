@@ -43,7 +43,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o Python
         uses: actions/setup-python@v5
@@ -81,7 +81,7 @@ jobs:
             python: '3.13'
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Preparar o Python
         uses: actions/setup-python@v5
