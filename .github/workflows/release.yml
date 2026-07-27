@@ -121,7 +121,7 @@ jobs:
         # foi gerado por ESTA esteira, a partir DESTE código — e não montado na
         # máquina de alguém. É o mais próximo de assinatura digital que dá para
         # obter sem comprar um certificado (risco residual RR-02).
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'pacote/win11_usb_creator.py'
 
