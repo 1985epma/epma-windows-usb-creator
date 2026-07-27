@@ -1,0 +1,28 @@
+# EPMA Windows 11 Creator USB — dependências Python
+#
+# ESTE PROJETO NÃO TEM DEPENDÊNCIAS DE TERCEIROS. Este arquivo existe
+# deliberadamente vazio para tornar esse fato explícito e verificável por
+# ferramentas de análise de composição (SCA), que de outra forma não conseguem
+# distinguir "projeto sem dependências" de "projeto não analisado".
+#
+# O programa usa apenas a biblioteca padrão do Python:
+#   hashlib, json, logging, os, platform, plistlib, re, shutil, subprocess,
+#   sys, tempfile, threading, time, urllib.parse, urllib.request, webbrowser
+#   e tkinter (interface gráfica).
+#
+# Requisito de interpretador: Python 3.9 ou superior.
+#
+# Tkinter faz parte da biblioteca padrão, mas em muitos sistemas é distribuído
+# num pacote separado do sistema operacional (não via pip):
+#   macOS:          brew install python-tk@<sua-versao>
+#   Debian/Ubuntu:  sudo apt install python3-tk
+#   Fedora:         sudo dnf install python3-tkinter
+#   Arch:           sudo pacman -S tk
+#   openSUSE:       sudo zypper install python3-tk
+#
+# As dependências de sistema (parted, rsync, wimlib etc.) estão documentadas
+# no README.md e em SECURITY.md.
+#
+# ANTES DE ADICIONAR QUALQUER BIBLIOTECA AQUI: cada dependência adicionada passa
+# a fazer parte permanente da superfície de ataque do projeto e precisará ser
+# monitorada por vulnerabilidades. Ver SECURITY.md.

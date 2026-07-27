@@ -1,0 +1,23 @@
+# Artefatos do Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Imagens de disco — nunca versionar arquivos de vários GB
+*.iso
+*.iso.part
+*.wim
+*.esd
+*.swm
+
+# Registros de auditoria: podem conter caminhos locais do usuário.
+# Não contêm senhas (ver SECURITY.md), mas não pertencem ao repositório.
+*.log
+audit.log
+
+# Sistema operacional / editores
+.DS_Store
+.idea/
+.vscode/
