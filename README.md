@@ -1,48 +1,52 @@
 # EPMA Windows 11 Creator USB
 
-Aplicação gráfica multiplataforma (**macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**.
+**English** · [Português](README.pt-BR.md)
 
-Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python externas.
+Cross-platform GUI application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format.
 
-![Licença](https://img.shields.io/badge/licen%C3%A7a-GPLv3-blue)
-![Plataformas](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux-lightgrey)
+Written in pure Python with Tkinter — **zero third-party Python dependencies**.
+
+![License](https://img.shields.io/badge/license-GPLv3-blue)
+![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.9%2B-green)
 
 ---
 
-## Índice
+## Table of contents
 
-- [Recursos](#recursos)
-- [Como funciona](#como-funciona)
-- [Requisitos](#requisitos)
-- [Instalação](#instalação)
-- [Uso](#uso)
-- [Segurança](#segurança)
-- [Solução de problemas](#solução-de-problemas)
-- [Limitações](#limitações)
-- [Licença](#licença)
+- [Features](#features)
+- [How it works](#how-it-works)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Security](#security)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Limitations](#limitations)
+- [License](#license)
 
 ---
 
-## Recursos
+## Features
 
-- **Download da ISO** direto pela aplicação, com barra de progresso, velocidade, tempo restante e botão de cancelar.
-- **Uso de ISO já existente**, caso você já tenha baixado o arquivo pelo navegador.
-- **Formatação automática** do pendrive como GPT + FAT32 com rótulo `WIN11USB` (compatível com boot UEFI, sem precisar desativar o Secure Boot).
-- **Divisão automática do `install.wim` / `install.esd`**: esses arquivos costumam passar de 4 GB, o limite do FAT32. A aplicação detecta o caso e divide o arquivo em `.swm` usando `wimlib-imagex`.
-- **Instalação automática de dependências**: detecta o gerenciador de pacotes (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) ou o Homebrew no macOS e instala o que estiver faltando.
-- **Proteção contra apagar o disco errado**: apenas discos externos/removíveis são listados, o disco de sistema nunca aparece, e são exigidas três confirmações antes de gravar.
-- **Log em tempo real** de todos os comandos executados, dentro da própria janela.
+- **Download the ISO** from within the application, with a progress bar, transfer speed, time remaining and a cancel button.
+- **Use an existing ISO** if you already downloaded the file in your browser.
+- **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
+- **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
+- **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
+- **Protection against erasing the wrong disk**: only external/removable drives are listed, the system disk is never shown, and three separate confirmations are required before writing.
+- **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
+- **Real-time log** of every command executed, inside the application window.
 
-## Como funciona
+## How it works
 
-1. A ISO é montada em modo somente leitura (`hdiutil` no macOS, `mount -o loop,ro` no Linux).
-2. O pendrive é apagado e reparticionado como GPT com uma partição FAT32 marcada como ESP.
-3. Todos os arquivos da ISO são copiados com `rsync`, **exceto** o `install.wim`/`install.esd`.
-4. Esse arquivo grande é copiado à parte: se couber no FAT32, é copiado direto; se passar de 4 GB, é dividido em partes de ~3,8 GB com `wimlib-imagex split`.
-5. As escritas são sincronizadas em disco e o pendrive é desmontado/ejetado com segurança.
+1. The ISO is mounted read-only (`hdiutil` on macOS, `mount -o loop,ro` on Linux).
+2. The USB drive is wiped and repartitioned as GPT with a single FAT32 partition flagged as ESP.
+3. All files from the ISO are copied with `rsync`, **except** `install.wim`/`install.esd`.
+4. That large file is handled separately: if it fits within the FAT32 limit it is copied directly; if it exceeds 4 GB it is split into ~3.8 GB parts with `wimlib-imagex split`.
+5. Writes are flushed to disk and the USB drive is safely unmounted/ejected.
 
-## Requisitos
+## Requirements
 
 ### macOS
 
@@ -50,13 +54,13 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 brew install python-tk@3.14 wimlib
 ```
 
-> Ajuste `python-tk@<versão>` para a versão do Python que você usa. No macOS não é necessário `sudo`: as operações de disco em unidades externas são feitas via `diskutil` e `hdiutil`.
+> Adjust `python-tk@<version>` to match your Python version. On macOS no `sudo` is required: disk operations on external drives go through `diskutil` and `hdiutil`.
 
 ### Linux
 
-Os nomes dos pacotes variam por distribuição. Ferramentas necessárias:
+Package names vary by distribution. Required tools:
 
-| Ferramenta | Pacote (Debian/Ubuntu) | Fedora/RHEL | Arch | openSUSE |
+| Tool | Debian/Ubuntu | Fedora/RHEL | Arch | openSUSE |
 |---|---|---|---|---|
 | `parted`, `partprobe` | `parted` | `parted` | `parted` | `parted` |
 | `mkfs.vfat` | `dosfstools` | `dosfstools` | `dosfstools` | `dosfstools` |
@@ -65,17 +69,17 @@ Os nomes dos pacotes variam por distribuição. Ferramentas necessárias:
 | `wimlib-imagex` | `wimtools` | `wimlib-utils` | `wimlib` | `wimlib` |
 | GUI (Tkinter) | `python3-tk` | `python3-tkinter` | `tk` | `python3-tk` |
 
-Exemplo em Debian/Ubuntu:
+Example on Debian/Ubuntu:
 
 ```bash
 sudo apt install python3-tk parted dosfstools util-linux rsync wimtools
 ```
 
-Você também pode simplesmente abrir a aplicação e usar o botão **"Install missing dependencies"** na aba 2 — ela monta e executa o comando certo para o seu gerenciador de pacotes.
+Alternatively, just launch the application and use the **"Install missing dependencies"** button on tab 2 — it builds and runs the correct command for your package manager.
 
-No Linux, particionar/formatar/montar um dispositivo de bloco exige privilégios de root, então a aplicação pede sua senha de administrador (via `sudo`, ou `pkexec` se `sudo` não existir).
+On Linux, partitioning/formatting/mounting a raw block device requires root, so the application will ask for your administrator password (via `sudo`, or `pkexec` if `sudo` is unavailable).
 
-## Instalação
+## Installation
 
 ```bash
 git clone https://github.com/1985epma/epma-windows-usb-creator.git
@@ -83,98 +87,152 @@ cd epma-windows-usb-creator
 chmod +x win11_usb_creator.py
 ```
 
-## Uso
+**Verify the file before running it.** This application asks for your administrator password, which makes a tampered copy a worthwhile target for an attacker:
+
+```bash
+shasum -a 256 win11_usb_creator.py
+```
+
+For files downloaded from a [release](https://github.com/1985epma/epma-windows-usb-creator/releases), compare the result against the published `SHA256SUMS.txt`, or verify the build provenance attestation issued by GitHub:
+
+```bash
+gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator
+```
+
+## Usage
 
 ```bash
 python3 win11_usb_creator.py
 ```
 
-### Aba 1 — Baixar a ISO
+### Tab 1 — Download the ISO
 
-A Microsoft só libera o link direto da ISO depois que você escolhe a edição e o idioma no site oficial. Por isso:
+Microsoft only exposes the direct ISO link after you select an edition and language on their official site, so:
 
-1. Clique em **"Open Microsoft's official page"**.
-2. Em *Download Windows 11 Disk Image (ISO)*, escolha **Windows 11 (multi-edition ISO)** e clique em Download.
-3. Escolha o idioma e confirme.
-4. **Clique com o botão direito** no botão azul de download de 64 bits e escolha **"Copiar endereço do link"** (não clique para baixar pelo navegador).
-5. Cole o link no campo e clique em **"Download ISO"**.
+1. Click **"Open Microsoft's official page"**.
+2. Under *Download Windows 11 Disk Image (ISO)*, select **Windows 11 (multi-edition ISO)** and click Download.
+3. Choose your language and confirm.
+4. **Right-click** the blue 64-bit download button and choose **"Copy Link Address"** (do not click it to download in the browser).
+5. Paste the link into the field and click **"Download ISO"**.
 
-Se você já baixou a ISO manualmente, use **"Select existing ISO file..."** e pule para a aba 2.
+Optionally, paste Microsoft's published SHA-256 checksum into the *Expected SHA-256* field. If the downloaded file does not match, it is discarded automatically.
 
-### Aba 2 — Criar o pendrive
+If you already downloaded the ISO manually, use **"Select existing ISO file..."** and skip to tab 2.
 
-1. Confira o status das dependências no topo (instale as que faltarem, se necessário).
-2. Conecte o pendrive (mínimo **8 GB**) e clique em **"Refresh external drives list"**.
-3. Selecione o pendrive na lista.
-4. Marque a caixa de confirmação de que todos os dados serão apagados.
-5. **Digite o identificador do disco** (ex.: `disk4` no macOS, `sdb` no Linux) no campo de confirmação.
-6. Clique em **"Create Bootable USB Drive"** e confirme no diálogo final.
+### Tab 2 — Create the USB drive
 
-O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe pelo log na parte inferior da janela.
+1. Check the dependency status at the top (install anything missing, if needed).
+2. Plug in the USB drive (**8 GB minimum**) and click **"Refresh external drives list"**.
+3. Select your drive from the list.
+4. Tick the checkbox confirming that all data will be erased.
+5. **Type the disk identifier** (e.g. `disk4` on macOS, `sdb` on Linux) into the confirmation field.
+6. Click **"Create Bootable USB Drive"** and confirm in the final dialog.
 
-## Segurança
+The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
 
-Esta aplicação **apaga completamente** o disco selecionado. As proteções implementadas são:
+## Security
 
-- Apenas discos **externos/removíveis** são listados. No macOS o disco interno é filtrado duas vezes (`diskutil list external physical` + verificação da flag `Internal`); no Linux o disco que contém a raiz `/` é excluído e apenas dispositivos removíveis ou com transporte USB/MMC são exibidos.
-- É preciso marcar explicitamente a caixa de confirmação.
-- É preciso **digitar manualmente** o identificador exato do disco.
-- Ainda há um diálogo de confirmação final antes de qualquer escrita.
+This application **completely erases** the selected disk and executes privileged commands. The implemented protections are:
 
-- **Reconferência antes de apagar:** imediatamente antes da gravação, o programa reconsulta a lista de discos e confirma que o identificador escolhido ainda aponta para o mesmo dispositivo, com o mesmo tamanho. Nomes como `/dev/sdb` são reciclados pelo sistema — se um pendrive for trocado nesse intervalo, a operação é abortada.
-- **Falha fechada:** se o programa não conseguir *confirmar* que um disco é externo, ele o esconde em vez de exibi-lo. Discos que contêm `/`, `/boot`, `/home`, `/usr`, `/var` ou `/etc` nunca são listados, mesmo que o sistema os marque como removíveis (protege máquinas que inicializam por cartão SD ou USB, como um Raspberry Pi).
+### Preventing the wrong disk from being erased
 
-Sobre a senha de administrador (Linux): ela é usada apenas para executar comandos de disco locais via `sudo -S`, é enviada exclusivamente por `stdin` (nunca na linha de comando, onde outros usuários poderiam vê-la com `ps`), **nunca é gravada em disco nem enviada para lugar nenhum**, e é removida da memória assim que a operação termina.
+- Only **external/removable** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check); on Linux the disk holding the root filesystem is excluded and only removable or USB/MMC-attached devices are shown.
+- **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. Disks holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
+- **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
+- You must explicitly tick the confirmation checkbox.
+- You must **manually type** the exact disk identifier.
+- A final confirmation dialog appears before any write occurs.
 
-Mesmo assim: **confira duas vezes o disco selecionado antes de confirmar.**
+> Even so: **double-check the selected disk before confirming.**
 
-### Integridade da imagem baixada
+### Handling of the administrator password (Linux)
 
-O programa aceita **apenas links HTTPS** e avisa se o servidor não for um endereço conhecido da Microsoft. Ao final do download, ele exibe a **impressão digital SHA-256** do arquivo. Se você informar o valor esperado no campo opcional, o arquivo será descartado caso não confira.
+The password is used solely to run local disk commands via `sudo -S`. It is passed **exclusively over `stdin`** — never on the command line, where other users on the machine could see it with `ps` — is **never written to disk or transmitted anywhere**, and is cleared from memory as soon as the operation completes.
 
-> **Baixe sempre pelo site oficial da Microsoft.** Nunca use um link de "espelho mais rápido" indicado em fórum ou vídeo — uma imagem adulterada instalaria um Windows comprometido sem que você percebesse.
+### Integrity of the downloaded image
 
-### Documentação de segurança
+The application accepts **HTTPS links only** and warns you if the server is not a recognised Microsoft download host. After the download completes it displays the **SHA-256 checksum** of the file. If you supply an expected value, a mismatch causes the file to be discarded.
 
-O modelo de ameaças, os controles implementados e as variáveis de ambiente opcionais estão em [SECURITY.md](SECURITY.md). Os relatórios completos da auditoria (SCA, SAST, STRIDE, OWASP Top 10 e DAST) estão em [output/](output/).
+> **Always download from Microsoft's official website.** Never use a "faster mirror" link suggested in a forum or video — a tampered image would install a compromised Windows without you noticing.
 
-## Solução de problemas
+### Security documentation
+
+The threat model, implemented controls and optional environment variables are documented in [SECURITY.md](SECURITY.md).
+
+Full audit reports (SCA, SAST, STRIDE, OWASP Top 10 and DAST) are in [output/](output/). Start with the [consolidated report](output/relatorio-consolidado-seguranca.md). *Note: the audit reports are written in Portuguese.*
+
+## Development
+
+### Running the checks locally
+
+Before submitting a change, run the same checks the CI pipeline runs:
+
+```bash
+python3 verificar.py
+```
+
+This is safe: nothing touches a disk, formats anything, or requires administrator privileges.
+
+### Continuous integration
+
+Every change is automatically checked by GitHub Actions:
+
+| Workflow | Purpose |
+|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | Linting and tests across Python 3.9–3.13 on Linux and macOS |
+| [`security.yml`](.github/workflows/security.yml) | Security regression guard, Bandit, Semgrep, CodeQL, secret scanning |
+| [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums and build provenance |
+
+The security pipeline is built in two layers: a dependency-free regression guard that verifies all 24 audit fixes remain in place, plus external analysers as a second opinion. See [.github/README-CICD.md](.github/README-CICD.md) for details. *Note: written in Portuguese.*
+
+### Contributing
+
+Third-party dependencies are deliberately avoided — this eliminates the most common supply-chain attack surface in modern software, and CI enforces it. If a dependency becomes genuinely necessary, the failing check explains the process to follow.
+
+## Troubleshooting
 
 **"Tkinter is not available for this Python installation"**
-Instale o Tkinter para a sua versão do Python (veja [Requisitos](#requisitos)).
+Install Tkinter for your Python version (see [Requirements](#requirements)).
 
 **"wimlib-imagex not found"**
-Instale o `wimlib` (macOS: `brew install wimlib`; Linux: veja a tabela acima) ou use o botão de instalar dependências.
+Install `wimlib` (macOS: `brew install wimlib`; Linux: see the table above) or use the dependency installation button.
 
 **"Could not find sources/install.wim or sources/install.esd on the ISO"**
-A imagem selecionada não é uma ISO de instalação do Windows. Baixe a ISO *multi-edition* oficial da Microsoft.
+The selected image is not a Windows installation ISO. Download the official *multi-edition* ISO from Microsoft.
+
+**"Only HTTPS links are accepted"**
+The download link must start with `https://`. An unencrypted link can be modified in transit, which would let someone replace the Windows image with a tampered one.
 
 **"Neither 'sudo' nor 'pkexec' was found"**
-Instale o `sudo` ou execute a aplicação como root.
+Install `sudo` or run the application as root.
 
-**Nenhum disco aparece na lista**
-Confira se o pendrive está conectado e clique em *Refresh*. No Linux, alguns adaptadores USB-SATA aparecem como não removíveis e são propositalmente ocultados por segurança.
+**"Aborted for safety: /dev/sdX is no longer listed as an external drive"**
+The device changed between selection and writing. Click *Refresh external drives list* and select the drive again — this check exists precisely to prevent the wrong disk from being erased.
 
-**O pendrive não aparece no boot**
-Certifique-se de que a máquina está em modo **UEFI** (não Legacy/CSM). O pendrive gerado é UEFI + GPT e não inicializa em BIOS legado.
+**No drives appear in the list**
+Check that the USB drive is plugged in and click *Refresh*. On Linux, some USB-SATA adapters report as non-removable and are deliberately hidden for safety.
 
-## Limitações
+**The USB drive does not appear in the boot menu**
+Make sure the machine is in **UEFI** mode (not Legacy/CSM). The generated drive is UEFI + GPT and will not boot on legacy BIOS.
 
-- Não funciona no Windows (o script sai com erro nessa plataforma).
-- Gera apenas mídia **UEFI/GPT** — sem suporte a boot BIOS legado.
-- Não faz bypass dos requisitos do Windows 11 (TPM 2.0 / Secure Boot).
-- O download não suporta retomada: cancelar descarta o arquivo parcial.
+## Limitations
 
-## Licença
+- Does not run on Windows (the script exits with an error on that platform).
+- Produces **UEFI/GPT** media only — no legacy BIOS boot support.
+- Does not bypass Windows 11 requirements (TPM 2.0 / Secure Boot).
+- Downloads cannot be resumed: cancelling discards the partial file.
+- Formatting does not overwrite the previous contents of the USB drive. If it held sensitive data, wipe it first with `shred` (Linux) or "Erase securely" in Disk Utility (macOS).
+
+## License
 
 Copyright (C) 2026 EPMA
 
-Este programa é software livre: você pode redistribuí-lo e/ou modificá-lo sob os termos da **GNU General Public License, versão 3**, conforme publicada pela Free Software Foundation, ou (a seu critério) qualquer versão posterior.
+This program is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public License, version 3**, as published by the Free Software Foundation, or (at your option) any later version.
 
-Este programa é distribuído na esperança de que seja útil, mas **SEM NENHUMA GARANTIA**; sem sequer a garantia implícita de COMERCIABILIDADE ou ADEQUAÇÃO A UM DETERMINADO FIM. Consulte a GNU General Public License para mais detalhes.
+This program is distributed in the hope that it will be useful, but **WITHOUT ANY WARRANTY**; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
 
-O texto completo da licença está em [LICENSE](LICENSE) e também disponível em <https://www.gnu.org/licenses/gpl-3.0.html>.
+The full license text is in [LICENSE](LICENSE) and is also available at <https://www.gnu.org/licenses/gpl-3.0.html>.
 
 ---
 
-> **Aviso:** Windows e Windows 11 são marcas registradas da Microsoft Corporation. Este projeto não é afiliado à Microsoft. A ISO é baixada exclusivamente dos servidores oficiais da Microsoft, e seu uso está sujeito aos termos de licenciamento da Microsoft.
+> **Disclaimer:** Windows and Windows 11 are registered trademarks of Microsoft Corporation. This project is not affiliated with Microsoft. The ISO is downloaded exclusively from Microsoft's official servers, and its use is subject to Microsoft's licensing terms.

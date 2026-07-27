@@ -1,0 +1,149 @@
+# =============================================================================
+# Regras de segurança específicas do EPMA Windows 11 Creator USB
+#
+# Estas regras codificam as falhas que a auditoria ENCONTROU NESTE PROJETO.
+# Regras genéricas de catálogo não conhecem o contexto daqui; estas conhecem.
+#
+# Rodam sem internet e sem cadastro:
+#     semgrep --config .semgrep/win11usb.yml --error .
+# =============================================================================
+
+rules:
+  # ---------------------------------------------------------------------------
+  - id: shell-true-proibido
+    languages: [python]
+    severity: ERROR
+    message: >-
+      PROIBIDO: shell=True entrega o texto direto ao interpretador de comandos.
+      Neste projeto os comandos rodam como ADMINISTRADOR, então isso permitiria
+      que um nome de arquivo virasse um comando com controle total da máquina
+      (achado SAST-01 da auditoria). Use subprocess com lista de argumentos.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.Popen(..., shell=True, ...)
+          - pattern: subprocess.run(..., shell=True, ...)
+          - pattern: subprocess.call(..., shell=True, ...)
+          - pattern: subprocess.check_call(..., shell=True, ...)
+          - pattern: subprocess.check_output(..., shell=True, ...)
+
+  # ---------------------------------------------------------------------------
+  - id: execucao-de-texto-proibida
+    languages: [python]
+    severity: ERROR
+    message: >-
+      PROIBIDO: os.system/os.popen/eval/exec executam texto como código.
+      Não há uso legítimo destes neste projeto.
+    patterns:
+      - pattern-either:
+          - pattern: os.system(...)
+          - pattern: os.popen(...)
+          - pattern: eval(...)
+          - pattern: exec(...)
+          - pattern: subprocess.getoutput(...)
+
+  # ---------------------------------------------------------------------------
+  - id: script-privilegiado-com-interpolacao
+    languages: [python]
+    severity: ERROR
+    message: >-
+      PROIBIDO: valor interpolado no texto de um script executado como
+      administrador. Esta é EXATAMENTE a falha de injeção de comando que a
+      auditoria corrigiu (SAST-01, gravidade Alta). Passe o valor como
+      parâmetro posicional -- run_script(script, log, args=[valor]) -- e use
+      "$1", "$2" dentro do script.
+    patterns:
+      - pattern-either:
+          - pattern: $P.run_script(f"...", ...)
+          - pattern: $P.run_script($X % ..., ...)
+          - pattern: $P.run_script($X.format(...), ...)
+          - pattern: $P.run_script("..." + $X, ...)
+
+  # ---------------------------------------------------------------------------
+  - id: senha-em-argumento-de-processo
+    languages: [python]
+    severity: ERROR
+    message: >-
+      PROIBIDO: a senha não pode ir na lista de argumentos do processo.
+      Argumentos são visíveis a QUALQUER usuário da máquina pelo comando `ps`
+      (ameaça STRIDE B-I1). Envie a senha apenas por stdin.
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.Popen([..., $PWD, ...], ...)
+          - pattern: subprocess.run([..., $PWD, ...], ...)
+      - metavariable-regex:
+          metavariable: $PWD
+          regex: '(?i).*(password|passwd|senha|secret|token).*'
+
+  # ---------------------------------------------------------------------------
+  - id: download-sem-tempo-limite
+    languages: [python]
+    severity: WARNING
+    message: >-
+      urlopen() sem 'timeout': um servidor que aceita a conexão e nunca responde
+      deixaria o programa travado para sempre (achado SAST-13).
+    patterns:
+      - pattern: urllib.request.urlopen($REQ)
+      - pattern-not: urllib.request.urlopen($REQ, timeout=...)
+
+  # ---------------------------------------------------------------------------
+  - id: algoritmo-de-resumo-fraco
+    languages: [python]
+    severity: ERROR
+    message: >-
+      MD5 e SHA-1 são considerados quebrados para verificação de integridade:
+      é possível forjar um arquivo diferente com o mesmo resultado. Use SHA-256.
+    patterns:
+      - pattern-either:
+          - pattern: hashlib.md5(...)
+          - pattern: hashlib.sha1(...)
+
+  # ---------------------------------------------------------------------------
+  - id: verificacao-de-certificado-desligada
+    languages: [python]
+    severity: ERROR
+    message: >-
+      PROIBIDO desligar a verificação de certificado. Sem ela, qualquer servidor
+      pode se passar pela Microsoft e entregar uma imagem adulterada do Windows
+      (ameaça STRIDE E-S1, gravidade Alta).
+    patterns:
+      - pattern-either:
+          - pattern: ssl._create_unverified_context(...)
+          - pattern: |
+              $CTX.verify_mode = ssl.CERT_NONE
+          - pattern: |
+              $CTX.check_hostname = False
+          - pattern: requests.$M(..., verify=False, ...)
+
+  # ---------------------------------------------------------------------------
+  - id: permissao-de-arquivo-permissiva
+    languages: [python]
+    severity: WARNING
+    message: >-
+      Arquivo criado com permissão que permite leitura por outros usuários da
+      máquina. O registro de auditoria e o download parcial devem usar 0o600
+      (somente o dono lê) -- ver PRIVATE_FILE_MODE.
+    patterns:
+      - pattern-either:
+          - pattern: os.chmod($P, 0o777)
+          - pattern: os.chmod($P, 0o666)
+          - pattern: os.chmod($P, 0o644)
+          - pattern: os.open($P, ..., 0o777)
+          - pattern: os.open($P, ..., 0o666)
+          - pattern: os.open($P, ..., 0o644)
+
+  # ---------------------------------------------------------------------------
+  - id: segredo-embutido-no-codigo
+    languages: [python]
+    severity: ERROR
+    message: >-
+      Possível senha, chave ou token escrito diretamente no código. Segredos
+      devem vir de variável de ambiente. (A auditoria confirmou que o projeto
+      não tinha nenhum -- mantenha assim.)
+    patterns:
+      - pattern: $NOME = "$VALOR"
+      - metavariable-regex:
+          metavariable: $NOME
+          regex: '(?i)^(password|passwd|secret|api_key|apikey|token|access_key|private_key|credential)$'
+      - metavariable-regex:
+          metavariable: $VALOR
+          regex: '.{8,}'

@@ -197,7 +197,7 @@ def audit(msg, level=logging.INFO):
     """Record a security-relevant event. Callers must not pass secrets or personal data."""
     try:
         get_audit_logger().log(level, msg)
-    except Exception:
+    except Exception:  # noqa: S110 - deliberate: logging must never break the app
         pass
 
 
@@ -248,7 +248,8 @@ def validate_download_url(raw_url):
     try:
         parsed = urllib.parse.urlparse(url)
     except Exception:
-        raise ValueError("That does not look like a valid link.")
+        # 'from None': the parser's internal message would only confuse the user.
+        raise ValueError("That does not look like a valid link.") from None
     if parsed.scheme.lower() not in ALLOWED_URL_SCHEMES:
         raise ValueError(
             f"Only {'/'.join(s.upper() for s in ALLOWED_URL_SCHEMES)} links are accepted "
@@ -779,9 +780,11 @@ class DownloadThread(threading.Thread):
             # The URL was validated before this thread started; re-check here so
             # the guarantee holds even if this class is reused elsewhere.
             validate_download_url(self.url)
-            req = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})
+            # noqa S310 below: the scheme is restricted to HTTPS by the call above
+            # and re-checked after redirects; file:// and friends cannot reach here.
+            req = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})  # noqa: S310
             digest = hashlib.sha256()
-            with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:
+            with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:  # noqa: S310
                 # urlopen follows redirects; make sure we were not downgraded to
                 # an unencrypted connection along the way.
                 final_url = resp.geturl()

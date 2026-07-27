@@ -1,0 +1,251 @@
+# =============================================================================
+# PIPELINE DE SEGURANÇA
+#
+# O QUE É ISTO, EM LINGUAGEM SIMPLES
+# ----------------------------------
+# A auditoria de segurança corrigiu 17 problemas. Nada impede que uma alteração
+# futura desfaça uma dessas correções sem ninguém perceber.
+#
+# Esta esteira é a vigilância permanente: ela repete as análises da auditoria
+# automaticamente a cada alteração e uma vez por semana, e barra a alteração se
+# alguma proteção tiver sido desfeita.
+#
+# COMO ELA ESTÁ ORGANIZADA (importante entender)
+# ----------------------------------------------
+# CAMADA 1 — "Guarda de regressão" (Python puro, ZERO dependências).
+#   É o coração. Sempre funciona, nunca depende de serviço externo, e BARRA a
+#   alteração. Confere item por item se as correções continuam no lugar.
+#
+# CAMADA 2 — Ferramentas externas (Bandit, Semgrep, CodeQL, Gitleaks).
+#   Segunda opinião, que encontra coisas que ninguém previu. Barram apenas
+#   falhas de gravidade ALTA, para não travar o projeto com alarme falso.
+#
+# Essa divisão é proposital: se o Semgrep sair do ar ou mudar de licença, a
+# vigilância essencial continua funcionando.
+# =============================================================================
+
+name: Segurança
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Toda segunda-feira às 6h (UTC). Uma falha nova pode ser descoberta no
+    # mundo depois que o código foi escrito — por isso a varredura periódica.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seguranca-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ===========================================================================
+  # CAMADA 1 — Guarda de regressão (BLOQUEIA a alteração)
+  # ===========================================================================
+  guarda-regressao:
+    name: 'Camada 1: guarda de regressão'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Autoteste do guarda ("quem vigia o vigia?")
+        # Roda ANTES do guarda de propósito: confirma que o guarda realmente
+        # detecta regressões. Um verificador que aprova tudo é pior que nenhum.
+        # Ele quebra o código de propósito numa cópia temporária e confere que
+        # o guarda reclama de cada uma das 13 regressões.
+        run: python output/auditoria/teste_do_guarda.py
+
+      - name: Guarda de segurança (24 proteções da auditoria)
+        run: python output/auditoria/guard_seguranca.py
+
+      - name: Verificar dependências de terceiros
+        # O projeto tem ZERO dependências de terceiros — sua melhor propriedade
+        # de segurança. Este passo falha se alguém adicionar alguma sem seguir
+        # o processo (e a mensagem de erro explica qual é o processo).
+        run: python output/auditoria/verifica_dependencias.py
+
+  # ===========================================================================
+  # CAMADA 2 — Bandit: analisador de segurança dedicado para Python
+  # ===========================================================================
+  sast-bandit:
+    name: 'Camada 2: Bandit (SAST)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar o Bandit
+        run: pip install --disable-pip-version-check "bandit[toml]==1.9.4"
+
+      - name: Relatório completo (não bloqueia)
+        # Gera o relatório de tudo, inclusive gravidade baixa e média, para
+        # ficar guardado como evidência. As exceções e suas justificativas
+        # estão em pyproject.toml.
+        continue-on-error: true
+        run: |
+          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ \
+                 -f json -o bandit-relatorio.json
+          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ || true
+
+      - name: Barrar falhas de gravidade ALTA
+        # Só falhas de alta gravidade e alta confiança barram a alteração.
+        # As de gravidade média já estão cobertas pelo Ruff na esteira de CI,
+        # com justificativa escrita ao lado de cada linha do código.
+        run: |
+          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ \
+                 --severity-level high --confidence-level high
+
+      - name: Guardar o relatório
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-relatorio
+          path: bandit-relatorio.json
+          retention-days: 90
+
+  # ===========================================================================
+  # CAMADA 2 — Semgrep: regras próprias do projeto + catálogo público
+  # ===========================================================================
+  sast-semgrep:
+    name: 'Camada 2: Semgrep (SAST)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar o Semgrep
+        run: pip install --disable-pip-version-check semgrep
+
+      - name: Regras próprias deste projeto (BLOQUEIA)
+        # Regras escritas especificamente para as falhas que a auditoria
+        # encontrou aqui. Funcionam sem internet e sem cadastro.
+        run: semgrep --config .semgrep/win11usb.yml --error --metrics=off .
+
+      - name: Catálogo público de regras (não bloqueia)
+        # Depende de baixar as regras do site do Semgrep. Se o site estiver
+        # fora do ar ou mudar de política, isto NÃO derruba a esteira — por
+        # isso a camada 1 existe.
+        continue-on-error: true
+        run: |
+          semgrep --config=p/python --config=p/security-audit \
+                  --metrics=off --sarif --output=semgrep.sarif . || true
+
+      - name: Guardar o relatório
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-relatorio
+          path: semgrep.sarif
+          retention-days: 90
+
+  # ===========================================================================
+  # CAMADA 2 — CodeQL: o analisador de segurança do próprio GitHub
+  # ===========================================================================
+  codeql:
+    name: 'Camada 2: CodeQL (SAST)'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write   # necessário para publicar os alertas na aba Security
+      actions: read
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analisar
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:python'
+
+  # ===========================================================================
+  # CAMADA 2 — Segredos: senhas e chaves acidentalmente publicadas
+  # ===========================================================================
+  segredos:
+    name: 'Camada 2: varredura de segredos'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o código com todo o histórico
+        uses: actions/checkout@v4
+        with:
+          # fetch-depth 0 traz TODOS os commits: um segredo apagado depois
+          # continua no histórico e continua vazado.
+          fetch-depth: 0
+
+      - name: Varrer o histórico com Gitleaks
+        # Não bloqueia por si só: o guarda da camada 1 já barra segredos no
+        # código atual (regra G07), e o GitHub tem varredura nativa de segredos
+        # (ver README-CICD.md para ativá-la). Este passo cobre o HISTÓRICO.
+        continue-on-error: true
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest detect \
+            --source=/repo --redact --verbose --exit-code 1 \
+          || echo "::warning::Gitleaks encontrou algo ou não pôde rodar. Verifique o log acima."
+
+  # ===========================================================================
+  # Resultado consolidado
+  # ===========================================================================
+  seguranca-aprovada:
+    name: Segurança aprovada
+    if: always()
+    needs: [guarda-regressao, sast-bandit, sast-semgrep, codeql]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verificar o resultado das etapas anteriores
+        run: |
+          echo "guarda de regressão: ${{ needs.guarda-regressao.result }}"
+          echo "bandit:              ${{ needs.sast-bandit.result }}"
+          echo "semgrep:             ${{ needs.sast-semgrep.result }}"
+          echo "codeql:              ${{ needs.codeql.result }}"
+          echo ""
+          # O guarda da camada 1 é ABSOLUTO: se ele falhar, uma correção da
+          # auditoria foi desfeita e a alteração não pode entrar.
+          if [ "${{ needs.guarda-regressao.result }}" != "success" ]; then
+            echo "::error::Uma proteção da auditoria de segurança foi desfeita."
+            echo "::error::Consulte output/relatorio-consolidado-seguranca.md."
+            exit 1
+          fi
+          for r in "${{ needs.sast-bandit.result }}" \
+                   "${{ needs.sast-semgrep.result }}" \
+                   "${{ needs.codeql.result }}"; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::Uma análise de segurança falhou. Veja os detalhes acima."
+              exit 1
+            fi
+          done
+          echo "Todas as conferências de segurança passaram."

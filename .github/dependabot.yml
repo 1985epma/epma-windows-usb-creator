@@ -1,0 +1,38 @@
+# =============================================================================
+# Dependabot — atualização automática de dependências
+#
+# "MAS O PROJETO NÃO TEM DEPENDÊNCIAS!"
+# -------------------------------------
+# Correto: o programa em si não usa nenhuma biblioteca de terceiros.
+#
+# Mas a ESTEIRA DE CI usa. Cada `uses: actions/checkout@v4` no workflow é código
+# de terceiros que roda com acesso ao seu repositório. Se uma dessas ações for
+# comprometida ou ficar desatualizada, ela vira uma porta de entrada — e é uma
+# porta que passa despercebida justamente porque ninguém pensa nela como
+# "dependência do projeto".
+#
+# Este arquivo faz o GitHub avisar quando uma delas tiver atualização.
+# =============================================================================
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'ci'
+    labels:
+      - dependencias
+      - seguranca
+
+  # Se um dia o projeto passar a ter dependências Python, descomente o bloco
+  # abaixo. Antes disso ele não tem o que monitorar.
+  #
+  # - package-ecosystem: pip
+  #   directory: /
+  #   schedule:
+  #     interval: weekly
+  #   open-pull-requests-limit: 5

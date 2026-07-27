@@ -1,0 +1,174 @@
+# =============================================================================
+# CD — Entrega Contínua (publicação de versões)
+#
+# O QUE É "CD" NUM PROGRAMA DE DESKTOP?
+# -------------------------------------
+# Em um site, "implantar" significa colocar o código no servidor. Seu projeto
+# não tem servidor: ele é um arquivo que a pessoa baixa e executa.
+#
+# Então aqui "entregar" significa: publicar uma versão oficial, com uma
+# IMPRESSÃO DIGITAL que permita a qualquer pessoa conferir que o arquivo
+# baixado é exatamente o que você publicou — e não uma cópia adulterada.
+#
+# Isso ataca diretamente o risco residual RR-02 da auditoria ("o programa não
+# tem assinatura digital; uma versão adulterada pediria a senha de
+# administrador normalmente").
+#
+# COMO PUBLICAR UMA VERSÃO
+# ------------------------
+#   git tag v1.0.0
+#   git push origin v1.0.0
+#
+# O resto acontece sozinho.
+# =============================================================================
+
+name: Publicar versão
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      versao:
+        description: 'Versão a publicar (ex.: v1.0.0)'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Nenhuma versão sai sem passar por TODAS as conferências
+  # ---------------------------------------------------------------------------
+  conferencias:
+    name: Conferências obrigatórias
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Instalar bibliotecas gráficas
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-tk xvfb
+
+      - name: Autoteste do guarda de segurança
+        run: python output/auditoria/teste_do_guarda.py
+
+      - name: Guarda de segurança (24 proteções)
+        run: python output/auditoria/guard_seguranca.py
+
+      - name: Dependências de terceiros
+        run: python output/auditoria/verifica_dependencias.py
+
+      - name: Testes de validação (36 verificações)
+        run: python output/auditoria/testes_validacao.py
+
+      - name: Teste de fumaça da interface
+        run: xvfb-run -a python output/auditoria/smoke_ui.py
+
+  # ---------------------------------------------------------------------------
+  # 2. Publicar a versão com impressão digital e comprovante de origem
+  # ---------------------------------------------------------------------------
+  publicar:
+    name: Publicar no GitHub
+    needs: conferencias
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write        # criar a Release
+      id-token: write        # gerar o comprovante de origem (provenance)
+      attestations: write    # anexar o comprovante à versão
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Determinar a versão
+        id: versao
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            V="${{ inputs.versao }}"
+          else
+            V="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "valor=$V" >> "$GITHUB_OUTPUT"
+          echo "Publicando versão: $V"
+
+      - name: Montar o pacote da versão
+        run: |
+          mkdir -p pacote
+          cp win11_usb_creator.py pacote/
+          cp README.md README.pt-BR.md SECURITY.md LICENSE requirements.txt pacote/
+          mkdir -p pacote/relatorios
+          cp output/*.md pacote/relatorios/
+
+          cd pacote
+          # A impressão digital de cada arquivo: permite conferir que nada foi
+          # alterado entre a publicação e o download.
+          sha256sum win11_usb_creator.py > SHA256SUMS.txt
+          sha256sum README.md SECURITY.md LICENSE >> SHA256SUMS.txt
+          echo "--- Conteúdo de SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+
+      - name: Gerar comprovante de origem (provenance)
+        # Prova criptográfica, emitida pelo próprio GitHub, de que este arquivo
+        # foi gerado por ESTA esteira, a partir DESTE código — e não montado na
+        # máquina de alguém. É o mais próximo de assinatura digital que dá para
+        # obter sem comprar um certificado (risco residual RR-02).
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'pacote/win11_usb_creator.py'
+
+      - name: Criar a Release no GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSAO: ${{ steps.versao.outputs.valor }}
+        run: |
+          SHA=$(awk '{print $1}' pacote/SHA256SUMS.txt | head -1)
+          cat > notas.md <<EOF
+          ## EPMA Windows 11 Creator USB — $VERSAO
+
+          ### Como conferir que este arquivo é autêntico
+
+          Antes de executar, confira a impressão digital do arquivo baixado:
+
+          \`\`\`bash
+          shasum -a 256 win11_usb_creator.py
+          \`\`\`
+
+          O resultado deve ser exatamente:
+
+          \`\`\`
+          $SHA
+          \`\`\`
+
+          Se for diferente, **não execute o arquivo** — ele foi alterado.
+          Isso importa porque o programa pede sua senha de administrador.
+
+          Você também pode verificar o comprovante de origem emitido pelo GitHub:
+
+          \`\`\`bash
+          gh attestation verify win11_usb_creator.py --repo ${{ github.repository }}
+          \`\`\`
+
+          ### Segurança
+
+          Esta versão passou por todas as conferências automáticas da esteira:
+          guarda de regressão (24 proteções), 36 testes de validação,
+          Bandit, Semgrep, CodeQL e teste da interface gráfica.
+
+          Documentação: \`SECURITY.md\` · Relatórios completos: pasta \`relatorios/\`
+          EOF
+
+          gh release create "$VERSAO" \
+            --title "EPMA Windows 11 Creator USB $VERSAO" \
+            --notes-file notas.md \
+            pacote/win11_usb_creator.py \
+            pacote/SHA256SUMS.txt \
+            pacote/SECURITY.md

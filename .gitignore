@@ -17,6 +17,13 @@ venv/
 *.log
 audit.log
 
+# Caches das ferramentas de análise da esteira de CI
+.ruff_cache/
+.semgrep_logs/
+.mypy_cache/
+bandit-relatorio.json
+semgrep.sarif
+
 # Sistema operacional / editores
 .DS_Store
 .idea/

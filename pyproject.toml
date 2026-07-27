@@ -1,0 +1,59 @@
+# Configuração das ferramentas de qualidade e segurança.
+#
+# ATENÇÃO: este arquivo NÃO declara dependências e NÃO transforma o projeto num
+# pacote instalável. Ele contém apenas configuração de ferramentas usadas na
+# esteira de CI. O projeto continua com ZERO dependências de terceiros
+# (ver requirements.txt e SECURITY.md).
+
+# ============================================================
+# Ruff — verificador de estilo e erros (roda na CI)
+# ============================================================
+[tool.ruff]
+target-version = "py39"
+line-length = 120
+exclude = [".git", "__pycache__", ".venv", "venv"]
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9",  # erros de sintaxe e estrutura
+    "F",               # pyflakes: variáveis indefinidas, imports não usados
+    "B",               # bugbear: armadilhas comuns que viram defeito
+    "S",               # bandit via ruff: padrões inseguros
+    "UP",              # sintaxe moderna do Python
+    "C4",              # compreensões desnecessárias
+]
+
+ignore = [
+    # --- Justificativas de segurança (ver output/relatorio-sast.md) ---
+    # S404: importar 'subprocess'. Este programa EXISTE para executar comandos
+    #       do sistema (parted, rsync, diskutil). Não há alternativa.
+    "S404",
+    # S603: subprocess sem shell. Este é justamente o padrão SEGURO — a lista de
+    #       argumentos impede injeção de comando. Sinalizá-lo seria o inverso.
+    "S603",
+    # S607: caminho parcial de executável ("parted" em vez de "/usr/sbin/parted").
+    #       Risco residual RR-03, aceito conscientemente: fixar caminhos
+    #       absolutos quebraria a compatibilidade entre distribuições Linux.
+    "S607",
+]
+
+# Observação: S110 (except/pass) e S310 (esquema de URL) NÃO são ignorados aqui
+# de propósito. Eles são suprimidos pontualmente no código, com justificativa
+# escrita ao lado — assim uma ocorrência NOVA dessas falhas continua sendo
+# barrada pela esteira.
+
+[tool.ruff.lint.per-file-ignores]
+# As ferramentas de auditoria executam subprocessos e manipulam caminhos de
+# arquivo maliciosos DE PROPÓSITO — é exatamente o que elas testam.
+"output/auditoria/*.py" = ["S101", "S108", "S404", "S603", "S607"]
+
+# ============================================================
+# Bandit — analisador de segurança dedicado (roda na CI)
+# ============================================================
+[tool.bandit]
+exclude_dirs = [".git", "__pycache__", ".venv", "venv"]
+
+# Mesmas justificativas do Ruff acima. B602 (shell=True) NÃO está na lista:
+# ele deve continuar sendo uma falha bloqueante — é a falha que a auditoria
+# corrigiu (achado SAST-01).
+skips = ["B404", "B603", "B607"]

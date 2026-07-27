@@ -1,0 +1,139 @@
+# =============================================================================
+# CI — Integração Contínua
+#
+# O QUE É ISTO, EM LINGUAGEM SIMPLES
+# ----------------------------------
+# Toda vez que alguém altera o código, o GitHub roda esta lista de conferências
+# automaticamente, numa máquina limpa. Se alguma falhar, a alteração fica
+# marcada com um X vermelho e não deve ser aceita.
+#
+# É o equivalente a um revisor que nunca esquece de conferir nada e trabalha
+# 24 horas por dia.
+#
+# As conferências de SEGURANÇA ficam num arquivo separado: security.yml
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:        # permite disparar manualmente pelo site do GitHub
+
+# Princípio do menor privilégio: esta esteira só precisa LER o repositório.
+# Se um passo for comprometido, ele não consegue escrever nada.
+permissions:
+  contents: read
+
+# Se você enviar duas alterações seguidas, cancela a execução antiga —
+# economiza tempo e recursos.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1. Estilo e erros de código
+  # ---------------------------------------------------------------------------
+  qualidade:
+    name: Estilo e erros de código
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Conferir se o código é sintaticamente válido
+        run: python -m compileall -q win11_usb_creator.py output/auditoria/
+
+      - name: Instalar o Ruff (verificador de estilo e erros)
+        run: pip install --disable-pip-version-check ruff==0.16.0
+
+      - name: Rodar o Ruff
+        # A configuração e as justificativas de cada exceção estão em
+        # pyproject.toml. Nenhuma regra de segurança foi desligada em bloco.
+        run: ruff check . --output-format=github
+
+  # ---------------------------------------------------------------------------
+  # 2. Testes de validação de segurança (as 36 verificações da auditoria)
+  # ---------------------------------------------------------------------------
+  testes:
+    name: Testes (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false        # não interrompe as outras combinações na 1ª falha
+      matrix:
+        # Testar em várias versões confirma que o programa funciona no Python
+        # que o usuário tiver instalado — não só no da máquina do desenvolvedor.
+        os: [ubuntu-latest]
+        python: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        include:
+          # O programa suporta macOS e Linux; ambos precisam ser testados.
+          - os: macos-latest
+            python: '3.13'
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar o Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Instalar as bibliotecas gráficas (Linux)
+        if: runner.os == 'Linux'
+        # O programa usa Tkinter para a janela. Nos servidores do GitHub isso
+        # exige instalar as bibliotecas Tcl/Tk e um "monitor virtual" (xvfb),
+        # já que não há tela de verdade.
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends python3-tk xvfb
+
+      - name: Confirmar que o Tkinter está disponível
+        run: python -c "import tkinter; print('Tkinter OK -', tkinter.TkVersion)"
+
+      - name: Rodar os testes de validação de segurança
+        # 36 verificações que comprovam cada correção da auditoria.
+        # Nenhuma delas toca em disco, formata nada ou usa privilégio de admin.
+        run: python output/auditoria/testes_validacao.py
+
+      - name: Teste de fumaça da interface gráfica (Linux)
+        if: runner.os == 'Linux'
+        # 'xvfb-run' cria um monitor virtual para a janela poder ser construída.
+        run: xvfb-run -a python output/auditoria/smoke_ui.py
+
+      - name: Teste de fumaça da interface gráfica (macOS)
+        if: runner.os == 'macOS'
+        run: python output/auditoria/smoke_ui.py
+
+  # ---------------------------------------------------------------------------
+  # 3. Resultado final consolidado
+  # ---------------------------------------------------------------------------
+  # Este job existe para que a proteção de branch do GitHub precise exigir
+  # apenas UMA conferência obrigatória em vez de listar todas as combinações
+  # da matriz uma a uma.
+  ci-aprovada:
+    name: CI aprovada
+    if: always()
+    needs: [qualidade, testes]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verificar o resultado das etapas anteriores
+        run: |
+          echo "qualidade: ${{ needs.qualidade.result }}"
+          echo "testes:    ${{ needs.testes.result }}"
+          if [ "${{ needs.qualidade.result }}" != "success" ] || \
+             [ "${{ needs.testes.result }}" != "success" ]; then
+            echo "::error::A CI falhou. Veja os detalhes nas etapas acima."
+            exit 1
+          fi
+          echo "Todas as conferências de CI passaram."
