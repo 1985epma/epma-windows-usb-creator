@@ -22,7 +22,7 @@ class EpmaWindowsUsbCreator < Formula
   desc "Create a bootable Windows 11 USB drive from macOS or Linux"
   homepage "https://github.com/1985epma/epma-windows-usb-creator"
   url "https://github.com/1985epma/epma-windows-usb-creator/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  sha256 "d836915b03fb2a617e6f27a5c0e18f7b4c158a6a1139f14989f22436660b234a"
   license "GPL-3.0-or-later"
   head "https://github.com/1985epma/epma-windows-usb-creator.git", branch: "main"
 
@@ -88,8 +88,13 @@ class EpmaWindowsUsbCreator < Formula
   test do
     # A GUI application cannot be launched in a test environment, so verify the
     # installed script is syntactically valid and that its wrapper is executable.
-    system formula_opt_bin("python@3.13")/"python3.13",
-           "-m", "py_compile", libexec/"win11_usb_creator.py"
+    #
+    # `compile()` is used instead of `py_compile` because the latter writes a
+    # __pycache__ directory next to the source, and the Cellar is read-only here.
+    system formula_opt_bin("python@3.13")/"python3.13", "-c",
+           "import sys, pathlib; p = pathlib.Path(sys.argv[1]); " \
+           "compile(p.read_text(encoding='utf-8'), str(p), 'exec')",
+           libexec/"win11_usb_creator.py"
     assert_predicate bin/"epma-windows-usb-creator", :executable?
 
     # Confirm Tkinter is importable under the Python this formula depends on --

@@ -71,5 +71,11 @@ print(f"Fórmula atualizada: {caminho}")
 PY
 
 echo
-echo "Pronto. Confira a alteração com:  git diff $FORMULA"
-echo "Depois teste com:                 brew install --formula $FORMULA"
+echo "Pronto. Confira a alteração com:"
+echo "    git diff $FORMULA"
+echo
+echo "Depois copie a fórmula para o tap e valide (o Homebrew só instala a"
+echo "partir de um tap; instalar por caminho ou URL não é mais suportado):"
+echo "    cp $FORMULA \$(brew --repository)/Library/Taps/1985epma/homebrew-tap/Formula/"
+echo "    brew style 1985epma/tap"
+echo "    brew audit --strict --online 1985epma/tap/epma-windows-usb-creator"
