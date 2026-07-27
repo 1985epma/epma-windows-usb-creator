@@ -183,7 +183,7 @@ Every change is automatically checked by GitHub Actions:
 | [`security.yml`](.github/workflows/security.yml) | Security regression guard, Bandit, Semgrep, CodeQL, secret scanning |
 | [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums and build provenance |
 
-The security pipeline is built in two layers: a dependency-free regression guard that verifies all 24 audit fixes remain in place, plus external analysers as a second opinion. See [.github/README-CICD.md](.github/README-CICD.md) for details. *Note: written in Portuguese.*
+The security pipeline is built in two layers: a dependency-free regression guard that verifies all 24 audit fixes remain in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
 
 ### Contributing
 

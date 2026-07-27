@@ -208,7 +208,7 @@ jobs:
       - name: Varrer o histórico com Gitleaks
         # Não bloqueia por si só: o guarda da camada 1 já barra segredos no
         # código atual (regra G07), e o GitHub tem varredura nativa de segredos
-        # (ver README-CICD.md para ativá-la). Este passo cobre o HISTÓRICO.
+        # (ative em Settings > Code security). Este passo cobre o HISTÓRICO.
         continue-on-error: true
         run: |
           docker run --rm -v "${{ github.workspace }}:/repo" \
