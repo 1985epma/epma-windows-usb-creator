@@ -52,7 +52,7 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
-    "report_callback_exception", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "report_callback_exception", "_fit_window", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
 ]
 

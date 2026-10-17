@@ -2797,7 +2797,7 @@ class App(_TkBase):
         super().__init__(className=APP_NAME)
         self.title("EPMA Windows 11 Creator USB")
         self._window_size = (760, 700)  # grows when content needs more room (see _fit_window)
-        self.geometry("%dx%d" % self._window_size)
+        self.geometry("{}x{}".format(*self._window_size))
         self.iso_path = tk.StringVar(value="")
         self.cancel_event = threading.Event()
         self.create_cancel_event = threading.Event()  # cancels the USB creation (not the download)
@@ -3024,7 +3024,7 @@ class App(_TkBase):
         height = min(height, max(self.winfo_screenheight() - 120, 700))
         if (width, height) != self._window_size:
             self._window_size = (width, height)
-            self.geometry("%dx%d" % self._window_size)
+            self.geometry("{}x{}".format(*self._window_size))
 
     def set_iso(self, path):
         self.iso_path.set(path)
