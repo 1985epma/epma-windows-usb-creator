@@ -280,6 +280,114 @@ def make_progress_log(log, interval=5.0):
     return wrapped
 
 
+def make_dd_log(log, total, progress):
+    """Log wrapper that turns dd's "N bytes ..." lines into progress updates.
+
+    GNU dd (status=progress) and BSD dd (SIGINFO) both print the running byte count
+    as "<N> bytes ...", so one pattern covers both.
+    """
+    throttled = make_progress_log(log)
+
+    def wrapped(line):
+        m = re.search(r"(\d+) bytes", line)
+        if m and total and progress:
+            progress(min(int(m.group(1)), total), total, "Writing the image...")
+        throttled(line)
+
+    return wrapped
+
+
+def copy_file_with_progress(src, dst_dir, on_bytes):
+    """Copy `src` into `dst_dir` in chunks, reporting the bytes copied so far."""
+    dst = os.path.join(dst_dir, os.path.basename(src))
+    copied = 0
+    with open(src, "rb") as fin, open(dst, "wb") as fout:
+        while True:
+            chunk = fin.read(CHUNK_SIZE)
+            if not chunk:
+                break
+            fout.write(chunk)
+            copied += len(chunk)
+            on_bytes(copied)
+    shutil.copystat(src, dst)
+
+
+def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint):
+    """Copy the contents of a mounted Windows ISO to the drive, reporting progress.
+
+    Everything except sources/install.wim|esd is copied with rsync; that file is
+    copied directly, or split into <4 GB parts when it exceeds the FAT32 limit.
+    Progress is counted in bytes over the whole payload.
+    """
+    sources_dir = os.path.join(src_root, "sources")
+    big_file = None
+    for name in ("install.wim", "install.esd"):
+        p = os.path.join(sources_dir, name)
+        if os.path.exists(p):
+            big_file = p
+            break
+    if not big_file:
+        raise RuntimeError("Could not find sources/install.wim or sources/install.esd on the ISO.")
+
+    rest_total = 0
+    for root, _dirs, files in os.walk(src_root):
+        for fname in files:
+            path = os.path.join(root, fname)
+            if path != big_file:
+                try:
+                    rest_total += os.path.getsize(path)
+                except OSError:
+                    pass
+    size = os.path.getsize(big_file)
+    total = rest_total + size
+    state = {"done": 0}
+
+    def report(done, text):
+        if progress:
+            progress(min(done, total), total, text)
+
+    def rsync_log(line):
+        log(line)
+        name = line.strip()
+        if not name or name.endswith("/"):
+            return
+        path = os.path.join(src_root, name)
+        if os.path.isfile(path):  # header/summary lines never resolve to a file
+            state["done"] += os.path.getsize(path)
+            report(min(state["done"], rest_total), "Copying files...")
+
+    rel_big = os.path.relpath(big_file, src_root)
+    log("Copying files from the ISO to the USB drive (this can take several minutes)...")
+    run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log)
+    report(rest_total, "Copying files...")
+
+    target_sources = os.path.join(dst_root, "sources")
+    os.makedirs(target_sources, exist_ok=True)
+
+    if size > FAT32_MAX_FILE_SIZE:
+        log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with wimlib-imagex...")
+        if not shutil.which("wimlib-imagex"):
+            raise RuntimeError(wimlib_hint)
+        out_swm = os.path.join(target_sources, os.path.splitext(os.path.basename(big_file))[0] + ".swm")
+
+        def split_log(line):
+            log(line)
+            m = re.search(r"(\d{1,3})%", line)
+            if m:
+                report(rest_total + size * min(int(m.group(1)), 100) // 100, "Splitting the install image...")
+
+        run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log)
+    else:
+        log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
+        copy_file_with_progress(
+            big_file, target_sources,
+            lambda n: report(rest_total + n, "Copying the install image..."))
+
+    report(total, "Flushing data to the drive...")
+    log("Syncing writes to disk...")
+    run_cmd(["sync"], log, check=False)
+
+
 def validate_download_url(raw_url):
     """Return a normalised URL, or raise ValueError explaining why it was rejected."""
     url = (raw_url or "").strip()
@@ -359,6 +467,56 @@ class PrivilegeHelper:
         self.app.after(0, ask)
         done.wait()
         return result.get("pw")
+
+    def check_password(self, password):
+        """True if `password` is accepted by sudo. Never raises, never logs the password.
+
+        `-k` makes sudo ignore any cached credential, so a wrong password cannot slip
+        through because a previous sudo session is still valid. The password goes to
+        stdin only, as in run_script().
+        """
+        if not password:
+            return False
+        try:
+            proc = subprocess.run(
+                ["sudo", "-S", "-k", "-p", "", "true"],
+                input=password + "\n", capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0
+
+    def needs_password(self):
+        """Whether a sudo password must be collected before running privileged commands."""
+        return os.geteuid() != 0 and bool(shutil.which("sudo"))
+
+    def authenticate(self, reason, max_attempts=3):
+        """Ask for the administrator password up front and verify it. GUI thread only.
+
+        Doing this before anything touches the drive means a wrong or missing password
+        is caught while the drive is still untouched, instead of mid-operation.
+        Returns True when privileges are available (password cached for this operation).
+        """
+        if not self.needs_password():
+            return True  # already root, or pkexec will show its own prompt
+        for attempt in range(max_attempts):
+            pw = simpledialog.askstring(
+                "Administrator password",
+                f"{reason}\n\nEnter your administrator (sudo) password.\n"
+                "It is used only to run local disk commands and is never stored or sent anywhere.",
+                show="*",
+                parent=self.app,
+            )
+            if pw is None:
+                return False  # canceled
+            if self.check_password(pw):
+                self.cached_password = pw
+                return True
+            if attempt < max_attempts - 1:
+                messagebox.showerror("Wrong password", "That password was not accepted. Please try again.",
+                                     parent=self.app)
+        messagebox.showerror("Wrong password", "Too many incorrect attempts. Nothing was changed.",
+                             parent=self.app)
+        return False
 
     def clear_cached_password(self):
         """Drop the in-memory copy of the password as soon as it is no longer needed."""
@@ -471,7 +629,7 @@ def macos_find_mountpoint_by_volname(dev, volname, retries=15):
     raise RuntimeError("Could not find the USB drive's mount point after formatting.")
 
 
-def macos_build_usb(iso_path, dev, log, priv=None):
+def macos_build_usb(iso_path, dev, log, priv=None, progress=None):
     log(f"Erasing and formatting /dev/{dev} as GPT + FAT32 ('{VOL_NAME}')...")
     run_cmd(["diskutil", "eraseDisk", "FAT32", VOL_NAME, "GPT", f"/dev/{dev}"], log)
 
@@ -483,39 +641,10 @@ def macos_build_usb(iso_path, dev, log, priv=None):
     run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log)
 
     try:
-        sources_dir = os.path.join(mount_dir, "sources")
-        big_file = None
-        for name in ("install.wim", "install.esd"):
-            p = os.path.join(sources_dir, name)
-            if os.path.exists(p):
-                big_file = p
-                break
-        if not big_file:
-            raise RuntimeError("Could not find sources/install.wim or sources/install.esd on the ISO.")
-
-        rel_big = os.path.relpath(big_file, mount_dir)
-        log("Copying files from the ISO to the USB drive (this can take several minutes)...")
-        run_cmd(["rsync", "-rv", f"--exclude={rel_big}", mount_dir + "/", target + "/"], log)
-
-        size = os.path.getsize(big_file)
-        target_sources = os.path.join(target, "sources")
-        os.makedirs(target_sources, exist_ok=True)
-
-        if size > FAT32_MAX_FILE_SIZE:
-            log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with wimlib-imagex...")
-            if not shutil.which("wimlib-imagex"):
-                raise RuntimeError(
-                    "wimlib-imagex not found. Install it with: brew install wimlib "
-                    "(or use the 'Install missing dependencies' button on tab 2)."
-                )
-            out_swm = os.path.join(target_sources, os.path.splitext(os.path.basename(big_file))[0] + ".swm")
-            run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], log)
-        else:
-            log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
-            shutil.copy2(big_file, target_sources)
-
-        log("Syncing writes to disk...")
-        run_cmd(["sync"], log, check=False)
+        copy_windows_payload(
+            mount_dir, target, log, progress,
+            "wimlib-imagex not found. Install it with: brew install wimlib "
+            "(or use the 'Install missing dependencies' button on tab 2).")
     finally:
         log("Unmounting the ISO...")
         run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False)
@@ -529,16 +658,29 @@ def macos_build_usb(iso_path, dev, log, priv=None):
     log("Done! The USB drive is ready to install Windows 11.")
 
 
-def macos_write_raw(iso_path, dev, log, priv):
+def macos_write_raw(iso_path, dev, log, priv, progress=None):
     """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
     validate_hybrid_iso(iso_path)
     log(f"Unmounting /dev/{dev}...")
     run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log)
     log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
-        "This can take several minutes and shows no progress until it finishes...")
+        "This can take several minutes.")
     # /dev/rdiskN (raw node) is several times faster than /dev/diskN.
-    script = 'set -eu\ndd if="$1" of="$2" bs="$3"\nsync\n'
-    priv.run_script(script, log, args=[iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]])
+    # BSD dd has no status=progress: it prints the byte count when it receives
+    # SIGINFO, so ask for it once a second until the copy ends.
+    script = (
+        'set -eu\n'
+        'dd if="$1" of="$2" bs="$3" &\n'
+        'pid=$!\n'
+        'while kill -0 "$pid" 2>/dev/null; do kill -INFO "$pid" 2>/dev/null || true; sleep 1; done\n'
+        'wait "$pid"\n'
+        'sync\n'
+    )
+    total = os.path.getsize(iso_path)
+    priv.run_script(script, make_dd_log(log, total, progress),
+                    args=[iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]])
+    if progress:
+        progress(total, total, "Done")
     log("Safely ejecting the USB drive...")
     run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False)
     log("Done! The USB drive is ready to boot.")
@@ -682,7 +824,7 @@ def linux_build_install_command(mgr, missing_tools):
     return LINUX_INSTALL_CMD_TEMPLATE[mgr].format(pkgs=" ".join(pkgs))
 
 
-def linux_write_raw(iso_path, dev_name, log, priv):
+def linux_write_raw(iso_path, dev_name, log, priv, progress=None):
     """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
     validate_hybrid_iso(iso_path)
     dev = f"/dev/{dev_name}"
@@ -694,11 +836,15 @@ def linux_write_raw(iso_path, dev_name, log, priv):
         'dd if="$1" of="$2" bs="$3" conv=fsync status=progress\n'
         'sync\n'
     )
-    priv.run_script(script, make_progress_log(log), args=[iso_path, dev, RAW_WRITE_BLOCK["linux"]])
+    total = os.path.getsize(iso_path)
+    priv.run_script(script, make_dd_log(log, total, progress),
+                    args=[iso_path, dev, RAW_WRITE_BLOCK["linux"]])
+    if progress:
+        progress(total, total, "Done")
     log("Done! The USB drive is ready to boot. It's safe to unplug it now.")
 
 
-def linux_build_usb(iso_path, dev_name, log, priv):
+def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
     dev = f"/dev/{dev_name}"
     part = linux_partition_path(dev_name, 1)
     uid, gid = os.getuid(), os.getgid()
@@ -725,40 +871,11 @@ def linux_build_usb(iso_path, dev_name, log, priv):
                     args=[dev, part, iso_path, iso_mount, usb_mount, f"{uid}:{gid}"])
 
     try:
-        sources_dir = os.path.join(iso_mount, "sources")
-        big_file = None
-        for name in ("install.wim", "install.esd"):
-            p = os.path.join(sources_dir, name)
-            if os.path.exists(p):
-                big_file = p
-                break
-        if not big_file:
-            raise RuntimeError("Could not find sources/install.wim or sources/install.esd on the ISO.")
-
-        rel_big = os.path.relpath(big_file, iso_mount)
-        log("Copying files from the ISO to the USB drive (this can take several minutes)...")
-        run_cmd(["rsync", "-rv", f"--exclude={rel_big}", iso_mount + "/", usb_mount + "/"], log)
-
-        size = os.path.getsize(big_file)
-        target_sources = os.path.join(usb_mount, "sources")
-        os.makedirs(target_sources, exist_ok=True)
-
-        if size > FAT32_MAX_FILE_SIZE:
-            log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with wimlib-imagex...")
-            if not shutil.which("wimlib-imagex"):
-                raise RuntimeError(
-                    "wimlib-imagex not found. Install it via your package manager "
-                    "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
-                    "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2."
-                )
-            out_swm = os.path.join(target_sources, os.path.splitext(os.path.basename(big_file))[0] + ".swm")
-            run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], log)
-        else:
-            log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
-            shutil.copy2(big_file, target_sources)
-
-        log("Syncing writes to disk...")
-        run_cmd(["sync"], log, check=False)
+        copy_windows_payload(
+            iso_mount, usb_mount, log, progress,
+            "wimlib-imagex not found. Install it via your package manager "
+            "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
+            "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2.")
     finally:
         log("Unmounting...")
         cleanup_script = 'umount "$1" || true\numount "$2" || true\n'
@@ -811,7 +928,7 @@ def reverify_target_disk(dev, expected_size, log):
         f"({human_size(actual_size)}).")
 
 
-def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS):
+def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None):
     if mode not in (MODE_WINDOWS, MODE_LINUX):
         raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
@@ -823,13 +940,13 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS):
     try:
         if mode == MODE_LINUX:
             if IS_MAC:
-                macos_write_raw(iso_path, dev, log, priv)
+                macos_write_raw(iso_path, dev, log, priv, progress)
             else:
-                linux_write_raw(iso_path, dev, log, priv)
+                linux_write_raw(iso_path, dev, log, priv, progress)
         elif IS_MAC:
-            macos_build_usb(iso_path, dev, log)
+            macos_build_usb(iso_path, dev, log, progress=progress)
         else:
-            linux_build_usb(iso_path, dev, log, priv)
+            linux_build_usb(iso_path, dev, log, priv, progress)
     except Exception as e:
         audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
         raise
@@ -1042,6 +1159,13 @@ class App(tk.Tk):
         )
         self.create_btn.pack(anchor="w", padx=10, pady=10)
 
+        self.create_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
+        self.create_progress.pack(fill="x", padx=10, pady=(0, 2))
+        self.create_progress_label = ttk.Label(f, text="")
+        self.create_progress_label.pack(anchor="w", padx=10)
+        self._create_started = None
+        self._create_last_ui = 0.0
+
         self.log_text = tk.Text(f, height=15, state="disabled", bg="black", fg="lightgreen")
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(5, 10))
 
@@ -1246,7 +1370,16 @@ class App(tk.Tk):
             f"({disk['label']}) and write {what} to it.\n\nContinue?",
         ):
             return
+        # Writing the drive needs administrator rights (always on Linux; on macOS only for
+        # the direct-write mode). Collect and verify the password now, before touching
+        # the drive.
+        if (IS_LINUX or mode == MODE_LINUX) and not self.priv.authenticate(
+                f"Administrator access is required to write /dev/{disk['id']}."):
+            self.priv.clear_cached_password()
+            self.log("Canceled: administrator password was not provided. The drive was not modified.")
+            return
         self.create_btn.config(state="disabled")
+        self._reset_create_progress()
         iso = self.iso_path.get()
         dev = disk["id"]
         expected_size = disk.get("size")
@@ -1254,14 +1387,18 @@ class App(tk.Tk):
         def worker():
             try:
                 build_usb(iso, dev, lambda m: self.after(0, self.log, m), self.priv,
-                          expected_size=expected_size, mode=mode)
+                          expected_size=expected_size, mode=mode,
+                          progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s))
+                self.after(0, self._finish_create_progress, True)
                 self.after(0, lambda: messagebox.showinfo("Done", "Bootable USB drive created successfully!"))
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
+                self.after(0, self._finish_create_progress, False)
                 self.after(0, self._report_error, "Error", str(e))
             except Exception as e:
                 # Unexpected failure: show a short message, keep the detail in the log
                 # so internal paths and command lines are not surfaced in a dialog.
+                self.after(0, self._finish_create_progress, False)
                 self.after(0, self._report_error, "Unexpected error", None, e)
             finally:
                 # The administrator password is no longer needed once the operation ends.
@@ -1269,6 +1406,45 @@ class App(tk.Tk):
                 self.after(0, lambda: self.create_btn.config(state="normal"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    # ---------- USB creation progress ----------
+    def _reset_create_progress(self):
+        self._create_started = None
+        self._create_last_ui = 0.0
+        self.create_progress.config(mode="indeterminate", value=0)
+        self.create_progress.start(12)
+        self.create_progress_label.config(text="Preparing the drive...")
+
+    def _on_create_progress(self, done, total, text):
+        now = time.time()
+        finished = total and done >= total
+        # Updates can arrive thousands of times (one per copied file); redraw ~5x/s.
+        if not finished and now - self._create_last_ui < 0.2:
+            return
+        self._create_last_ui = now
+        if not total:
+            return
+        if str(self.create_progress.cget("mode")) != "determinate":
+            self.create_progress.stop()
+            self.create_progress.config(mode="determinate")
+        if self._create_started is None:
+            self._create_started = now
+        pct = done / total * 100
+        self.create_progress.config(value=pct)
+        elapsed = max(now - self._create_started, 0.001)
+        speed = done / elapsed
+        if finished:
+            self.create_progress_label.config(text=f"{text}  100%")
+            return
+        eta = (total - done) / speed if speed > 0 and done > 0 else 0
+        self.create_progress_label.config(
+            text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)} — "
+                 f"{human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left")
+
+    def _finish_create_progress(self, ok):
+        self.create_progress.stop()
+        self.create_progress.config(mode="determinate", value=100 if ok else 0)
+        self.create_progress_label.config(text="Done — 100%" if ok else "Failed.")
 
     def _report_error(self, title, message, exc=None):
         """Show a user-facing error without leaking internals into the dialog."""

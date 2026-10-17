@@ -116,7 +116,7 @@ Se você já baixou a ISO manualmente, use **"Select existing ISO file..."** e p
    - **Linux / outra ISO híbrida** — a ISO é gravada byte a byte no pendrive (como o `dd`). Use para Ubuntu, Debian, Fedora, Mint, Arch etc. Selecione a ISO em *Select existing ISO file...* na aba 1. ISOs sem assinatura de boot são recusadas antes de apagar qualquer coisa.
 5. Clique em **"Create Bootable USB Drive"** e confirme (**Sim**) no diálogo final. O pendrive é então apagado e a imagem é gravada nele.
 
-> O modo Linux exige senha de administrador nos dois sistemas; no macOS não mostra progresso até terminar a gravação.
+> O modo Linux exige senha de administrador nos dois sistemas. A senha é pedida e verificada logo após a confirmação, **antes** de mexer no pendrive (senha errada ou cancelada não altera nada). Uma barra de progresso mostra porcentagem, velocidade e tempo restante nos dois modos.
 
 O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe pelo log na parte inferior da janela.
 

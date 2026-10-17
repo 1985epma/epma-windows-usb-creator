@@ -146,7 +146,7 @@ If you already downloaded the ISO manually, use **"Select existing ISO file..."*
    - **Linux / other hybrid ISO** — the ISO is written byte-for-byte to the drive (like `dd`). Use this for Ubuntu, Debian, Fedora, Mint, Arch, etc. Select the ISO with *Select existing ISO file...* on tab 1. ISOs without a boot signature are refused before anything is erased.
 5. Click **"Create Bootable USB Drive"** and confirm (**Yes**) in the final dialog. The drive is then erased and the image is written to it.
 
-> Linux mode needs administrator rights on both systems (you are asked for your password); on macOS it shows no progress until the write finishes.
+> Linux mode needs administrator rights on both systems. The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining in both modes.
 
 The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
 

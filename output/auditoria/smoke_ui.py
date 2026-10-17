@@ -42,7 +42,7 @@ WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn", "cancel_btn",
     "progress", "progress_label", "iso_label", "iso_label2",
     "dep_label", "install_deps_btn", "disk_combo",
-    "mode_var", "create_btn", "log_text",
+    "mode_var", "create_btn", "create_progress", "create_progress_label", "log_text",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -51,6 +51,7 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
+    "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
 ]
 
 print("Teste de fumaça da interface gráfica")
@@ -167,6 +168,17 @@ try:
     except Exception as e:
         print(f"  [FALHA] _on_progress(): {type(e).__name__}: {e}")
         falhas.append("_on_progress()")
+
+    try:
+        janela._reset_create_progress()
+        janela._on_create_progress(500, 1000, "Writing the image...")
+        janela._on_create_progress(1000, 1000, "Writing the image...")
+        janela._finish_create_progress(True)
+        janela._finish_create_progress(False)
+        print("  [OK]    progresso da criação do pendrive (indeterminado, parcial, 100%, falha)")
+    except Exception as e:
+        print(f"  [FALHA] progresso da criação: {type(e).__name__}: {e}")
+        falhas.append("progresso da criação")
 
     app.messagebox = messagebox_real
     print(f"\n  ({len(dialogos_chamados)} diálogos interceptados, nenhum exibido)")

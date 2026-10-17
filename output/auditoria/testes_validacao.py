@@ -138,6 +138,12 @@ check("senha nunca entra na lista de argumentos do processo",
       "password" not in fonte.split("bash_argv =")[1].split("if shutil.which")[0])
 check("senha é enviada apenas por stdin", "proc.stdin.write(password" in fonte)
 check("função de limpeza da senha existe", hasattr(app.PrivilegeHelper, "clear_cached_password"))
+fonte_chk = inspect.getsource(app.PrivilegeHelper.check_password)
+check("pré-autenticação: a senha vai só por stdin (input=), nunca no argv",
+      "input=password" in fonte_chk and '"-k"' in fonte_chk)
+check("pré-autenticação: senha vazia é recusada sem chamar o sudo",
+      app.PrivilegeHelper(None).check_password("") is False)
+check("pré-autenticação existe", hasattr(app.PrivilegeHelper, "authenticate"))
 
 print("\n" + "=" * 62)
 if falhas:
