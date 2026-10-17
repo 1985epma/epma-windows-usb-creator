@@ -46,6 +46,7 @@ WIDGETS_OBRIGATORIOS = [
     "card_var", "cards", "panels", "mode_var",
     "create_btn", "cancel_create_btn", "create_hint", "create_progress", "create_progress_label", "log_text",
     "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
+    "refresh_btn", "pick_btn", "card_titles",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -58,6 +59,8 @@ METODOS_OBRIGATORIOS = [
     "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about",
     "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
+    "_on_close", "_sync_controls", "_write_running", "_wait_for_write", "_notify", "_canceled_texts", "_post",
+    "_listing_finished", "_on_disks", "_on_disks_error", "_installation_ended",
 ]
 
 print("Teste de fumaça da interface gráfica")
@@ -224,35 +227,88 @@ try:
         falhas.append("cartões e painéis")
 
     try:
-        # lista de pendrives: atualização automática e dica de por que o botão Criar está desabilitado
+        # lista de pendrives: atualização automática (em segundo plano) e dicas do botão Criar
+        import time as _tempo
+
+        def esperar_lista():
+            # A thread só consegue entregar o resultado (after) com o laço principal rodando:
+            # roda o mainloop até a leitura terminar e então o encerra.
+            fim = _tempo.monotonic() + 10
+
+            def verificar():
+                if not janela._disk_listing or _tempo.monotonic() > fim:
+                    janela.quit()
+                else:
+                    janela.after(10, verificar)
+
+            janela.after(10, verificar)
+            janela.mainloop()
+            assert not janela._disk_listing, "a leitura da lista de pendrives não terminou"
+
         discos = []
         original = app.get_external_disks
+        original_deps = app.get_missing_dependencies
+        faltando = []
         app.get_external_disks = lambda: [dict(d) for d in discos]
+        app.get_missing_dependencies = lambda modo=app.MODE_WINDOWS: list(faltando)
         try:
             janela.iso_path.set("/tmp/exemplo.iso")
             janela._last_disk_refresh = 0.0
             janela._auto_refresh_disks()
+            esperar_lista()
             assert str(janela.create_btn.cget("state")) == "disabled"
             assert "No USB drive found" in str(janela.create_hint.cget("text")), "a dica sobre o pendrive não apareceu"
             discos.append({"id": "disk9", "size": 32_000_000_000, "label": "/dev/disk9 - Teste", "identity": ()})
             janela._last_disk_refresh = 0.0
             janela._auto_refresh_disks()
+            esperar_lista()
             assert str(janela.create_btn.cget("state")) == "normal", "o botão deveria habilitar com imagem e pendrive"
             assert not str(janela.create_hint.cget("text")), "a dica deveria sumir"
+            # ferramenta ausente: o botão fica desabilitado e a dica diz o porquê
+            faltando.append("wimlib-imagex")
+            janela.update_create_button_state()
+            assert str(janela.create_btn.cget("state")) == "disabled", "faltam ferramentas: o botão deveria desabilitar"
+            assert "wimlib-imagex" in str(janela.create_hint.cget("text"))
+            faltando.clear()
+            janela.update_create_button_state()
+            assert str(janela.create_btn.cget("state")) == "normal"
+            # durante uma gravação: nada muda a lista nem reabilita o botão Criar
             janela._creating = True
+            janela._sync_controls()
+            janela.update_create_button_state()
+            assert str(janela.create_btn.cget("state")) == "disabled", "o botão Criar reabilitou durante a gravação"
+            assert str(janela.disk_combo.cget("state")) == "disabled"
+            assert str(janela.refresh_btn.cget("state")) == "disabled" and str(janela.pick_btn.cget("state")) == "disabled"
             janela._last_disk_refresh = 0.0
             discos.clear()
             janela._auto_refresh_disks()             # durante uma gravação a lista não pode mudar
+            esperar_lista()
             assert janela.selected_disk() is not None, "a lista foi atualizada durante uma gravação"
             janela._creation_ended()                 # ao terminar, lê a lista de novo
+            esperar_lista()
             assert janela.selected_disk() is None and not janela._creating
+            assert str(janela.disk_combo.cget("state")) == "readonly" and str(janela.pick_btn.cget("state")) == "normal"
         finally:
             app.get_external_disks = original
+            app.get_missing_dependencies = original_deps
             janela.iso_path.set("")
-        print("  [OK]    lista de pendrives automática e dicas do botão Criar")
+        print("  [OK]    lista de pendrives automática, bloqueio durante a gravação e dicas do botão Criar")
     except Exception as e:
         print(f"  [FALHA] lista de pendrives automática: {type(e).__name__}: {e}")
         falhas.append("lista de pendrives automática")
+
+    try:
+        # a dica fica logo abaixo do botão Criar, acima da barra de progresso e do log
+        janela.iso_path.set("")
+        janela.update_create_button_state()
+        janela.update_idletasks()
+        y = {n: w.winfo_rooty() for n, w in (("botão", janela.create_btn), ("dica", janela.create_hint),
+                                              ("barra", janela.create_progress), ("log", janela.log_text))}
+        assert y["botão"] < y["dica"] < y["barra"] < y["log"], f"ordem vertical errada: {y}"
+        print("  [OK]    a dica do botão Criar aparece entre o botão e a barra de progresso")
+    except Exception as e:
+        print(f"  [FALHA] posição da dica: {type(e).__name__}: {e}")
+        falhas.append("posição da dica")
 
     try:
         assert str(janela.cget("menu")), "a barra de menus (Help) não foi criada"
