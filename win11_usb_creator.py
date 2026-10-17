@@ -142,6 +142,12 @@ ALL_MODES = (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS)
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
 MODE_AUTO = "auto"  # command line only: take the mode from what detect_iso_kind() finds in the image
+MODE_SEED = "seed"  # a drive that carries only the hardening seed files (no operating system image)
+HARDENING_NONE = "none"
+HARDENING_BASELINE = "baseline"
+HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
+SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -2971,6 +2977,1402 @@ def image_exceeds_drive(image_size, drive_size):
     word the refusal themselves (translated in the window, English on the command line).
     """
     return bool(image_size and drive_size and image_size > drive_size)
+
+
+# ===== hardening: linux script =====
+# The text of harden-linux.sh, the script a hardened Linux setup runs on the NEW system (from the seed
+# drive, or inside the installer's chroot). Debian/Ubuntu (apt) and Fedora/RHEL (dnf). It is only ever
+# written to a drive as a file; this program never runs it. Settings are inspired by common baselines.
+# Tests: tests/test_hardening_linux.py (shellcheck, fake-root runs, dry-run, undo, idempotence).
+_HARDEN_LINUX_SH = r"""#!/usr/bin/env bash
+# harden-linux.sh - recommended security settings for a fresh Linux install.
+#
+# Part of EPMA USB CREATOR ("Hardened (recommended settings)"). For Debian/Ubuntu (apt) and the
+# Fedora/RHEL family (dnf). The settings are inspired by common hardening baselines and kept
+# conservative on purpose. It is a convenience script: it makes no claim to meet any standard.
+#
+# Usage:  sudo bash harden-linux.sh [--dry-run] [--yes] [--undo] [--chroot] [--help]
+#         bash -s -- --chroot --yes < harden-linux.sh        (also works when read from stdin)
+#
+# What it does NOT do: it never partitions or formats anything, never creates users or passwords,
+# never touches SELinux/AppArmor modes, never disables USB storage and never makes a network
+# request of its own (only your package manager does, to install a few security packages).
+#
+# Every file it changes is copied once to <file>.epma-bak first. Running it twice changes nothing
+# the second time. --undo puts the backups back and removes the files this script created.
+#
+# Layout note: everything below is a function and the very last line calls main. That keeps the
+# script safe to run through "bash -s" (no command can swallow the rest of the script from stdin)
+# and lets the script write a working copy of itself for the first-boot service.
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+harden-linux.sh - recommended security settings for a fresh Debian/Ubuntu or Fedora/RHEL install
+
+Usage: sudo bash harden-linux.sh [options]
+
+Options:
+  --dry-run   show what would be done; change NOTHING (no file, package, service or log entry)
+  --yes       do not ask for confirmation (needed when there is no terminal)
+  --undo      restore the .epma-bak copies and remove the files this script created
+  --chroot    run inside an installer chroot: write configuration files only, skip everything that
+              acts on a running system, and install a one-shot service that runs this script again
+              on the first boot of the installed system
+  --help      show this text
+
+Exit status: 0 done, 1 some step failed (see the [WARN] lines), 2 cannot run (not root,
+unsupported system, bad option).
+Log file: /var/log/epma-hardening.log
+EOF
+}
+
+die() {
+  local code="$1"
+  shift
+  printf 'harden-linux.sh: %s\n' "$*" >&2
+  exit "$code"
+}
+
+init_globals() {
+  DRY=0
+  YES=0
+  UNDO=0
+  CHROOT=0
+  HELP=0
+  N_OK=0
+  N_SKIP=0
+  N_WARN=0
+  N_CHANGE=0
+  N_ERR=0
+  NOTICES=""
+  R=""
+  TESTMODE=0
+  WORK=""
+  FAMILY=""
+  DISTRO_NAME=""
+  LOG_FILE=""
+  LOG_ENABLED=0
+  CHANGED_LAST=0
+  SKIPPED_KEYS=""
+  PKG_REFRESHED=0
+  KEYS_ANY=0
+  KEYS_CALLER=0
+  UNIT_NAME="epma-hardening-firstboot.service"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Output and log
+# ---------------------------------------------------------------------------------------------
+
+log_line() {
+  if [ "$LOG_ENABLED" = 1 ]; then
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >>"$LOG_FILE" 2>/dev/null || true
+  fi
+}
+
+say() {
+  printf '%s\n' "$1"
+  log_line "$1"
+}
+
+ok() {
+  N_OK=$((N_OK + 1))
+  say "[OK]     $*"
+}
+
+skip() {
+  N_SKIP=$((N_SKIP + 1))
+  say "[SKIP]   $*"
+}
+
+warn() {
+  N_WARN=$((N_WARN + 1))
+  say "[WARN]   $*"
+}
+
+change() {
+  N_CHANGE=$((N_CHANGE + 1))
+  if [ "$DRY" = 1 ]; then
+    say "[CHANGE] (dry-run) $*"
+  else
+    say "[CHANGE] $*"
+  fi
+}
+
+notice() {
+  NOTICES="${NOTICES}  - $1
+"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Environment, test hooks, helpers
+# ---------------------------------------------------------------------------------------------
+
+# EPMA_HARDEN_TEST_ROOT is a hidden hook for the automated tests: every path is taken below that
+# directory, live-system commands are looked up in <root>/stubs only (never in PATH), and
+# EPMA_HARDEN_TEST_UID may pretend to be root. Without the variable none of this is active.
+setup_env() {
+  local uid
+  R="${EPMA_HARDEN_TEST_ROOT:-}"
+  if [ -n "$R" ]; then
+    case "$R" in
+      /*) ;;
+      *) die 2 "EPMA_HARDEN_TEST_ROOT must be an absolute path" ;;
+    esac
+    R="${R%/}"
+    if [ -z "$R" ] || [ ! -d "$R" ]; then
+      die 2 "EPMA_HARDEN_TEST_ROOT must be an existing directory other than /"
+    fi
+    TESTMODE=1
+  else
+    PATH="${PATH:-/usr/bin:/bin}:/usr/local/sbin:/usr/sbin:/sbin"
+    export PATH
+  fi
+  umask 022
+  export DEBIAN_FRONTEND=noninteractive
+  uid="$(id -u)"
+  if [ "$TESTMODE" = 1 ] && [ -n "${EPMA_HARDEN_TEST_UID:-}" ]; then
+    uid="$EPMA_HARDEN_TEST_UID"
+  fi
+  if [ "$uid" != 0 ]; then
+    die 2 "this script must run as root (try: sudo bash harden-linux.sh ...)"
+  fi
+}
+
+init_paths() {
+  STATE_DIR="$R/var/lib/epma-hardening"
+  LOG_FILE="$R/var/log/epma-hardening.log"
+  OS_RELEASE="$R/etc/os-release"
+  if [ ! -f "$OS_RELEASE" ]; then
+    OS_RELEASE="$R/usr/lib/os-release"
+  fi
+}
+
+# Run a command that acts on, or asks questions of, the live system. In test mode only the stubs
+# in <root>/stubs are ever run, so a test can never reach the real apt, systemctl, ufw and so on.
+sysrun() {
+  if [ "$TESTMODE" = 1 ]; then
+    case "$1" in
+      */* | '') return 127 ;;
+    esac
+    if [ -x "$R/stubs/$1" ]; then
+      "$R/stubs/$1" "${@:2}" </dev/null
+      return $?
+    fi
+    return 127
+  fi
+  "$@" </dev/null
+}
+
+have_cmd() {
+  if [ "$TESTMODE" = 1 ]; then
+    [ -x "$R/stubs/$1" ]
+  else
+    command -v "$1" >/dev/null 2>&1
+  fi
+}
+
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || echo 644
+}
+
+shown() {
+  local p="$1"
+  printf '%s' "${p#"$R"}"
+}
+
+record_state() {
+  # record_state created|modified PATH
+  local f="$STATE_DIR/$1.list"
+  mkdir -p "$STATE_DIR"
+  chmod 700 "$STATE_DIR"
+  if [ ! -f "$f" ] || ! grep -qxF -- "$2" "$f"; then
+    printf '%s\n' "$2" >>"$f"
+  fi
+}
+
+unrecord_created() {
+  local f="$STATE_DIR/created.list"
+  if [ -f "$f" ]; then
+    grep -vxF -- "$1" "$f" >"$f.new" || true
+    mv -f "$f.new" "$f"
+  fi
+}
+
+# put_file DEST NEWFILE MODE: install NEWFILE as DEST when it differs. The original is copied to
+# DEST.epma-bak once. Sets CHANGED_LAST=1 when DEST was (or would be) written.
+put_file() {
+  local dest="$1" new="$2" mode="$3" name
+  name="$(shown "$dest")"
+  if [ -e "$dest" ] && cmp -s "$new" "$dest"; then
+    ok "$name is already as wanted"
+    return 0
+  fi
+  CHANGED_LAST=1
+  if [ "$DRY" = 1 ]; then
+    if [ -e "$dest" ]; then
+      change "$name: would be updated (original kept as $name.epma-bak)"
+    else
+      change "$name: would be created"
+    fi
+    return 0
+  fi
+  mkdir -p "$(dirname "$dest")"
+  if [ -e "$dest" ]; then
+    mode="$(file_mode "$dest")"
+    if [ ! -e "$dest.epma-bak" ]; then
+      cp -p "$dest" "$dest.epma-bak"
+      record_state modified "$dest"
+    fi
+    cp "$new" "$dest.epma-new"
+    chmod "$mode" "$dest.epma-new"
+    mv -f "$dest.epma-new" "$dest"
+    change "$name: updated (original kept as $name.epma-bak)"
+  else
+    cp "$new" "$dest.epma-new"
+    chmod "$mode" "$dest.epma-new"
+    mv -f "$dest.epma-new" "$dest"
+    record_state created "$dest"
+    change "$name: created"
+  fi
+}
+
+# act DESCRIPTION COMMAND...: run a live-system command. A failure is counted as an error.
+act() {
+  local desc="$1" out
+  shift
+  if [ "$DRY" = 1 ]; then
+    change "would: $desc"
+    return 0
+  fi
+  if [ "$CHROOT" = 1 ]; then
+    skip "$desc (not done inside a chroot; the first boot takes care of it)"
+    return 0
+  fi
+  if out="$(sysrun "$@" 2>&1)"; then
+    change "$desc"
+    return 0
+  fi
+  warn "FAILED: $desc"
+  log_line "output: $out"
+  N_ERR=$((N_ERR + 1))
+  return 1
+}
+
+# act_soft: like act, but a failure is only a warning (reloads that may legitimately fail).
+act_soft() {
+  local desc="$1" out
+  shift
+  if [ "$DRY" = 1 ]; then
+    change "would: $desc"
+    return 0
+  fi
+  if [ "$CHROOT" = 1 ]; then
+    skip "$desc (not done inside a chroot; it applies at the next boot)"
+    return 0
+  fi
+  if out="$(sysrun "$@" 2>&1)"; then
+    change "$desc"
+    return 0
+  fi
+  warn "$desc did not work: $out"
+  return 0
+}
+
+pkg_installed() {
+  local out
+  if [ "$FAMILY" = apt ]; then
+    out="$(sysrun dpkg -s "$1" 2>/dev/null)" || return 1
+    case "$out" in
+      *"Status: install ok installed"*) return 0 ;;
+    esac
+    return 1
+  fi
+  sysrun rpm -q "$1" >/dev/null 2>&1
+}
+
+# pkg_install PKG: returns 0 when PKG is installed or (dry-run) would be; 1 when it is not.
+pkg_install() {
+  if pkg_installed "$1"; then
+    ok "package $1 is already installed"
+    return 0
+  fi
+  if [ "$CHROOT" = 1 ]; then
+    skip "package $1: installing is left to the first boot"
+    return 1
+  fi
+  if [ "$DRY" = 1 ]; then
+    change "would: install package $1"
+    return 0
+  fi
+  if [ "$FAMILY" = apt ]; then
+    if [ "$PKG_REFRESHED" = 0 ]; then
+      PKG_REFRESHED=1
+      act_soft "refresh the package lists" apt-get update
+    fi
+    act "install package $1" apt-get install -y --no-install-recommends "$1" || return 1
+  else
+    act "install package $1" dnf -y install "$1" || return 1
+  fi
+  return 0
+}
+
+service_active() {
+  sysrun systemctl is-active --quiet "$1" >/dev/null 2>&1
+}
+
+service_enabled() {
+  sysrun systemctl is-enabled --quiet "$1" >/dev/null 2>&1
+}
+
+enable_service() {
+  if service_enabled "$1" && service_active "$1"; then
+    ok "service $1 is enabled and running"
+    return 0
+  fi
+  act "enable and start service $1" systemctl enable --now "$1"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Start of the run: distribution, confirmation, scratch space
+# ---------------------------------------------------------------------------------------------
+
+os_value() {
+  awk -F= -v k="$1" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$OS_RELEASE" | tr -d "\"'" | tr '[:upper:]' '[:lower:]'
+}
+
+detect_distro() {
+  local id like w
+  if [ ! -f "$OS_RELEASE" ]; then
+    die 2 "cannot tell which Linux this is: no /etc/os-release"
+  fi
+  id="$(os_value ID)"
+  like="$(os_value ID_LIKE)"
+  DISTRO_NAME="$(awk -F= '$1 == "PRETTY_NAME" { sub(/^[^=]*=/, ""); print; exit }' "$OS_RELEASE" | tr -d "\"'")"
+  if [ -z "$DISTRO_NAME" ]; then
+    DISTRO_NAME="$id"
+  fi
+  FAMILY=""
+  for w in $id $like; do
+    if [ -n "$FAMILY" ]; then
+      break
+    fi
+    case "$w" in
+      debian | ubuntu) FAMILY=apt ;;
+      fedora | rhel | centos) FAMILY=dnf ;;
+    esac
+  done
+  if [ -z "$FAMILY" ]; then
+    die 2 "unsupported system '${DISTRO_NAME}' (ID=${id}, ID_LIKE=${like}). Supported: Debian/Ubuntu and Fedora/RHEL families."
+  fi
+}
+
+print_plan() {
+  say "EPMA hardening (recommended settings) for: $DISTRO_NAME  [package manager: $FAMILY]"
+  if [ "$UNDO" = 1 ]; then
+    say "Mode: UNDO - restore the .epma-bak copies and remove the files this script created."
+  elif [ "$DRY" = 1 ]; then
+    say "Mode: DRY RUN - nothing will be changed."
+  elif [ "$CHROOT" = 1 ]; then
+    say "Mode: CHROOT - configuration files only; the rest runs once on the first boot."
+  else
+    say "Mode: APPLY"
+    say "It will write configuration for: kernel settings, SSH (if installed), firewall, automatic"
+    say "security updates, audit logging, rarely used kernel modules, core dumps, password quality"
+    say "for new passwords, new-account defaults and file permissions. It never touches disks."
+  fi
+}
+
+confirm_run() {
+  local ans=""
+  if [ "$DRY" = 1 ] || [ "$YES" = 1 ]; then
+    return 0
+  fi
+  printf 'Continue? [y/N] ' >&2
+  if { read -r ans </dev/tty; } 2>/dev/null; then
+    :
+  else
+    printf '\n' >&2
+    die 2 "no terminal to ask on; run again with --yes"
+  fi
+  case "$ans" in
+    y | Y | yes | YES | Yes) ;;
+    *)
+      printf 'Cancelled. Nothing was changed.\n'
+      exit 0
+      ;;
+  esac
+}
+
+setup_work() {
+  local base="${TMPDIR:-/tmp}"
+  if [ "$TESTMODE" = 1 ]; then
+    base="$R/tmp"
+    mkdir -p "$base"
+  fi
+  WORK="$(mktemp -d "$base/epma-harden.XXXXXX")"
+}
+
+# shellcheck disable=SC2329  # called through "trap cleanup EXIT" in main
+cleanup() {
+  if [ -n "$WORK" ] && [ -d "$WORK" ]; then
+    rm -rf -- "${WORK:?}"
+  fi
+}
+
+init_log() {
+  if [ "$DRY" = 1 ]; then
+    return 0
+  fi
+  if mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null && : >>"$LOG_FILE" 2>/dev/null; then
+    LOG_ENABLED=1
+    log_line "---- harden-linux.sh start (dry=$DRY undo=$UNDO chroot=$CHROOT) on $DISTRO_NAME ----"
+  else
+    printf '[WARN]   cannot write the log file %s\n' "$LOG_FILE"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Kernel settings (sysctl)
+# ---------------------------------------------------------------------------------------------
+
+sysctl_key_ok() {
+  # sysctl_key_ok KEY req|opt: is the key present on this kernel? Without /proc/sys (an installer
+  # chroot without /proc) every key is kept except the ones only some kernels have.
+  local path
+  path="$R/proc/sys/$(printf '%s' "$1" | tr . /)"
+  if [ -d "$R/proc/sys" ]; then
+    [ -e "$path" ]
+  else
+    [ "$2" != opt ]
+  fi
+}
+
+build_sysctl() {
+  local key val opt desc
+  printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR). Remove this file, or run the script with"
+  printf '%s\n' "# --undo, to go back to the system defaults. Values are conservative on purpose."
+  while IFS='|' read -r key val opt desc; do
+    if [ -z "$key" ]; then
+      continue
+    fi
+    if sysctl_key_ok "$key" "$opt"; then
+      printf '\n# %s\n%s = %s\n' "$desc" "$key" "$val"
+    else
+      SKIPPED_KEYS="$SKIPPED_KEYS $key"
+    fi
+  done <<'EOF'
+kernel.kptr_restrict|2|req|Hide kernel memory addresses from everybody (makes kernel exploits harder to write).
+kernel.dmesg_restrict|1|req|Only root may read the kernel log, which can contain addresses and hardware details.
+kernel.randomize_va_space|2|req|Full address space layout randomization (usually already on; makes sure nobody turned it down).
+kernel.yama.ptrace_scope|1|opt|A process may only trace its own children, so one program cannot read another one's memory. Only where the kernel has the Yama module.
+net.ipv4.conf.all.rp_filter|2|req|Drop packets whose source address could not be reached through the interface they came in on. Loose mode (2) stays safe with VPNs and several network cards.
+net.ipv4.conf.default.rp_filter|2|req|Same, for interfaces created later.
+net.ipv4.conf.all.accept_redirects|0|req|Ignore ICMP redirects (a way to silently reroute your traffic).
+net.ipv4.conf.default.accept_redirects|0|req|Same, for interfaces created later.
+net.ipv6.conf.all.accept_redirects|0|req|Ignore ICMPv6 redirects.
+net.ipv6.conf.default.accept_redirects|0|req|Same, for interfaces created later.
+net.ipv4.conf.all.send_redirects|0|req|This machine is not a router, so it never sends ICMP redirects.
+net.ipv4.conf.default.send_redirects|0|req|Same, for interfaces created later.
+net.ipv4.conf.all.accept_source_route|0|req|Ignore packets that choose their own route through the network (source routing).
+net.ipv4.conf.default.accept_source_route|0|req|Same, for interfaces created later.
+net.ipv6.conf.all.accept_source_route|0|req|Ignore IPv6 source routing.
+net.ipv6.conf.default.accept_source_route|0|req|Same, for interfaces created later.
+net.ipv4.tcp_syncookies|1|req|Keep the machine answering real clients during a SYN flood.
+fs.protected_symlinks|1|req|Do not follow symlinks in sticky world-writable directories (like /tmp) unless the owner matches; blocks a class of temp-file attacks.
+fs.protected_hardlinks|1|req|Only allow hard links to files you own or can write to.
+fs.protected_fifos|1|opt|Restrict opening foreign FIFOs in sticky world-writable directories. Needs kernel 4.19 or newer.
+fs.protected_regular|1|opt|Restrict opening foreign regular files in sticky world-writable directories. Needs kernel 4.19 or newer.
+fs.suid_dumpable|0|req|Programs running with raised privileges never write core dumps (they may hold secrets).
+EOF
+}
+
+do_sysctl() {
+  local dest="$R/etc/sysctl.d/99-epma-hardening.conf"
+  SKIPPED_KEYS=""
+  build_sysctl >"$WORK/sysctl.new"
+  CHANGED_LAST=0
+  put_file "$dest" "$WORK/sysctl.new" 644
+  if [ -n "$SKIPPED_KEYS" ]; then
+    skip "sysctl: not available on this kernel, left out:$SKIPPED_KEYS"
+  fi
+  if [ "$CHANGED_LAST" = 1 ]; then
+    act_soft "load the sysctl settings now (sysctl --system)" sysctl --system
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Rarely used kernel modules
+# ---------------------------------------------------------------------------------------------
+
+# Deliberately NOT listed: squashfs and udf (live media and Windows ISOs need them), iso9660, vfat,
+# exfat, ntfs and usb-storage (this tool is about USB drives). Modules that are already loaded stay
+# loaded until the next boot.
+build_modprobe() {
+  local mod desc
+  printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR). Remove this file, or run the script with --undo,"
+  printf '%s\n' "# if you ever need one of these. A module listed here cannot be loaded by accident or by an"
+  printf '%s\n' "# unprivileged program that triggers autoloading."
+  while IFS='|' read -r mod desc; do
+    if [ -z "$mod" ]; then
+      continue
+    fi
+    printf '\n# %s\ninstall %s /bin/false\nblacklist %s\n' "$desc" "$mod" "$mod"
+  done <<'EOF'
+cramfs|Old compressed read-only filesystem, practically unused.
+freevxfs|Filesystem of old SCO/HP-UX systems.
+hfs|Old Apple filesystem. Remove these two lines if you read old Mac disks on this machine.
+hfsplus|Apple HFS+ filesystem. Remove these two lines if you read Mac disks on this machine.
+jffs2|Flash filesystem for embedded devices.
+dccp|Rarely used network protocol with a history of kernel bugs.
+sctp|Rarely used network protocol. Remove these two lines if you run telephony or WebRTC services.
+rds|Rarely used cluster network protocol with a history of kernel bugs.
+tipc|Rarely used cluster network protocol with a history of kernel bugs.
+EOF
+}
+
+do_modprobe() {
+  build_modprobe >"$WORK/modprobe.new"
+  put_file "$R/etc/modprobe.d/epma-hardening.conf" "$WORK/modprobe.new" 644
+}
+
+# ---------------------------------------------------------------------------------------------
+# Core dumps
+# ---------------------------------------------------------------------------------------------
+
+do_coredumps() {
+  # A core dump is a copy of a crashed program's memory; it can contain passwords and keys.
+  {
+    printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR): no core dump files for any user."
+    printf '%s\n' "*    hard    core    0"
+  } >"$WORK/limits.new"
+  put_file "$R/etc/security/limits.d/99-epma-hardening.conf" "$WORK/limits.new" 644
+  if [ -d "$R/usr/lib/systemd" ] || [ -d "$R/lib/systemd" ]; then
+    {
+      printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR): systemd-coredump keeps nothing."
+      printf '%s\n' "[Coredump]"
+      printf '%s\n' "Storage=none"
+      printf '%s\n' "ProcessSizeMax=0"
+    } >"$WORK/coredump.new"
+    put_file "$R/etc/systemd/coredump.conf.d/99-epma-hardening.conf" "$WORK/coredump.new" 644
+  else
+    skip "systemd-coredump: this system does not use systemd"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Permissions of the account files (only ever tightened, ownership untouched)
+# ---------------------------------------------------------------------------------------------
+
+do_perms() {
+  local spec f mask cur new changed=0 pfile="$STATE_DIR/perms.list"
+  for spec in "shadow 027" "gshadow 027" "shadow- 027" "gshadow- 027" "passwd 022" "group 022" "passwd- 022" "group- 022"; do
+    f="$R/etc/${spec% *}"
+    mask="${spec#* }"
+    if [ ! -f "$f" ]; then
+      continue
+    fi
+    cur="$(file_mode "$f")"
+    case "$cur" in
+      '' | *[!0-7]*) continue ;;
+    esac
+    new="$(printf '%o' $((8#$cur & ~8#$mask)))"
+    if [ "$((8#$cur))" -eq "$((8#$new))" ]; then
+      continue
+    fi
+    changed=1
+    if [ "$DRY" = 1 ]; then
+      change "$(shown "$f"): permissions $cur would become $new"
+      continue
+    fi
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
+    if [ ! -f "$pfile" ] || ! grep -q -F -- " $f" "$pfile"; then
+      printf '%s %s\n' "$cur" "$f" >>"$pfile"
+    fi
+    chmod "$new" "$f"
+    change "$(shown "$f"): permissions $cur -> $new"
+  done
+  if [ "$changed" = 0 ]; then
+    ok "permissions of the account files (passwd, group, shadow, gshadow) are fine"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# New-account defaults and password quality
+# ---------------------------------------------------------------------------------------------
+
+set_key_value() {
+  # set_key_value FILE KEY VALUE: replace the first uncommented "KEY ..." line, or append one.
+  awk -v k="$2" -v v="$3" '
+    $1 == k && !done { print k "\t" v; done = 1; next }
+    { print }
+    END { if (!done) print k "\t" v }' "$1" >"$1.tmp"
+  mv -f "$1.tmp" "$1"
+}
+
+do_logindefs() {
+  # These keys are read by useradd when it creates an account, so only NEW accounts are affected;
+  # existing accounts keep what they have. UMASK is deliberately left alone: it changes the
+  # behaviour of every login session.
+  local f="$R/etc/login.defs" kv key val cur
+  if [ ! -f "$f" ]; then
+    skip "/etc/login.defs not found"
+    return 0
+  fi
+  cp "$f" "$WORK/login.defs.new"
+  for kv in "PASS_MAX_DAYS 365" "PASS_WARN_AGE 14" "HOME_MODE 0750"; do
+    key="${kv% *}"
+    val="${kv#* }"
+    cur="$(awk -v k="$key" '$1 == k { print $2; exit }' "$WORK/login.defs.new")"
+    if [ "$cur" != "$val" ]; then
+      set_key_value "$WORK/login.defs.new" "$key" "$val"
+    fi
+  done
+  put_file "$f" "$WORK/login.defs.new" 644
+}
+
+do_pwquality() {
+  # Applies when a password is next set or changed; no existing password is touched or expired.
+  if [ ! -f "$R/etc/security/pwquality.conf" ]; then
+    skip "password quality: libpwquality is not installed"
+    return 0
+  fi
+  {
+    printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR). Applies to passwords set from now on."
+    printf '%s\n' "# At least 12 characters, from at least 3 of the 4 classes (lower, upper, digit, other),"
+    printf '%s\n' "# and no more than 3 identical characters in a row."
+    printf '%s\n' "minlen = 12"
+    printf '%s\n' "minclass = 3"
+    printf '%s\n' "maxrepeat = 3"
+  } >"$WORK/pwquality.new"
+  put_file "$R/etc/security/pwquality.conf.d/99-epma-hardening.conf" "$WORK/pwquality.new" 644
+}
+
+# ---------------------------------------------------------------------------------------------
+# SSH server (only when installed)
+# ---------------------------------------------------------------------------------------------
+
+sshd_installed() {
+  have_cmd sshd || [ -x "$R/usr/sbin/sshd" ]
+}
+
+ssh_wanted() {
+  local u
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    return 0
+  fi
+  for u in ssh sshd ssh.socket sshd.socket; do
+    if service_active "$u" || service_enabled "$u"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Print the TCP ports of the SSH server that must stay reachable (nothing when SSH is not in use).
+ssh_ports() {
+  local list="" p out="" fromconn
+  if ! ssh_wanted; then
+    return 0
+  fi
+  if have_cmd sshd; then
+    list="$(sysrun sshd -T 2>/dev/null | awk '$1 == "port" { print $2 }')" || list=""
+  fi
+  if [ -z "$list" ]; then
+    list=22
+  fi
+  if [ -n "${SSH_CONNECTION:-}" ]; then
+    fromconn="$(printf '%s' "$SSH_CONNECTION" | awk '{ print $4 }')"
+    list="$list $fromconn"
+  fi
+  for p in $list; do
+    case "$p" in
+      '' | *[!0-9]*) continue ;;
+    esac
+    if [ "$p" -lt 1 ] || [ "$p" -gt 65535 ]; then
+      continue
+    fi
+    case " $out " in
+      *" $p "*) continue ;;
+    esac
+    out="$out $p"
+  done
+  printf '%s\n' "${out# }"
+}
+
+scan_authorized_keys() {
+  local caller="${SUDO_USER:-root}" name home f
+  KEYS_ANY=0
+  KEYS_CALLER=0
+  if [ ! -f "$R/etc/passwd" ]; then
+    return 0
+  fi
+  while IFS=: read -r name _ _ _ _ home _; do
+    if [ -z "$home" ]; then
+      continue
+    fi
+    f="$R$home/.ssh/authorized_keys"
+    if [ -f "$f" ] && grep -qvE '^[[:space:]]*(#|$)' "$f"; then
+      KEYS_ANY=1
+      if [ "$name" = "$caller" ]; then
+        KEYS_CALLER=1
+      fi
+    fi
+  done <"$R/etc/passwd"
+}
+
+has_regular_user() {
+  # A normal login account (UID 1000-59999 with a real shell) exists, so root may be refused.
+  [ -f "$R/etc/passwd" ] || return 1
+  awk -F: '$3 >= 1000 && $3 < 60000 && $7 !~ /(nologin|false)$/ { found = 1 } END { exit !found }' "$R/etc/passwd"
+}
+
+build_sshd() {
+  # $1 = PermitRootLogin value, $2 = 1 to turn password logins off
+  printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR). Remove this file, or run the script with --undo,"
+  printf '%s\n' "# to go back. Note: sshd uses the FIRST value it reads for a keyword, so an earlier file in"
+  printf '%s\n' "# this directory can win over this one (the script warns when that happens)."
+  printf '\n%s\n%s\n' "# Nobody logs in directly as root over the network." "PermitRootLogin $1"
+  printf '\n%s\n%s\n' "# No graphical-session forwarding (a rarely needed way to attack a client)." "X11Forwarding no"
+  printf '\n%s\n%s\n' "# Fewer guesses per connection." "MaxAuthTries 4"
+  printf '\n%s\n%s\n' "# Drop connections that have not logged in after 30 seconds." "LoginGraceTime 30"
+  printf '\n%s\n%s\n' "# Never accept an account with an empty password." "PermitEmptyPasswords no"
+  printf '\n%s\n%s\n%s\n' "# Probe silent clients and drop the dead ones after about 10 minutes (live sessions stay open)." "ClientAliveInterval 300" "ClientAliveCountMax 2"
+  if [ "$2" = 1 ]; then
+    printf '\n%s\n%s\n%s\n' "# Written because at least one account already has an authorized_keys file:" "# key logins keep working, password logins are refused." "PasswordAuthentication no"
+  fi
+}
+
+reload_ssh() {
+  local u
+  for u in ssh sshd; do
+    if service_active "$u"; then
+      act_soft "reload the SSH server ($u)" systemctl reload "$u"
+      return 0
+    fi
+  done
+  skip "SSH server is not running; the new settings apply when it starts"
+}
+
+ssh_effective_check() {
+  # sshd -T prints the effective configuration; warn when a value is not what this script asked for.
+  local dump k want have
+  dump="$(sysrun sshd -T 2>/dev/null)" || return 0
+  if [ -z "$dump" ]; then
+    return 0
+  fi
+  for k in "permitrootlogin $1" "x11forwarding no" "maxauthtries 4" "logingracetime 30" "permitemptypasswords no"; do
+    want="${k#* }"
+    have="$(printf '%s\n' "$dump" | awk -v key="${k% *}" '$1 == key { print $2; exit }')"
+    if [ -n "$have" ] && [ "$have" != "$want" ]; then
+      warn "SSH: ${k% *} is $have, not $want: an earlier configuration file overrides ours; edit that file"
+    fi
+  done
+}
+
+revert_sshd_dropin() {
+  # revert_sshd_dropin DEST HAD_PREV
+  if [ "$2" = 1 ]; then
+    cp "$WORK/sshd.prev" "$1"
+  else
+    rm -f -- "${1:?}"
+    unrecord_created "$1"
+  fi
+}
+
+do_ssh() {
+  local dest="$R/etc/ssh/sshd_config.d/99-epma-hardening.conf" main="$R/etc/ssh/sshd_config"
+  local had_prev=0 rootlogin=no pwoff=0 err
+  if ! sshd_installed; then
+    skip "SSH: the SSH server is not installed, nothing to configure"
+    return 0
+  fi
+  if [ ! -f "$main" ]; then
+    skip "SSH: $(shown "$main") not found"
+    return 0
+  fi
+  if ! grep -Eqi '^[[:space:]]*Include[[:space:]]+.*sshd_config\.d' "$main"; then
+    warn "SSH: $(shown "$main") does not include sshd_config.d; not touching the main file, SSH left as it is"
+    return 0
+  fi
+  if ! has_regular_user; then
+    rootlogin=prohibit-password
+    warn "SSH: no normal user account exists yet, so root keeps key-only login (PermitRootLogin prohibit-password)"
+    notice "Create a normal user, then run this script again to refuse root logins over SSH."
+  fi
+  scan_authorized_keys
+  if [ "$KEYS_ANY" = 1 ]; then
+    if [ -n "${SSH_CONNECTION:-}" ] && [ "$KEYS_CALLER" = 0 ]; then
+      warn "SSH: you are connected over SSH but your own account has no authorized_keys; password login left as it is"
+    else
+      pwoff=1
+    fi
+  fi
+  build_sshd "$rootlogin" "$pwoff" >"$WORK/sshd.new"
+  if [ -e "$dest" ]; then
+    cp "$dest" "$WORK/sshd.prev"
+    had_prev=1
+  fi
+  CHANGED_LAST=0
+  put_file "$dest" "$WORK/sshd.new" 644
+  if [ "$pwoff" = 1 ]; then
+    if [ "$CHANGED_LAST" = 1 ]; then
+      warn "SSH PASSWORD LOGIN IS NOW OFF: at least one account has authorized_keys, so PasswordAuthentication is set to no. Make sure you can log in with your key BEFORE you close this session."
+      notice "SSH password login is OFF. Test your key from a second terminal before closing this one."
+    else
+      ok "SSH password login is off (authorized_keys found)"
+    fi
+  fi
+  if [ "$DRY" = 1 ]; then
+    if [ "$CHANGED_LAST" = 1 ]; then
+      change "would: check the SSH configuration with sshd -t, undo the change if it fails, then reload the SSH server"
+    fi
+    return 0
+  fi
+  # Validate (even when nothing changed). sshd needs /run/sshd to exist for -t on Debian/Ubuntu.
+  mkdir -p "$R/run/sshd" 2>/dev/null || true
+  if err="$(sysrun sshd -t 2>&1)"; then
+    ok "sshd -t accepts the SSH configuration"
+  else
+    revert_sshd_dropin "$dest" "$had_prev"
+    warn "SSH: sshd -t rejected the configuration, so the change was reverted: $err"
+    if [ "$CHROOT" = 0 ]; then
+      N_ERR=$((N_ERR + 1))
+    else
+      notice "SSH settings were not applied inside the installer (sshd -t failed there); the first boot tries again."
+    fi
+    return 0
+  fi
+  if [ "$CHANGED_LAST" = 1 ]; then
+    if [ "$CHROOT" = 1 ]; then
+      skip "reload the SSH server (not done inside a chroot)"
+    else
+      reload_ssh
+    fi
+  fi
+  if [ "$CHROOT" = 0 ]; then
+    ssh_effective_check "$rootlogin"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Firewall
+# ---------------------------------------------------------------------------------------------
+
+firewall_ufw() {
+  local status ports p ufw_ok=1 have_it=0
+  if service_active firewalld; then
+    skip "firewall: firewalld is active, ufw is not added next to it"
+    return 0
+  fi
+  if pkg_installed ufw; then
+    have_it=1
+  fi
+  pkg_install ufw || return 0
+  if [ "$have_it" = 0 ] && [ "$DRY" = 1 ]; then
+    change "(dry-run) ufw would be set to: deny incoming, allow outgoing, allow SSH when the SSH server is in use, then enabled"
+    return 0
+  fi
+  status="$(sysrun ufw status verbose 2>&1)" || status=""
+  case "$status" in
+    *"Status: active"*)
+      ok "firewall: ufw is already active; its rules are left as they are"
+      case "$status" in
+        *"deny (incoming)"* | *"reject (incoming)"*) ;;
+        *) warn "firewall: ufw is active but incoming traffic is not denied by default" ;;
+      esac
+      return 0
+      ;;
+  esac
+  ports="$(ssh_ports)"
+  act "ufw: deny incoming connections by default" ufw default deny incoming || ufw_ok=0
+  act "ufw: allow outgoing connections by default" ufw default allow outgoing || ufw_ok=0
+  for p in $ports; do
+    act "ufw: allow SSH on port $p/tcp" ufw allow "$p/tcp" || ufw_ok=0
+  done
+  if [ "$ufw_ok" = 0 ]; then
+    warn "firewall: a ufw step failed, so ufw is NOT being enabled (to avoid cutting you off)"
+    return 0
+  fi
+  act "ufw: enable the firewall" ufw --force enable || true
+}
+
+firewall_firewalld() {
+  local zone ports p was_on=0 have_it=0
+  if pkg_installed firewalld; then
+    have_it=1
+  fi
+  pkg_install firewalld || return 0
+  if [ "$have_it" = 0 ] && [ "$DRY" = 1 ]; then
+    change "(dry-run) firewalld would be enabled and started, SSH kept reachable when the SSH server is in use"
+    return 0
+  fi
+  if service_enabled firewalld && service_active firewalld; then
+    was_on=1
+  fi
+  if [ "$was_on" = 1 ]; then
+    ok "firewall: firewalld is enabled and running; its zones are left as they are"
+    return 0
+  fi
+  enable_service firewalld || return 0
+  if [ "$DRY" = 1 ]; then
+    return 0
+  fi
+  ports="$(ssh_ports)"
+  if [ -z "$ports" ]; then
+    return 0
+  fi
+  zone="$(sysrun firewall-cmd --get-default-zone 2>/dev/null)" || zone=""
+  if [ -z "$zone" ]; then
+    warn "firewall: could not read the default firewalld zone; check by hand that SSH is allowed"
+    return 0
+  fi
+  for p in $ports; do
+    if [ "$p" = 22 ]; then
+      if ! sysrun firewall-cmd --zone="$zone" --query-service=ssh >/dev/null 2>&1; then
+        act "firewalld: allow the ssh service in zone $zone (now)" firewall-cmd --zone="$zone" --add-service=ssh || true
+        act "firewalld: allow the ssh service in zone $zone (permanent)" firewall-cmd --permanent --zone="$zone" --add-service=ssh || true
+      fi
+    elif ! sysrun firewall-cmd --zone="$zone" --query-port="$p/tcp" >/dev/null 2>&1; then
+      act "firewalld: allow port $p/tcp in zone $zone (now)" firewall-cmd --zone="$zone" --add-port="$p/tcp" || true
+      act "firewalld: allow port $p/tcp in zone $zone (permanent)" firewall-cmd --permanent --zone="$zone" --add-port="$p/tcp" || true
+    fi
+  done
+}
+
+do_firewall() {
+  if [ "$CHROOT" = 1 ]; then
+    skip "firewall: set up on the first boot"
+    return 0
+  fi
+  if [ "$FAMILY" = apt ]; then
+    firewall_ufw
+  else
+    firewall_firewalld
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Automatic security updates
+# ---------------------------------------------------------------------------------------------
+
+do_updates() {
+  local timer unit listing pkg candidates
+  if [ "$FAMILY" = apt ]; then
+    {
+      printf '%s\n' "// Managed by harden-linux.sh (EPMA USB CREATOR): refresh the package lists and run"
+      printf '%s\n' "// unattended-upgrades every day."
+      printf '%s\n' 'APT::Periodic::Update-Package-Lists "1";'
+      printf '%s\n' 'APT::Periodic::Unattended-Upgrade "1";'
+    } >"$WORK/auto-upgrades.new"
+    put_file "$R/etc/apt/apt.conf.d/20auto-upgrades" "$WORK/auto-upgrades.new" 644
+    cat >"$WORK/uu-origins.new" <<'EOF'
+// Managed by harden-linux.sh (EPMA USB CREATOR): install SECURITY updates only, never other updates
+// and never an automatic reboot. This replaces the distribution's default list of origins.
+#clear Unattended-Upgrade::Allowed-Origins;
+#clear Unattended-Upgrade::Origins-Pattern;
+Unattended-Upgrade::Origins-Pattern {
+        "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+        "origin=Debian,codename=${distro_codename},label=Debian-Security";
+        "origin=Ubuntu,archive=${distro_codename}-security";
+        "origin=UbuntuESMApps,codename=${distro_codename}-apps-security";
+        "origin=UbuntuESM,codename=${distro_codename}-infra-security";
+};
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+    put_file "$R/etc/apt/apt.conf.d/52epma-hardening-unattended" "$WORK/uu-origins.new" 644
+    pkg_install unattended-upgrades || true
+  else
+    cat >"$WORK/dnf-automatic.new" <<'EOF'
+# Managed by harden-linux.sh (EPMA USB CREATOR): download and install SECURITY updates only,
+# never reboot by itself, and write the report to the journal.
+[commands]
+upgrade_type = security
+download_updates = yes
+apply_updates = yes
+random_sleep = 360
+
+[emitters]
+emit_via = stdio
+EOF
+    put_file "$R/etc/dnf/automatic.conf" "$WORK/dnf-automatic.new" 644
+    # Fedora 41 and newer ship dnf5 (package dnf5-plugin-automatic); RHEL and older Fedora use dnf-automatic.
+    pkg=dnf-automatic
+    candidates="dnf-automatic-install.timer dnf-automatic.timer"
+    if pkg_installed dnf5; then
+      pkg=dnf5-plugin-automatic
+      candidates="dnf5-automatic.timer dnf-automatic-install.timer"
+    fi
+    if pkg_install "$pkg"; then
+      timer=""
+      listing="$(sysrun systemctl list-unit-files 2>/dev/null)" || listing=""
+      for unit in $candidates; do
+        if [ -z "$timer" ]; then
+          case "$listing" in
+            *"$unit"*) timer="$unit" ;;
+          esac
+        fi
+      done
+      if [ -z "$timer" ]; then
+        timer="${candidates%% *}"
+      fi
+      if [ "$CHROOT" = 0 ]; then
+        enable_service "$timer" || true
+      fi
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Audit logging
+# ---------------------------------------------------------------------------------------------
+
+build_audit_rules() {
+  local path
+  printf '%s\n' "# Managed by harden-linux.sh (EPMA USB CREATOR): a small set of audit watches. Only paths that"
+  printf '%s\n' "# exist are listed (auditctl refuses a watch on a missing path). No immutable flag is set."
+  for path in "/etc/passwd identity" "/etc/group identity" "/etc/shadow identity" "/etc/gshadow identity" \
+    "/etc/sudoers sudoers" "/etc/sudoers.d/ sudoers" "/etc/ssh/sshd_config sshd" "/etc/ssh/sshd_config.d/ sshd" \
+    "/var/log/lastlog logins"; do
+    if [ -e "$R${path% *}" ]; then
+      printf -- '-w %s -p wa -k %s\n' "${path% *}" "${path#* }"
+    fi
+  done
+}
+
+do_audit() {
+  local pkg=auditd rules="$R/etc/audit/rules.d/99-epma-hardening.rules"
+  if [ "$FAMILY" = dnf ]; then
+    pkg=audit
+  fi
+  if pkg_install "$pkg"; then
+    build_audit_rules >"$WORK/audit.new"
+    CHANGED_LAST=0
+    put_file "$rules" "$WORK/audit.new" 640
+    if [ "$CHROOT" = 0 ]; then
+      enable_service auditd || true
+      if [ "$CHANGED_LAST" = 1 ]; then
+        act_soft "load the audit rules now (augenrules --load)" augenrules --load
+      fi
+    fi
+  else
+    # Still write the rules where the package will find them.
+    build_audit_rules >"$WORK/audit.new"
+    put_file "$rules" "$WORK/audit.new" 640
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# AppArmor / SELinux: report only
+# ---------------------------------------------------------------------------------------------
+
+report_mac() {
+  local state cfg runtime=""
+  if [ "$FAMILY" = apt ]; then
+    skip "SELinux: not used by this distribution family"
+    if [ -r "$R/sys/module/apparmor/parameters/enabled" ]; then
+      state="$(cat "$R/sys/module/apparmor/parameters/enabled" 2>/dev/null || true)"
+      if [ "$state" = Y ]; then
+        ok "AppArmor is enabled"
+      else
+        warn "AppArmor is built in but NOT enabled (boot parameter apparmor=1 security=apparmor). Reported only, not changed."
+      fi
+    else
+      warn "AppArmor does not appear to be active in the running kernel. Reported only, not changed."
+    fi
+    return 0
+  fi
+  skip "AppArmor: not used by this distribution family"
+  cfg="$(awk -F= '$1 == "SELINUX" { print $2; exit }' "$R/etc/selinux/config" 2>/dev/null | tr -d ' "' | tr '[:upper:]' '[:lower:]')" || cfg=""
+  if [ "$CHROOT" = 0 ] && have_cmd getenforce; then
+    runtime="$(sysrun getenforce 2>/dev/null | tr '[:upper:]' '[:lower:]')" || runtime=""
+  fi
+  if [ "$runtime" = enforcing ] || { [ -z "$runtime" ] && [ "$cfg" = enforcing ]; }; then
+    ok "SELinux is enforcing"
+  else
+    warn "SELinux is not enforcing (running: ${runtime:-unknown}, configured: ${cfg:-unknown}). Reported only, not changed."
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# First boot service (installer chroot only)
+# ---------------------------------------------------------------------------------------------
+
+emit_self() {
+  # A working copy of this script, rebuilt from the functions that are loaded (used when the
+  # script came in through "bash -s" and there is no file to copy).
+  printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail'
+  declare -f
+  printf '%s\n' 'main "$@"'
+}
+
+self_copy() {
+  # self_copy DEST: write a copy of this script to DEST.
+  if [ -f "$0" ] && [ -r "$0" ] && [ "$(head -c 2 "$0")" = '#!' ] && grep -q '^emit_self()' "$0"; then
+    cp "$0" "$1"
+  else
+    emit_self >"$1"
+  fi
+}
+
+do_firstboot_install() {
+  local unit="$R/etc/systemd/system/$UNIT_NAME" sbin="$R/usr/local/sbin/epma-harden-linux.sh"
+  local wants="$R/etc/systemd/system/multi-user.target.wants/$UNIT_NAME"
+  local marker="$STATE_DIR/firstboot.pending"
+  self_copy "$WORK/self.sh"
+  put_file "$sbin" "$WORK/self.sh" 755
+  cat >"$WORK/unit.new" <<'EOF'
+# Managed by harden-linux.sh (EPMA USB CREATOR). Runs the hardening script once on the first boot
+# of the installed system (packages, firewall and services cannot be set up inside the installer),
+# then turns itself off. If a step fails (for example there is no network yet) it tries again at
+# the next boot.
+[Unit]
+Description=EPMA hardening (first boot)
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/var/lib/epma-hardening/firstboot.pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/epma-harden-linux.sh --yes
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  put_file "$unit" "$WORK/unit.new" 644
+  if [ "$DRY" = 1 ]; then
+    change "would: arm the first-boot service ($UNIT_NAME) and its marker file"
+    return 0
+  fi
+  if [ ! -f "$marker" ]; then
+    mkdir -p "$STATE_DIR"
+    chmod 700 "$STATE_DIR"
+    printf '%s\n' "pending" >"$marker"
+    record_state created "$marker"
+    change "$(shown "$marker"): created"
+  fi
+  if [ ! -L "$wants" ]; then
+    mkdir -p "$(dirname "$wants")"
+    ln -s "../$UNIT_NAME" "$wants"
+    record_state created "$wants"
+    change "$UNIT_NAME: enabled for the first boot ($(shown "$wants"))"
+  else
+    ok "$UNIT_NAME is already enabled"
+  fi
+}
+
+finish_firstboot() {
+  # After a clean real run on the installed system: switch the one-shot service off for good.
+  local marker="$STATE_DIR/firstboot.pending" wants="$R/etc/systemd/system/multi-user.target.wants/$UNIT_NAME"
+  if [ ! -f "$marker" ]; then
+    return 0
+  fi
+  if [ "$DRY" = 1 ]; then
+    change "would: switch the first-boot service off (hardening finished)"
+    return 0
+  fi
+  if [ "$N_ERR" -gt 0 ]; then
+    warn "the first-boot service stays on and will try again at the next boot"
+    return 0
+  fi
+  act_soft "disable $UNIT_NAME" systemctl disable "$UNIT_NAME"
+  rm -f -- "${marker:?}"
+  if [ -L "$wants" ]; then
+    rm -f -- "${wants:?}"
+  fi
+  change "first-boot service switched off: hardening is finished"
+}
+
+# ---------------------------------------------------------------------------------------------
+# Undo
+# ---------------------------------------------------------------------------------------------
+
+undo_path_ok() {
+  case "$1" in
+    "$R"/etc/* | "$R"/usr/local/sbin/* | "$R"/var/lib/epma-hardening/*) ;;
+    *) return 1 ;;
+  esac
+  case "$1" in
+    *..*) return 1 ;;
+  esac
+  return 0
+}
+
+do_undo() {
+  local p bak mode f done_any=0
+  f="$STATE_DIR/created.list"
+  if [ -f "$f" ]; then
+    while IFS= read -r p; do
+      if [ -z "$p" ]; then
+        continue
+      fi
+      if ! undo_path_ok "$p"; then
+        warn "undo: ignoring an unexpected path in the state file: $p"
+        continue
+      fi
+      if [ -e "$p" ] || [ -L "$p" ]; then
+        done_any=1
+        if [ "$DRY" = 1 ]; then
+          change "$(shown "$p"): would be removed (created by this script)"
+        else
+          rm -f -- "${p:?}"
+          change "$(shown "$p"): removed (created by this script)"
+        fi
+      fi
+    done <"$f"
+  fi
+  f="$STATE_DIR/modified.list"
+  if [ -f "$f" ]; then
+    while IFS= read -r p; do
+      if [ -z "$p" ]; then
+        continue
+      fi
+      if ! undo_path_ok "$p"; then
+        warn "undo: ignoring an unexpected path in the state file: $p"
+        continue
+      fi
+      bak="$p.epma-bak"
+      if [ -e "$bak" ]; then
+        done_any=1
+        if [ "$DRY" = 1 ]; then
+          change "$(shown "$p"): would be restored from $(shown "$bak")"
+        else
+          mv -f "$bak" "$p"
+          change "$(shown "$p"): restored from $(shown "$bak")"
+        fi
+      fi
+    done <"$f"
+  fi
+  f="$STATE_DIR/perms.list"
+  if [ -f "$f" ]; then
+    while IFS=' ' read -r mode p; do
+      if [ -z "$p" ] || [ ! -e "$p" ]; then
+        continue
+      fi
+      if ! undo_path_ok "$p"; then
+        continue
+      fi
+      case "$mode" in
+        '' | *[!0-7]*) continue ;;
+      esac
+      done_any=1
+      if [ "$DRY" = 1 ]; then
+        change "$(shown "$p"): permissions would go back to $mode"
+      else
+        chmod "$mode" "$p"
+        change "$(shown "$p"): permissions back to $mode"
+      fi
+    done <"$f"
+  fi
+  if [ "$done_any" = 0 ]; then
+    ok "nothing to undo: no changes by this script were found"
+  elif [ "$DRY" = 0 ]; then
+    rm -f -- "${STATE_DIR:?}/created.list" "${STATE_DIR:?}/modified.list" "${STATE_DIR:?}/perms.list"
+    rmdir "$STATE_DIR" 2>/dev/null || true
+    warn "kernel settings that were already loaded stay until the next boot; packages and services that were installed or enabled (ufw, firewalld, auditd, automatic updates) are left as they are"
+  fi
+}
+
+# ---------------------------------------------------------------------------------------------
+# Summary and main
+# ---------------------------------------------------------------------------------------------
+
+summary() {
+  say ""
+  say "Summary: $N_OK ok, $N_CHANGE changed, $N_SKIP skipped, $N_WARN warnings, $N_ERR errors"
+  if [ "$DRY" = 1 ]; then
+    say "Dry run: nothing was changed (no file, package, service or log entry)."
+  else
+    say "Log: $(shown "$LOG_FILE")"
+    if [ "$UNDO" = 0 ]; then
+      say "To go back: sudo bash harden-linux.sh --undo"
+    fi
+  fi
+  if [ -n "$NOTICES" ]; then
+    say "Please read:"
+    printf '%s' "$NOTICES"
+    log_line "notices: $NOTICES"
+  fi
+}
+
+main() {
+  init_globals
+  parse_args "$@"
+  if [ "$HELP" = 1 ]; then
+    usage
+    exit 0
+  fi
+  setup_env
+  init_paths
+  detect_distro
+  trap cleanup EXIT
+  print_plan
+  confirm_run
+  init_log
+  setup_work
+  if [ "$UNDO" = 1 ]; then
+    do_undo
+  else
+    do_sysctl
+    do_modprobe
+    do_coredumps
+    do_perms
+    do_logindefs
+    do_pwquality
+    do_ssh
+    do_firewall
+    do_updates
+    do_audit
+    report_mac
+    if [ "$CHROOT" = 1 ]; then
+      do_firstboot_install
+    else
+      finish_firstboot
+    fi
+  fi
+  summary
+  if [ "$N_ERR" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
+}
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --dry-run) DRY=1 ;;
+      --yes | -y) YES=1 ;;
+      --undo) UNDO=1 ;;
+      --chroot) CHROOT=1 ;;
+      --help | -h) HELP=1 ;;
+      --) ;;
+      *)
+        printf 'harden-linux.sh: unknown option: %s\n\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+    esac
+    shift
+  done
+}
+
+main "$@"
+"""
+
+
+def linux_hardening_script(profile):
+    """The text of `harden-linux.sh` for `profile` (pure ASCII). HARDENING_NONE has nothing to harden."""
+    if profile == HARDENING_NONE:
+        raise ValueError("nothing to harden: the profile is 'none'")
+    if profile != HARDENING_BASELINE:
+        raise ValueError(f"unknown hardening profile: {profile!r}")
+    return _HARDEN_LINUX_SH
+
+
+# ===== end hardening: linux script =====
 
 
 def chromeos_drive_too_small(mode, drive_size):
