@@ -20,7 +20,13 @@ NEW_TEXTS = (
     "What does it change?", "Hide the list", "Install target:", "Ubuntu (autoinstall)", "Fedora / RHEL (kickstart)",
     "Debian (script + preseed)", "Create Seed Drive", "the hardening seed files",
     "Windows 11 and add the hardening files", "Seed drive created and verified",
-    "The hardening files were added to the drive.",
+    "The hardening files were written to the drive and checked byte for byte. After Windows setup finishes, "
+    "their log will be at {log}.",
+    "Adds a few files to the same drive. A script applies the settings at the END of Windows setup and writes "
+    "its log to {log}.",
+    "The settings are applied at the end of Windows setup by a script, and every change is written to {log}. "
+    "You choose the disk, the account and the edition during setup as usual.",
+    "Wait for the download to finish or cancel it first.", "Download in progress",
 )
 
 
@@ -203,6 +209,54 @@ class HardeningLayoutTests(GuiTestCase):
         self.assertEqual(self.state(win.hardening_check), "normal")
         self.assertTrue(all(self.state(r) == "normal" for r in win.seed_radios.values()))
 
+    # ----- wording that must not over-promise -----
+    def test_the_checkbox_explanation_says_when_and_where_the_log_is(self):
+        labels = " ".join(str(w.cget("text")) for w in self.win.hardening_check.master.winfo_children()
+                          if w.winfo_class() == "TLabel")
+        self.assertIn("END of Windows setup", labels)
+        self.assertIn("C:\\Windows\\Temp\\epma-hardening.log", labels)
+        self.assertNotIn("safer settings", labels)
+        self.assertEqual(str(self.win.hardening_check.cget("text")),
+                         "Add hardening settings to the Windows installation (optional)")
+
+    def test_the_list_footer_says_when_the_settings_are_applied(self):
+        text = app.App._hardening_details_text()
+        self.assertIn("applied at the end of Windows setup by a script", text)
+        self.assertIn("C:\\Windows\\Temp\\epma-hardening.log", text)
+
+    def test_every_line_of_the_list_goes_through_the_translation(self):
+        lines = ["Turns thing A on -- risk: x", "Turns thing B off -- risk: y"]
+        translated = {lines[0]: "Liga A -- risco: x", lines[1]: "Desliga B -- risco: y"}
+        with mock.patch.object(app, "describe_hardening_windows", create=True, return_value=lines), \
+                mock.patch.dict(app.PT_BR, translated), mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
+            text = app.App._hardening_details_text()
+        self.assertIn("• Liga A -- risco: x", text)
+        self.assertIn("• Desliga B -- risco: y", text)
+        self.assertNotIn("Turns thing", text)
+
+    def test_a_long_title_is_cut_with_an_ellipsis_when_even_8_pt_does_not_fit(self):
+        card = self.win.cards[app.CARD_SEED]
+        card._on_resize(mock.Mock(width=780 // 5 - 12))   # the width of one of five cards in a 780 px window
+        long_title = "Härtungsunterstützungsdatenträger-Erstellungsassistent"
+        font, shown = card._fit(card._title_font, long_title)
+        self.assertEqual(font[1], 8)
+        self.assertTrue(shown.endswith("\u2026"))
+        self.assertLess(len(shown), len(long_title))
+        self.assertTrue(long_title.startswith(shown[:-1]))
+        self.assertLessEqual(app.tkfont.Font(family=font[0], size=font[1], weight="bold").measure(shown),
+                             card._cw - 16)
+        # a text that fits is left alone
+        self.assertEqual(card._fit(card._title_font, "Hardening seed")[1], "Hardening seed")
+
+    def test_the_card_draws_the_cut_text(self):
+        card = self.win.cards[app.CARD_SEED]
+        card._title = "Härtungsunterstützungsdatenträger-Erstellungsassistent"
+        card._on_resize(mock.Mock(width=130))
+        card._draw()
+        drawn = [card.itemcget(i, "text") for i in card.find_all() if card.type(i) == "text"]
+        self.assertTrue(any(t.endswith("\u2026") for t in drawn), drawn)
+
+
 
 class SeedImageStepTests(GuiTestCase, TempDirTestCase):
     """The seed card needs no image: the file row goes away, Create does not ask for one, set_iso is calm."""
@@ -323,6 +377,8 @@ class WriteFlowTests(GuiTestCase):
         self.admin = self.patch(app, "needs_admin", return_value=False)
         self.gate = threading.Event()   # holds a fake engine call until the test lets it go
         self.calls = []
+        # added by the engine part of the feature: replaced here so these tests do not depend on it
+        self.size_check = self.patch(app, "check_seed_target_size", create=True)
 
     def patch(self, obj, name, **kw):
         patcher = mock.patch.object(obj, name, **kw)
@@ -364,7 +420,9 @@ class WriteFlowTests(GuiTestCase):
         self.assertEqual(engine.call_args.kwargs["mode"], app.MODE_WINDOWS)
         self.assertEqual(engine.call_args.args[:2], ("/tmp/exemplo.iso", "disk9"))
         self.assertEqual(win.confirm_erase.call_args.args[1], "Windows 11 and add the hardening files")
-        self.assertIn("The hardening files were added to the drive.", win.success_panel.message_text)
+        self.assertIn("written to the drive and checked byte for byte", win.success_panel.message_text)
+        self.assertIn("C:\\Windows\\Temp\\epma-hardening.log", win.success_panel.message_text)
+        self.assertIn("After Windows setup finishes", win.success_panel.message_text)
 
     def test_unticked_or_on_another_card_passes_no_hardening(self):
         win = self.win
@@ -563,6 +621,120 @@ class WriteFlowTests(GuiTestCase):
         self.assertEqual(win.create_progress.winfo_manager(), "pack")
         self.gate.set()
         self.assertTrue(self.pump(lambda: not win._creating))
+
+    # ----- what is confirmed is what is written -----
+    def test_an_image_chosen_while_the_confirmation_is_open_does_not_change_the_write(self):
+        win = self.win
+        win.select_card(app.CARD_WINDOWS)
+        win.hardening_var.set(True)
+        checked = self.patch(win, "_image_matches_choice", return_value=True)
+
+        def confirm_while_a_download_finishes(*_args):
+            self.events.append("confirm")
+            with mock.patch.object(app, "detect_iso_kind", return_value=app.ISO_KIND_LINUX):
+                win.set_iso("/tmp/outra.iso")      # a finished download: new image, and the Linux card
+            win.hardening_var.set(False)
+            return True
+
+        win.confirm_erase = mock.Mock(side_effect=confirm_while_a_download_finishes)
+        engine = self.patch(app, "build_usb", side_effect=self.fake_engine(True))
+        self.write()
+        self.assertEqual(win.iso_path.get(), "/tmp/outra.iso")      # the window did change meanwhile
+        self.assertEqual(win.mode_var.get(), app.MODE_LINUX)
+        checked.assert_called_once_with(app.MODE_WINDOWS, "/tmp/exemplo.iso")
+        engine.assert_called_once()
+        self.assertEqual(engine.call_args.args[0], "/tmp/exemplo.iso")      # what was confirmed is what is written
+        self.assertEqual(engine.call_args.kwargs["mode"], app.MODE_WINDOWS)
+        self.assertEqual(engine.call_args.kwargs["hardening"], app.HARDENING_BASELINE)
+        self.assertEqual(win.confirm_erase.call_args.args[1], "Windows 11 and add the hardening files")
+
+    def test_the_seed_target_is_also_read_once(self):
+        win = self.win
+        win.select_card(app.CARD_SEED)
+        win.seed_radios[app.SEED_FEDORA].invoke()
+
+        def change_the_target(*_args):
+            win.seed_target_var.set(app.SEED_DEBIAN)
+            return True
+
+        win.confirm_erase = mock.Mock(side_effect=change_the_target)
+        seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
+        self.write()
+        self.assertEqual(seed.call_args.args[0], app.SEED_FEDORA)
+
+    def test_create_waits_while_a_download_or_an_extraction_runs(self):
+        win = self.win
+        hint = "Wait for the download to finish or cancel it first."
+        self.assertEqual(self.state(win.create_btn), "normal")
+        for flag in ("_download_running", "_flex_busy"):
+            with self.subTest(flag=flag):
+                setattr(win, flag, True)
+                win._sync_controls()                    # the same call the download code makes
+                self.assertEqual(self.state(win.create_btn), "disabled")
+                self.assertEqual(str(win.create_hint.cget("text")), hint)
+                # a stale click is refused too, before any question
+                confirm = self.confirmed()
+                engine = self.patch(app, "build_usb", side_effect=AssertionError("must not run"))
+                self.box.calls.clear()
+                win.start_create_usb()
+                confirm.assert_not_called()
+                engine.assert_not_called()
+                self.assertEqual(self.box.titles("error"), ["Download in progress"])
+                self.assertFalse(win._creating)
+                setattr(win, flag, False)
+                win._sync_controls()
+                self.assertEqual(self.state(win.create_btn), "normal")
+                self.assertEqual(str(win.create_hint.cget("text")), "")
+
+    def test_the_download_callbacks_release_create(self):
+        win = self.win
+        win._download_running = True
+        win._sync_controls()
+        self.assertEqual(self.state(win.create_btn), "disabled")
+        with mock.patch.object(app.messagebox, "showinfo", create=True):
+            win._on_download_done("/tmp/exemplo.iso", "0" * 64, False)
+        self.assertEqual(self.state(win.create_btn), "normal")
+
+    # ----- the seed drive is checked for size before anything is asked -----
+    def test_a_too_small_seed_drive_is_refused_before_the_confirmation(self):
+        win = self.win
+        win.select_card(app.CARD_SEED)
+        self.size_check.side_effect = ValueError("The drive (16 MB) is too small for a seed drive.")
+        confirm = self.confirmed()
+        seed = self.patch(app, "build_seed_usb", create=True, side_effect=AssertionError("must not run"))
+        win.start_create_usb()
+        self.size_check.assert_called_once_with(USB_DISK["size"])
+        confirm.assert_not_called()
+        seed.assert_not_called()
+        self.assertEqual(self.box.titles("error"), ["Drive too small"])
+        self.assertIn("too small for a seed drive", self.box.calls[-1][2])
+        self.assertFalse(win._creating)
+        self.assertEqual(self.state(win.create_btn), "normal")
+
+    def test_the_size_check_is_only_for_the_seed_card(self):
+        win = self.win
+        win.select_card(app.CARD_WINDOWS)
+        self.confirmed()
+        self.patch(win, "_image_matches_choice", return_value=True)
+        self.patch(app, "build_usb", side_effect=self.fake_engine(True))
+        self.write()
+        self.size_check.assert_not_called()
+
+    # ----- the engine refuses the image: shown nicely -----
+    def test_an_iso_that_already_has_the_hardening_files_is_a_message_not_a_traceback(self):
+        win = self.win
+        win.select_card(app.CARD_WINDOWS)
+        win.hardening_var.set(True)
+        self.confirmed()
+        self.patch(win, "_image_matches_choice", return_value=True)
+        text = "This ISO already contains the hardening files (autounattend.xml). Nothing was changed."
+        self.patch(app, "build_usb", side_effect=self.fake_engine(exc=ValueError(text)))
+        self.write()
+        self.assertTrue(win.error_banner.shown)
+        self.assertIn("already contains the hardening files", win.error_banner.message_text)
+        self.assertEqual(len(self.box.titles("error")), 1)
+        self.assertFalse(win._creating)
+        self.assertEqual(self.state(win.create_btn), "normal")
 
     # ----- results -----
     def test_success_panel_for_the_seed_drive(self):
