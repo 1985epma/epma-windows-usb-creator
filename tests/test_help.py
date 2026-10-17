@@ -179,7 +179,6 @@ class ChromeOSSectionTests(unittest.TestCase):
                               + sections()["The drive and the Create button"])
 
     def test_no_section_still_talks_about_tabs(self):
-        import re
         for title, body in app.help_sections():
             with self.subTest(section=title):
                 self.assertNotRegex(body, r"(?i)\btab [0-9]\b|\bthe tab\b|\bthat tab\b|\bon tab\b")
