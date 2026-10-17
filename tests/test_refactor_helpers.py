@@ -244,5 +244,22 @@ class PackageTableTests(unittest.TestCase):
             self.assertIsNone(app.linux_detect_pkg_manager())
 
 
+class DiskEntryTests(unittest.TestCase):
+    def test_entry_has_the_six_fields_and_a_label_built_from_them(self):
+        vols = [{"name": "STICK", "filesystem": "FAT32", "size": 1, "used": None, "mountpoint": None}]
+        identity = app.make_identity(serial="123", model="Ultra")
+        entry = app._disk_entry("disk4", 58 * 1024 ** 3, "SanDisk Ultra", vols, identity)
+        self.assertEqual(set(entry), {"id", "size", "label", "model", "volumes", "identity"})
+        self.assertEqual(entry["label"], app.build_disk_label("/dev/disk4", "SanDisk Ultra", 58 * 1024 ** 3, vols))
+        self.assertTrue(entry["label"].startswith("/dev/disk4 — SanDisk Ultra — 58.0 GB — 1 volume ('STICK')"))
+        self.assertIs(entry["volumes"], vols)
+        self.assertEqual(entry["identity"], identity)
+
+    def test_unknown_contents_and_no_model(self):
+        entry = app._disk_entry("sdb", 8 * 1024 ** 3, "", None, ())
+        self.assertEqual(entry["label"], "/dev/sdb — 8.0 GB — contents unknown")
+        self.assertIsNone(entry["volumes"])
+
+
 if __name__ == "__main__":
     unittest.main()

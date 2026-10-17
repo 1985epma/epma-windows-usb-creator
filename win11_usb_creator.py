@@ -1972,6 +1972,12 @@ def build_disk_label(dev_path, model, size, volumes):
     return " — ".join(parts)
 
 
+def _disk_entry(dev_id, size, model, volumes, identity):
+    """The record the drive list holds for one disk: id, size, label (built here), model, volumes, identity."""
+    return {"id": dev_id, "size": size, "label": build_disk_label(f"/dev/{dev_id}", model, size, volumes),
+            "model": model, "volumes": volumes, "identity": identity}
+
+
 def assess_disk_risk(disk, translate=False):
     """Return (level, reasons): level is 'high' or 'normal'; reasons explain every 'high'.
 
@@ -2189,9 +2195,7 @@ def macos_get_external_disks():
             usb_map = macos_usb_device_map()
             apfs_map = macos_apfs_volumes_by_store()
         model, volumes, identity = macos_describe_disk(d, info, usb_map, apfs_map)
-        label = build_disk_label(f"/dev/{dev}", model, size, volumes)
-        disks.append({"id": dev, "size": size, "label": label,
-                      "model": model, "volumes": volumes, "identity": identity})
+        disks.append(_disk_entry(dev, size, model, volumes, identity))
     return disks
 
 
@@ -2541,9 +2545,7 @@ def linux_get_external_disks():
                     audit(f"Hiding {name}: its size is zero or unreadable", logging.WARNING)
                     continue
                 model, volumes, identity = linux_describe_disk(dev)
-                disks.append({"id": name, "size": size, "model": model, "volumes": volumes,
-                              "identity": identity,
-                              "label": build_disk_label(f"/dev/{name}", model, size, volumes)})
+                disks.append(_disk_entry(name, size, model, volumes, identity))
             return disks
         except Exception as e:
             audit(f"lsblk enumeration failed ({type(e).__name__}); using /sys/block fallback",
@@ -2589,9 +2591,7 @@ def linux_get_external_disks():
         except Exception:  # noqa: S110 - purely descriptive, the disk is listed either way
             pass
         # No partition information here (volumes=None): the confirmation says so and treats it as high risk.
-        disks.append({"id": name, "size": size, "model": model, "volumes": None,
-                      "identity": make_identity(model=model),
-                      "label": build_disk_label(f"/dev/{name}", model, size, None)})
+        disks.append(_disk_entry(name, size, model, None, make_identity(model=model)))
     return disks
 
 
