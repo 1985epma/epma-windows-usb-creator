@@ -161,15 +161,9 @@ class HardeningLayoutTests(GuiTestCase):
         win.hardening_toggle.set_open(False)
         self.assertEqual(win.hardening_details.winfo_manager(), "")
 
-    def test_the_description_may_be_one_string(self):
-        with mock.patch.object(app, "describe_hardening_windows", create=True, return_value="One\n\nTwo\n"):
-            text = app.App._hardening_details_text()
-        self.assertTrue(text.startswith("• One\n• Two\n"))
-
-    def test_a_short_static_list_is_used_when_the_engine_has_no_description(self):
-        with mock.patch.object(app, "describe_hardening_windows", create=True, side_effect=NameError("x")):
-            text = app.App._hardening_details_text()
-        self.assertGreaterEqual(text.count("• "), 4)
+    def test_the_real_description_has_no_compliance_claims(self):
+        text = app.App._hardening_details_text()
+        self.assertGreaterEqual(text.count("• "), 8)
         self.assertNotRegex(text.lower(), r"\b(cis|stig|nist|complian|certif)")
 
     def test_the_seed_panel_explains_and_offers_the_three_targets(self):

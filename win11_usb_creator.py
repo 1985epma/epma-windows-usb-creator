@@ -562,11 +562,6 @@ PT_BR = {
     "Adds a few files to the same drive so Windows setup starts from safer settings.": "Adiciona alguns arquivos ao mesmo pendrive para que a instalação do Windows comece com ajustes mais seguros.",
     "What does it change?": "O que isto altera?",
     "Hide the list": "Ocultar a lista",
-    "Firewall on for every network profile.": "Firewall ativado em todos os perfis de rede.",
-    "Microsoft Defender protections and SmartScreen on.": "Proteções do Microsoft Defender e SmartScreen ativados.",
-    "The old SMBv1 file-sharing protocol off.": "Protocolo antigo de compartilhamento de arquivos SMBv1 desativado.",
-    "Autorun off for removable drives.": "Execução automática desativada em unidades removíveis.",
-    "Remote Assistance off.": "Assistência Remota desativada.",
     "Every change is written to a log on the computer. You choose the disk, the account and the edition during setup as usual.": "Cada alteração é registrada em um log no computador. Você escolhe o disco, a conta e a edição durante a instalação, como de costume.",
     "Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, hardened Linux install. Write the installer to its own drive with the Linux card, then plug both drives into the computer you install on. The files never choose or erase a disk on that computer: you still pick the disk and create the account yourself. No image file is needed; writing this drive ERASES it.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para uma instalação automática e reforçada do Linux. Grave o instalador no pendrive dele com o cartão Linux e depois conecte os dois pendrives ao computador onde vai instalar. Os arquivos nunca escolhem nem apagam um disco desse computador: você continua escolhendo o disco e criando a conta. Não é preciso nenhum arquivo de imagem; gravar este pendrive o APAGA.",
     "Install target:": "Sistema de destino:",
@@ -2909,7 +2904,7 @@ def collect_hardening_files(hardening):
         return {}
     # Both names belong to other parts of the hardening feature and are looked up here at call time
     # (the tests patch them), hence the noqa until every part is merged.
-    files = validate_seed_files(hardening_files_windows(hardening))  # noqa: F821
+    files = validate_seed_files(hardening_files_windows(hardening))
     if not files:
         raise ValueError(f"The hardening profile {hardening!r} has no files to add. Nothing was changed.")
     return files
@@ -5097,7 +5092,7 @@ def hardening_files_windows(profile):
 # seed itself (so the seed works even when the other files are not read) and is also written as a
 # plain file for reading and for running by hand. Output is deterministic: same input, same bytes.
 SEED_LABELS = {SEED_UBUNTU: "CIDATA", SEED_FEDORA: "OEMDRV", SEED_DEBIAN: "EPMA-SEED"}
-SEED_SCRIPT_NAME = "harden-linux.sh"
+SEED_HARDEN_FILE = "harden-linux.sh"
 SEED_LOG_NAME = "epma-hardening.log"  # written inside the installed system, in /var/log
 SEED_BASE64_WIDTH = 76
 SEED_README_WIDTH = 78
@@ -5131,7 +5126,7 @@ def _seed_b64_lines(data):
 
 def _seed_failure_echo(log):
     return ('echo "EPMA hardening failed (exit status $?); the installation goes on. Run it again later '
-            'with: sudo bash /root/' + SEED_SCRIPT_NAME + '" >> ' + log)
+            'with: sudo bash /root/' + SEED_HARDEN_FILE + '" >> ' + log)
 
 
 def _seed_ubuntu_user_data(script):
@@ -5152,15 +5147,15 @@ def _seed_ubuntu_user_data(script):
         "  late-commands:",
         "    - |",
         "      mkdir -p /target/root /target/var/log",
-        "      base64 -d > /target/root/" + SEED_SCRIPT_NAME + " <<'EPMA_B64'",
+        "      base64 -d > /target/root/" + SEED_HARDEN_FILE + " <<'EPMA_B64'",
     ]
     lines += ["      " + chunk for chunk in _seed_b64_lines(script)]
     lines += [
         "      EPMA_B64",
-        "      chmod 700 /target/root/" + SEED_SCRIPT_NAME,
+        "      chmod 700 /target/root/" + SEED_HARDEN_FILE,
         "      true",
         "    - |",
-        "      if curtin in-target --target=/target -- /bin/bash /root/" + SEED_SCRIPT_NAME
+        "      if curtin in-target --target=/target -- /bin/bash /root/" + SEED_HARDEN_FILE
         + " --yes --chroot >> " + log + " 2>&1; then",
         '        echo "EPMA hardening finished" >> ' + log,
         "      else",
@@ -5191,13 +5186,13 @@ def _seed_fedora_ks(script):
         "# Runs inside the new system (the default). A failure here never stops the install.",
         "%post",
         "mkdir -p /root /var/log",
-        "base64 -d > /root/" + SEED_SCRIPT_NAME + " <<'EPMA_B64'",
+        "base64 -d > /root/" + SEED_HARDEN_FILE + " <<'EPMA_B64'",
     ]
     lines += _seed_b64_lines(script)
     lines += [
         "EPMA_B64",
-        "chmod 700 /root/" + SEED_SCRIPT_NAME,
-        "if /bin/bash /root/" + SEED_SCRIPT_NAME + " --yes --chroot >> " + log + " 2>&1; then",
+        "chmod 700 /root/" + SEED_HARDEN_FILE,
+        "if /bin/bash /root/" + SEED_HARDEN_FILE + " --yes --chroot >> " + log + " 2>&1; then",
         '  echo "EPMA hardening finished" >> ' + log,
         "else",
         "  " + _seed_failure_echo(log),
@@ -5212,10 +5207,10 @@ def _seed_debian_preseed(script):
     log = "/var/log/" + SEED_LOG_NAME
     b64 = "/target/root/harden-linux.b64"
     inner = (
-        "base64 -d /root/harden-linux.b64 > /root/" + SEED_SCRIPT_NAME
-        + " && chmod 700 /root/" + SEED_SCRIPT_NAME
+        "base64 -d /root/harden-linux.b64 > /root/" + SEED_HARDEN_FILE
+        + " && chmod 700 /root/" + SEED_HARDEN_FILE
         + " && rm -f /root/harden-linux.b64"
-        + " && /bin/bash /root/" + SEED_SCRIPT_NAME + " --yes --chroot >> " + log + " 2>&1"
+        + " && /bin/bash /root/" + SEED_HARDEN_FILE + " --yes --chroot >> " + log + " 2>&1"
         + " && echo EPMA-hardening-finished >> " + log
         + " || echo EPMA-hardening-failed-installation-goes-on >> " + log
     )
@@ -5336,9 +5331,9 @@ def _seed_readme(target):
     code("sudo bash harden-linux.sh --undo")
     if target == SEED_DEBIAN:
         para("(with the preseed of option (b), a copy of the script is also kept in /root/"
-             + SEED_SCRIPT_NAME + ").")
+             + SEED_HARDEN_FILE + ").")
     else:
-        para("(a copy of the script is also kept in /root/" + SEED_SCRIPT_NAME
+        para("(a copy of the script is also kept in /root/" + SEED_HARDEN_FILE
              + " on the installed system).")
     heading("A note on the word 'hardened'")
     para("These settings are inspired by common security baselines. They are a sensible starting "
@@ -5353,7 +5348,7 @@ def hardening_files_seed(target, profile):
     files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
     never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile)."""
     _seed_check_args(target, profile)
-    text = linux_hardening_script(profile)  # noqa: F821  (written by the linux-script part of this feature)
+    text = linux_hardening_script(profile)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("The hardening script is empty")
     script = text.encode("utf-8")
@@ -5364,7 +5359,7 @@ def hardening_files_seed(target, profile):
     else:
         texts = {"preseed.cfg": _seed_debian_preseed(script)}
     files = {name: body.encode("ascii") for name, body in texts.items()}
-    files[SEED_SCRIPT_NAME] = script
+    files[SEED_HARDEN_FILE] = script
     files["README.txt"] = _seed_readme(target).encode("ascii")
     return SEED_LABELS[target], files
 # ===== end hardening: seed content =====
@@ -5711,7 +5706,7 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
     if profile not in HARDENING_PROFILES:
         raise ValueError(f"Unknown hardening profile: {profile!r}")
     validate_device_name(dev)
-    label, files = hardening_files_seed(target, profile)  # noqa: F821 - written by the hardening-content part
+    label, files = hardening_files_seed(target, profile)
     label = validate_seed_label(label)
     files = validate_seed_files(files)
     if expected_size and expected_size < SEED_MIN_DRIVE_BYTES:
@@ -7369,24 +7364,8 @@ class App(_TkBase):
 
     @staticmethod
     def _hardening_details_text():
-        """The list of settings the Windows option applies: the engine's own description when it has one, else
-        the short list below. KEEP IN SYNC with what hardening_files_windows() does."""
-        try:
-            described = describe_hardening_windows(HARDENING_BASELINE)  # noqa: F821 - written by the engine part
-        except NameError:
-            described = None
-        if isinstance(described, str):
-            lines = [line for line in described.splitlines() if line.strip()]
-        elif described:
-            lines = [str(line) for line in described]
-        else:
-            lines = [
-                _("Firewall on for every network profile."),
-                _("Microsoft Defender protections and SmartScreen on."),
-                _("The old SMBv1 file-sharing protocol off."),
-                _("Autorun off for removable drives."),
-                _("Remote Assistance off."),
-            ]
+        """The list of settings the Windows option applies, straight from the engine's own description."""
+        lines = [str(line) for line in describe_hardening_windows(HARDENING_BASELINE)]
         lines = [line if line.startswith("•") else "• " + line for line in lines]
         footer = _("Every change is written to a log on the computer. You choose the disk, the account and the "
                    "edition during setup as usual.")
@@ -8516,7 +8495,7 @@ class App(_TkBase):
                     self._post(self._on_create_progress, done, total, text)
 
                 if seed:  # the same flow as every other write; only the engine call differs (no image)
-                    ejected = build_seed_usb(target, dev, self.log_threadsafe, self.priv,  # noqa: F821 - engine part
+                    ejected = build_seed_usb(target, dev, self.log_threadsafe, self.priv,
                                              expected_size=expected_size, progress=progress,
                                              cancel_event=self.create_cancel_event)
                 else:
