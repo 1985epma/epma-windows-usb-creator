@@ -50,8 +50,8 @@ command.**
 
 | Input | Rule |
 |---|---|
-| Disk identifier | `^disk[0-9]+$` (macOS) / `^[a-zA-Z0-9_+-]{1,32}$` (Linux). Anything else is rejected. |
-| ISO path | Must exist, be a regular file, be readable, and be at least 1 MB. |
+| Disk identifier | `^disk[0-9]+$` (macOS) / `^[a-zA-Z0-9_+-]{1,32}$` (Linux), matched with `fullmatch` so a trailing newline is rejected too. Anything else is rejected. |
+| ISO path | Must exist, be a regular file, be readable, and be at least 1 MB. For direct (Linux/hybrid) writes it must also carry a boot signature. |
 | Download URL | `https://` only. A host outside Microsoft's known download servers triggers an explicit warning. |
 | SHA-256 checksum | Exactly 64 hexadecimal characters. |
 | Package names to install | Only those in the fixed `LINUX_REQUIRED_TOOLS` list. |
@@ -66,6 +66,9 @@ When the application **cannot confirm** that a disk is external and safe, it
 **hides the disk** rather than offering it. Previously, a failed verification
 resulted in the disk being listed anyway.
 
+Only drives attached over **USB** are ever offered (macOS `BusProtocol == USB`, Linux
+`tran == usb`); SD cards, internal disks and Thunderbolt/NVMe enclosures are not.
+
 This includes a specific safeguard for machines that boot from removable media
 (for example, a Raspberry Pi booting from its SD card, or a USB-booted system):
 any disk holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` is hidden, even
@@ -75,7 +78,7 @@ when the operating system reports it as removable.
 
 Immediately before erasing a disk, the application **re-enumerates the disk
 list** and confirms that the chosen identifier still refers to the same device,
-with the same size. Names such as `/dev/sdb` are recycled by the operating
+with the same size **and the same serial number/model/UUID**. Names such as `/dev/sdb` are recycled by the operating
 system: if a drive is unplugged and another plugged in between selection and
 writing, the name can point somewhere else entirely. The operation is aborted in
 that case.
@@ -88,11 +91,17 @@ causes the file to be **discarded**. Incomplete downloads are discarded as well.
 
 ### 6. Handling of the administrator password
 
+- Asked for and **verified before anything touches the drive**: a wrong or
+  canceled password changes nothing.
 - Passed over `stdin` only — **never** on the command line, which is visible to
   other users on the machine through the `ps` command.
+- After the single check it is **dropped from memory**; the operation continues on
+  sudo's own credential timestamp (refreshed while it runs, invalidated with
+  `sudo -k` at the end). If the system does not keep that timestamp, the password
+  is asked again — it is not held.
 - Never written to any log, including the audit log.
-- Cleared from memory as soon as the operation completes
-  (`PrivilegeHelper.clear_cached_password`).
+- A privileged script that fails is **never re-run**: a failed `mkfs`/`dd` is
+  reported, not repeated.
 
 ### 7. Audit logging
 
@@ -101,9 +110,11 @@ Destructive operations and security-relevant events are recorded to a file with
 
 Default location: `~/.local/state/epma-win11-usb-creator/audit.log`
 
-Recorded events include: start/completion/failure of destructive operations,
-disks hidden for safety reasons, rejected identifiers, download origin, and the
-result of integrity verification.
+Recorded events include: start/completion/failure/cancellation of destructive
+operations (with the **SHA-256 of the ISO that was written**), disks hidden for
+safety reasons, rejected identifiers, download origin, and the result of integrity
+verification and of the post-write verification. The log rotates (1 MB × 5) and
+every file keeps `0600` permissions.
 
 If the home directory is not writable, logging is silently disabled — **failing
 to write a log must never stop a user from creating their USB drive.**
@@ -113,6 +124,21 @@ to write a log must never stop a user from creating their USB drive.**
 Unexpected failures show a short message on screen; the technical detail
 (internal paths, command lines) goes to the local log and the audit log, not to
 a dialog box.
+
+### 9. Verification before eject
+
+After writing, the drive is **read back and compared** with the ISO: byte for byte
+in direct-write mode; checksum comparison of every file (plus `wimlib-imagex
+verify` for split images) after remounting in Windows mode. On any difference the
+operation stops **without ejecting** and the drive is reported as unusable.
+Verification cannot be skipped, in the window or in the command line.
+
+### 10. High-risk drives need a typed confirmation
+
+The drive list and the final dialog show the model, size and volumes. A drive that
+is large (> 256 GB), holds a lot of data or looks like a backup disk additionally
+requires typing its identifier. Drives whose contents cannot be read are treated
+as high risk.
 
 ---
 
@@ -128,6 +154,7 @@ are no secrets, passwords, or API keys in this project.
 | `WIN11USB_TRUSTED_ISO_HOSTS` | Optional | Comma-separated list of trusted download hosts, replacing the default Microsoft list. |
 | `WIN11USB_ALLOW_ANY_DOWNLOAD_HOST` | Optional | Set to `1` to disable the unrecognised-server warning. **Reduces security.** |
 | `WIN11USB_EXPECTED_SHA256` | Optional | Pre-fills the expected checksum field. |
+| `EPMA_LANG` | Optional | Interface language: `en` or `pt` (default: follows `LANG`). |
 
 How to set one (macOS/Linux, in a terminal):
 

@@ -49,6 +49,8 @@ class EpmaWindowsUsbCreator < Formula
       exec "#{formula_opt_bin("python@3.13")}/python3.13" "#{libexec}/win11_usb_creator.py" "$@"
     SHELL
     chmod 0755, bin/"epma-windows-usb-creator"
+    # Short name that matches the application name shown in the macOS menu bar.
+    bin.install_symlink "epma-windows-usb-creator" => "epma-usb-creator"
   end
 
   def caveats

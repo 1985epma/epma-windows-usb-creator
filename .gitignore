@@ -34,3 +34,6 @@ semgrep.sarif
 .DS_Store
 .idea/
 .vscode/
+
+# Local agent worktrees
+.claude/

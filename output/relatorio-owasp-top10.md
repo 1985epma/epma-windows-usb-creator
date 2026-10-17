@@ -1,5 +1,12 @@
 # Relatório OWASP Top 10 (2021)
 
+> **Nota (v1.1.0):** este relatório registra a auditoria da **v1.0.0** e não foi reescrito. Controles
+> que mudaram depois: a *confirmação em três etapas* (caixa + digitação + diálogo) foi substituída por
+> *diálogo final sempre* + *digitação do identificador só para discos de alto risco* (grandes, com dados);
+> o filtro de discos passou a ser **somente USB** (sem `mmc`/removível genérico); toda gravação é
+> **verificada por releitura antes do eject**; a senha de administrador é conferida **antes** de mexer no
+> pendrive e não fica retida na memória. Detalhes: `CHANGELOG.md` e `SECURITY.md`.
+
 **Projeto:** EPMA Windows 11 Creator USB
 **Data:** 27 de julho de 2026
 

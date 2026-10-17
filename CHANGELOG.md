@@ -30,6 +30,23 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   ejecting the drive.
 - **Reliable eject.** The drive is ejected when the work is done (macOS with a force-unmount
   retry; Linux through `eject` or `udisksctl power-off`) and the outcome is reported.
+- **Cancel button** for the whole operation (privileged raw writes are stopped through a
+  private flag file the root script polls), and the machine is kept awake while writing
+  (`caffeinate` / `systemd-inhibit`).
+- **Drive details before erasing.** The drive list and the final dialog show the model, size
+  and volumes with used space. **High-risk drives** (over 256 GB, lots of data, backup-like
+  names, unreadable contents) additionally require typing the disk identifier.
+- **Stronger target re-check:** the serial number / model / UUID must match, not only the size.
+- **SHA-256 of an existing ISO** (new panel on tab 1; accepts a bare hash or a `SHA256SUMS` line).
+- **ISO type detected from its contents** (ISO 9660 / UDF markers) instead of the file name.
+- **Command line mode:** `list`, `detect`, `sha256`, `write` (`--dry-run`, `--yes`, `--json`,
+  `--no-eject`), `--version`, documented exit codes. The engine now imports without Tkinter.
+- **Portuguese (pt-BR) interface**, selected from `LANG` or `EPMA_LANG`.
+- **Resumable downloads** with `Range`/`If-Range` and automatic retries; the partial file is
+  kept when the network drops.
+- **Audit log:** rotation (1 MB × 5, files stay `0600`) and the SHA-256 of the ISO that was
+  written.
+- Unit test suite (`tests/`, standard library only) and a per-distribution package probe.
 - Release engineering: end-to-end tests against loop devices (Linux CI), ShellCheck over the
   embedded privileged scripts, a per-distribution package-manager probe, a CycloneDX SBOM and
   provenance attestation for every release, OpenSSF Scorecard, and automatic Homebrew tap
@@ -39,8 +56,15 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 - **Only USB drives are listed** (macOS `BusProtocol=USB`, Linux `tran=usb`); internal and
   other external disks never appear.
-- **The typed disk identifier and the confirmation checkbox were removed.** The final
-  confirmation dialog, which names the drive and its size, is the single confirmation.
+- **The confirmation checkbox was removed, and the typed disk identifier is now required only
+  for high-risk drives.** For an ordinary USB stick the final dialog (which names the drive,
+  its size and volumes) is the single confirmation.
+- **A failing privileged script is never run again.** Previously any failure was treated as a
+  wrong password and the whole script, including `mkfs`/`dd`, could be re-run.
+- The sudo password is checked once and then dropped from memory; the operation continues on
+  sudo's credential timestamp (with an automatic fallback that asks again).
+- Linux partitioning waits for `udevadm settle` instead of a fixed `sleep 2`, unmounts
+  partitions the desktop auto-mounted, and uses `oflag=direct` when the image size allows it.
 - The application name shown in the macOS menu bar and Dock is now `epma-usb-creator`
   instead of `Python`; the Linux window class matches.
 - Minimum supported Python is now 3.10 (CI covers 3.10 through 3.14).
@@ -51,6 +75,9 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ### Fixed
 
+- Disk identifiers are matched with `fullmatch`: `"sdb\n"` used to pass the `$`-anchored
+  pattern.
+- Unnamed volumes are labelled with their file system instead of `?`.
 - The password dialog no longer fails on Tk 9 / macOS. `tkinter.simpledialog` raised a
   `TclError` there, which made the *Create* button appear to do nothing. Errors raised in
   button callbacks are now shown in a dialog instead of disappearing.

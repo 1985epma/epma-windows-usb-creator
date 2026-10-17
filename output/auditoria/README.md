@@ -11,7 +11,7 @@ Os relatórios em si estão um nível acima, em [`../`](../).
 
 | Arquivo | O que é |
 |---|---|
-| `testes_validacao.py` | 36 testes automatizados que comprovam cada correção. Reexecutável. |
+| `testes_validacao.py` | 44 testes automatizados que comprovam cada correção. Reexecutável. |
 | `evidencia-injecao.md` | Prova técnica do achado mais grave (injeção de comando) — antes e depois. |
 | `ambiente-auditoria.md` | Versões e ferramentas do ambiente onde a auditoria rodou. |
 
@@ -28,7 +28,7 @@ python3 output/auditoria/testes_validacao.py
 Resultado esperado:
 
 ```
-RESULTADO: todas as 36 verificações passaram.
+RESULTADO: todas as 44 verificações passaram.
 ```
 
 **Estes testes são seguros:** não tocam em nenhum disco, não formatam nada e não

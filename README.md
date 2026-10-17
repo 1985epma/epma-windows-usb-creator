@@ -2,13 +2,15 @@
 
 **English** · [Português](README.pt-BR.md)
 
-Cross-platform GUI application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format.
+Cross-platform application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
+
+It has a graphical interface (English and Brazilian Portuguese) and a [command line mode](#command-line).
 
 Written in pure Python with Tkinter — **zero third-party Python dependencies**.
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
-![Python](https://img.shields.io/badge/python-3.9%2B-green)
+![Python](https://img.shields.io/badge/python-3.10%2B-green)
 
 ---
 
@@ -34,7 +36,14 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
 - **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
-- **Protection against erasing the wrong disk**: only USB drives are listed, the system disk is never shown, and a final confirmation dialog is required before writing.
+- **Two image types**: *Windows 11* (GPT + FAT32, files copied) or *Linux / other hybrid ISO* (written byte-for-byte, like `dd`). The type is detected from the ISO's **contents**, not its file name, and you can always change it.
+- **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
+- **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
+- **Progress bar** with percentage, speed and time remaining for writing and verifying; a **Cancel** button for the whole operation.
+- **Protection against erasing the wrong disk**: only USB drives are listed with their model and volumes, the system disk is never shown, risky drives (large, holding data, looking like a backup disk) require you to **type the disk identifier**, and a final confirmation is always required.
+- **SHA-256 check for an ISO you already have** (paste the expected value or a `SHA256SUMS` line).
+- **Resumable downloads** with automatic retries.
+- **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
 - **Real-time log** of every command executed, inside the application window.
 
@@ -44,7 +53,8 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 2. The USB drive is wiped and repartitioned as GPT with a single FAT32 partition flagged as ESP.
 3. All files from the ISO are copied with `rsync`, **except** `install.wim`/`install.esd`.
 4. That large file is handled separately: if it fits within the FAT32 limit it is copied directly; if it exceeds 4 GB it is split into ~3.8 GB parts with `wimlib-imagex split`.
-5. Writes are flushed to disk and the USB drive is safely unmounted/ejected.
+5. Writes are flushed to disk, the drive is remounted and **read back to verify** that every file matches the ISO (in Linux mode the ISO is written directly and the whole drive content is compared with it).
+6. Only then is the USB drive safely unmounted and ejected.
 
 ## Requirements
 
@@ -54,7 +64,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 brew install python-tk@3.14 wimlib
 ```
 
-> Adjust `python-tk@<version>` to match your Python version. On macOS no `sudo` is required: disk operations on external drives go through `diskutil` and `hdiutil`.
+> Python **3.10 or newer** is required. Adjust `python-tk@<version>` to match your Python version. In Windows mode macOS needs no `sudo` (disk operations go through `diskutil` and `hdiutil`); Linux mode, which writes the raw device, asks for your administrator password.
 
 ### Linux
 
@@ -144,11 +154,42 @@ If you already downloaded the ISO manually, use **"Select existing ISO file..."*
 4. Choose the **image type** (it is suggested from the ISO file name):
    - **Windows 11** — GPT + FAT32, ISO files copied (`install.wim` split when over 4 GB).
    - **Linux / other hybrid ISO** — the ISO is written byte-for-byte to the drive (like `dd`). Use this for Ubuntu, Debian, Fedora, Mint, Arch, etc. Select the ISO with *Select existing ISO file...* on tab 1. ISOs without a boot signature are refused before anything is erased.
-5. Click **"Create Bootable USB Drive"** and confirm (**Yes**) in the final dialog. The drive is then erased and the image is written to it.
+5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written to it, verified and ejected.
+6. Use **Cancel** to stop an operation in progress. The drive is then left unusable until written again.
 
-> Linux mode needs administrator rights on both systems. The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining in both modes.
+> Administrator rights are needed on Linux, and on macOS in Linux (direct-write) mode. The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining.
+>
+> **macOS and Linux images:** macOS cannot read Linux (ISO 9660/ext) images, so the finished drive will **not appear in Finder**, and macOS may say the disk is "not readable". Click **Ignore** — never *Initialize*. The content was already verified against the ISO.
+
+The interface follows your system language (Portuguese if `LANG` starts with `pt`). Force one with `EPMA_LANG=pt` or `EPMA_LANG=en`.
 
 The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
+
+### Command line
+
+The same engine is available without the window (no Tkinter needed):
+
+```bash
+epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
+python3 win11_usb_creator.py list                       # USB drives that can be used (--json available)
+python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | unknown
+python3 win11_usb_creator.py sha256 ubuntu.iso --expected <hash>
+python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4 --dry-run   # show the plan, change nothing
+python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # asks you to type the disk id
+```
+
+`write` always verifies the drive and requires you to type the disk identifier (or pass `--yes` when there is no terminal). It never offers a way to skip verification. Run with no arguments to open the window.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | generic error |
+| 2 | wrong usage or missing confirmation |
+| 3 | verification failed / checksum mismatch |
+| 4 | written and verified, but the drive could not be ejected |
+| 130 | interrupted (Ctrl-C) |
+
+Data goes to stdout; messages, progress and errors go to stderr. `NO_COLOR` is honored.
 
 ## Security
 
@@ -158,14 +199,17 @@ This application **completely erases** the selected disk and executes privileged
 
 - Only **USB** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check) and the bus protocol must be `USB`; on Linux the disk holding the root filesystem is excluded and only devices with USB transport are shown (SD cards and internal disks are not).
 - **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. Disks holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
-- **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
+- **You see what you are erasing:** the list and the final dialog show the model, size and volumes (with used space). Drives that are large, hold a lot of data or look like a backup disk require typing the disk identifier.
+- **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size **and the same serial/model**. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
 - A final confirmation dialog appears before any write occurs.
+- **Nothing is retried blindly:** a privileged script that fails is never run a second time.
+- **Verified before eject:** a mismatch aborts without ejecting and the drive is reported as unusable.
 
 > Even so: **double-check the selected disk before confirming.**
 
-### Handling of the administrator password (Linux)
+### Handling of the administrator password
 
-The password is used solely to run local disk commands via `sudo -S`. It is passed **exclusively over `stdin`** — never on the command line, where other users on the machine could see it with `ps` — is **never written to disk or transmitted anywhere**, and is cleared from memory as soon as the operation completes.
+The password is used solely to run local disk commands via `sudo`. It is checked once, over **`stdin` only** — never on the command line, where other users on the machine could see it with `ps` — and then dropped from memory: the operation continues on sudo's own credential timestamp, which is refreshed while it runs and invalidated (`sudo -k`) at the end. If the system does not keep that timestamp, the application asks again instead of keeping the password. It is **never written to disk or transmitted anywhere**. Every run is recorded in an owner-only audit log, including the SHA-256 of the ISO that was written.
 
 ### Integrity of the downloaded image
 
@@ -189,19 +233,20 @@ Before submitting a change, run the same checks the CI pipeline runs:
 python3 verificar.py
 ```
 
-This is safe: nothing touches a disk, formats anything, or requires administrator privileges.
+This is safe: nothing touches a disk, formats anything, or requires administrator privileges. The unit tests run on their own with `python3 -m unittest discover -s tests -t .` (no Tkinter needed).
 
 ### Continuous integration
 
-Every change is automatically checked by GitHub Actions:
+Every change is automatically checked by GitHub Actions (all actions are pinned by commit SHA):
 
 | Workflow | Purpose |
 |---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Linting and tests across Python 3.9–3.13 on Linux and macOS |
+| [`ci.yml`](.github/workflows/ci.yml) | Linting, unit tests (Python 3.10–3.14, Linux and macOS), ShellCheck of the embedded scripts, end-to-end tests on loop devices, Linux distribution probes |
 | [`security.yml`](.github/workflows/security.yml) | Security regression guard, Bandit, Semgrep, CodeQL, secret scanning |
-| [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums and build provenance |
+| [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums, build provenance and an SBOM; updates the Homebrew tap |
+| [`scorecard.yml`](.github/workflows/scorecard.yml) | OpenSSF Scorecard supply-chain assessment |
 
-The security pipeline is built in two layers: a dependency-free regression guard that verifies all 24 audit fixes remain in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
+The security pipeline is built in two layers: a dependency-free regression guard that verifies all 27 audit fixes remain in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
 
 ### Contributing
 
@@ -228,7 +273,13 @@ Install `sudo` or run the application as root.
 The device changed between selection and writing. Click *Refresh USB drives list* and select the drive again — this check exists precisely to prevent the wrong disk from being erased.
 
 **No drives appear in the list**
-Check that the USB drive is plugged in and click *Refresh*. On Linux, some USB-SATA adapters report as non-removable and are deliberately hidden for safety.
+Only drives attached over **USB** are listed (SD cards, internal disks and the system disk never are). Check that the drive is plugged in and click *Refresh*.
+
+**The drive does not show up in Finder after a Linux ISO write (macOS)**
+This is expected: macOS cannot read Linux images. If macOS says "the disk is not readable", click **Ignore**, never *Initialize*. The content was verified against the ISO before ejecting.
+
+**"Verification FAILED"**
+The data on the drive differs from the ISO. The drive was not ejected and must not be used. Write it again; if it keeps failing, try another USB port or drive.
 
 **The USB drive does not appear in the boot menu**
 Make sure the machine is in **UEFI** mode (not Legacy/CSM). The generated drive is UEFI + GPT and will not boot on legacy BIOS.
@@ -238,7 +289,7 @@ Make sure the machine is in **UEFI** mode (not Legacy/CSM). The generated drive 
 - Does not run on Windows (the script exits with an error on that platform).
 - Produces **UEFI/GPT** media only — no legacy BIOS boot support.
 - Does not bypass Windows 11 requirements (TPM 2.0 / Secure Boot).
-- Downloads cannot be resumed: cancelling discards the partial file.
+- A cancelled or interrupted download keeps its partial file and resumes when the server supports it; a failed integrity check discards it.
 - Formatting does not overwrite the previous contents of the USB drive. If it held sensitive data, wipe it first with `shred` (Linux) or "Erase securely" in Disk Utility (macOS).
 
 ## License

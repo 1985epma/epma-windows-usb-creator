@@ -40,7 +40,7 @@ CONFERENCIAS = [
         True,
     ),
     (
-        "Guarda de segurança (24 proteções da auditoria)",
+        "Guarda de segurança (27 proteções da auditoria)",
         [PY, os.path.join(AUD, "guard_seguranca.py")],
         True,
     ),
@@ -50,8 +50,13 @@ CONFERENCIAS = [
         True,
     ),
     (
-        "Testes de validação (36 verificações)",
+        "Testes de validação (44 verificações)",
         [PY, os.path.join(AUD, "testes_validacao.py")],
+        True,
+    ),
+    (
+        "Testes unitários (tests/)",
+        [PY, "-m", "unittest", "discover", "-s", os.path.join(RAIZ, "tests"), "-t", RAIZ],
         True,
     ),
     (
