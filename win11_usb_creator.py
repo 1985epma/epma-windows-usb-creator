@@ -475,7 +475,12 @@ PT_BR = {
     "Save ChromeOS Flex as": "Salvar o ChromeOS Flex como",
     "Extracting...": "Extraindo...",
     "Ready.": "Pronto.",
-    "The disk image is ready:\n{path}\n\nNext: on tab 2, plug in a USB drive of 16 GB or larger, select it and click \"Create Bootable USB Drive\".": "A imagem de disco está pronta:\n{path}\n\nPróximo passo: na aba 2, conecte um pendrive de 16 GB ou maior, selecione-o e clique em \"Create Bootable USB Drive\".",
+    "The disk image is ready:\n{path}\n\nNext: plug in a USB drive of 16 GB or larger, click \"Refresh USB drives list\", select the drive and click \"Create Bootable ChromeOS Flex USB\" on this tab.": "A imagem de disco está pronta:\n{path}\n\nPróximo passo: conecte um pendrive de 16 GB ou maior, clique em \"Refresh USB drives list\", selecione o pendrive e clique em \"Create Bootable ChromeOS Flex USB\" nesta aba.",
+    "Write it to a USB drive (everything on the drive will be erased):": "Grave-a em um pendrive (tudo no pendrive será apagado):",
+    "Create Bootable ChromeOS Flex USB": "Criar pendrive bootável do ChromeOS Flex",
+    "The step-by-step log is on tab 2.": "O log passo a passo fica na aba 2.",
+    "Download or select the ChromeOS Flex image first.": "Baixe ou selecione primeiro a imagem do ChromeOS Flex.",
+    "The selected image is not a ChromeOS Flex disk image:\n{path}\n\nDownload it with the button above, or select the .bin file from Google's latest.bin.zip.": "A imagem selecionada não é uma imagem de disco do ChromeOS Flex:\n{path}\n\nBaixe-a com o botão acima, ou selecione o arquivo .bin do latest.bin.zip do Google.",
     "Drive too small": "Pendrive pequeno demais",
     "Small USB drive": "Pendrive pequeno",
     "ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs, and the official way to run ChromeOS on a computer you already own. Google does not publish regular ChromeOS for ordinary computers.\n\nThe button below downloads Google's official image, extracts it, and prepares it for tab 2, where you choose the USB drive.": "O ChromeOS Flex é a versão gratuita do ChromeOS do Google para PCs e Macs, e a forma oficial de usar o ChromeOS em um computador que você já tem. O Google não publica o ChromeOS comum para computadores em geral.\n\nO botão abaixo baixa a imagem oficial do Google, extrai e a prepara para a aba 2, onde você escolhe o pendrive.",
@@ -3005,7 +3010,7 @@ def help_sections():
 ## Where things are
 • Tab 1 "Download ISO": get the Windows 11 ISO, or pick an ISO you already have, and check its SHA-256.
 • Tab 2 "Create USB drive": choose the drive and write it.
-• Tab 3 "ChromeOS Flex": download Google's official ChromeOS Flex image and prepare it for tab 2.
+• Tab 3 "ChromeOS Flex": download Google's official ChromeOS Flex image and write it to a drive, all on that tab.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
         ("Quick start: Windows 11", """## 1. Get the ISO (tab 1)
@@ -3052,9 +3057,9 @@ def help_sections():
 • Google's requirements: @REQUIREMENTS@
 
 ## Steps
-• Tab 3: click "Download ChromeOS Flex from Google" and choose where to save the file. The download is resumable. The ZIP is extracted automatically; the ZIP that this program downloaded is deleted afterwards (a ZIP you selected yourself is kept).
+• On the "ChromeOS Flex" tab, click "Download ChromeOS Flex from Google" and choose where to save the file. The download is resumable. The ZIP is extracted automatically; the ZIP that this program downloaded is deleted afterwards (a ZIP you selected yourself is kept).
 • Already have latest.bin.zip, or the .bin inside it? Use "Select existing image..." (a ZIP is extracted for you).
-• Tab 2: the image type is set to "ChromeOS Flex" automatically (it is recognised by its partitions, not by its name). Plug in the drive, refresh the list, select it and click "Create Bootable USB Drive".
+• Still on that tab: plug in the USB drive, click "Refresh USB drives list", select the drive and click "Create Bootable ChromeOS Flex USB". The confirmation, the administrator password, the progress bar and the Cancel button work exactly as on tab 2 (which shows the same drive and the step-by-step log).
 • The image is written, read back and compared with the file, and the drive is ejected.
 • Boot the computer from the USB drive and follow Google's guide for the next steps.
 
@@ -3234,6 +3239,32 @@ The program has no third-party dependencies: it uses only the Python standard li
     ]
 
 
+class _Mirror:
+    """Stands for several widgets that must always show the same thing (the write controls
+    appear on tab 2 and on the ChromeOS Flex tab). config()/start()/stop() go to all of them;
+    cget() answers from the first."""
+
+    def __init__(self, *widgets):
+        self.widgets = list(widgets)
+
+    def config(self, *args, **kw):
+        for w in self.widgets:
+            w.config(*args, **kw)
+
+    configure = config
+
+    def start(self, *args):
+        for w in self.widgets:
+            w.start(*args)
+
+    def stop(self):
+        for w in self.widgets:
+            w.stop()
+
+    def cget(self, key):
+        return self.widgets[0].cget(key)
+
+
 class App(_TkBase):
     def __init__(self):
         if tk is None:
@@ -3386,12 +3417,66 @@ class App(_TkBase):
                                            wraplength=650, justify="left")
         self.flex_status_label.pack(anchor="w", padx=10, pady=(0, 10))
 
+        ttk.Separator(f).pack(fill="x", padx=10, pady=(0, 10))
+        ttk.Label(f, text=_("Write it to a USB drive (everything on the drive will be erased):")
+                  ).pack(anchor="w", padx=10)
+        pick = ttk.Frame(f)
+        pick.pack(fill="x", padx=10, pady=(4, 0))
+        ttk.Button(pick, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(side="left")
+        self.flex_disk_combo = ttk.Combobox(pick, state="readonly", width=60)
+        self.flex_disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.flex_disk_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_disk_selected(self.flex_disk_combo))
+        go = ttk.Frame(f)
+        go.pack(fill="x", padx=10, pady=(8, 0))
+        self.flex_create_btn = ttk.Button(go, text=_("Create Bootable ChromeOS Flex USB"),
+                                          command=self.start_flex_write, state="disabled")
+        self.flex_create_btn.pack(side="left")
+        self.flex_cancel_create_btn = ttk.Button(go, text=_("Cancel"), command=self.cancel_create_usb,
+                                                 state="disabled")
+        self.flex_cancel_create_btn.pack(side="left", padx=(8, 0))
+        self.flex_write_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
+        self.flex_write_progress.pack(fill="x", padx=10, pady=(8, 2))
+        self.flex_write_label = ttk.Label(f, text="")
+        self.flex_write_label.pack(anchor="w", padx=10)
+        ttk.Label(f, text=_("The step-by-step log is on tab 2."), foreground="gray").pack(anchor="w", padx=10)
+
         links = ttk.Frame(f)
-        links.pack(fill="x", padx=10)
+        links.pack(fill="x", padx=10, pady=(10, 0))
         ttk.Button(links, text=_("Google's installation guide"),
                    command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left")
         ttk.Button(links, text=_("Google's requirements page"),
                    command=lambda: webbrowser.open(CHROMEOS_FLEX_REQUIREMENTS_URL)).pack(side="left", padx=5)
+
+        # From here on the write controls of tab 2 and of this tab behave as one.
+        self.create_btn = _Mirror(self.create_btn, self.flex_create_btn)
+        self.cancel_create_btn = _Mirror(self.cancel_create_btn, self.flex_cancel_create_btn)
+        self.create_progress = _Mirror(self.create_progress, self.flex_write_progress)
+        self.create_progress_label = _Mirror(self.create_progress_label, self.flex_write_label)
+
+    def _on_disk_selected(self, source):
+        """The drive list exists on tab 2 and on the ChromeOS Flex tab; keep both on the same drive."""
+        index = source.current()
+        for combo in (self.disk_combo, self.flex_disk_combo):
+            if combo is not source and index >= 0:
+                combo.current(index)
+        self.update_create_button_state()
+
+    def start_flex_write(self):
+        """The "Create Bootable ChromeOS Flex USB" button: check the image, then use the normal write flow."""
+        image = self.iso_path.get()
+        if not image:
+            messagebox.showerror(_("ChromeOS Flex"), _("Download or select the ChromeOS Flex image first."))
+            return
+        if detect_iso_kind(image) != ISO_KIND_CHROMEOS:
+            messagebox.showerror(
+                _("ChromeOS Flex"),
+                _("The selected image is not a ChromeOS Flex disk image:\n{path}\n\n"
+                  "Download it with the button above, or select the .bin file from Google's "
+                  "latest.bin.zip.").format(path=image))
+            return
+        self.mode_var.set(MODE_CHROMEOS)
+        self.on_mode_change()
+        self.start_create_usb()
 
     def _build_tab2(self):
         f = self.tab2
@@ -3424,7 +3509,7 @@ class App(_TkBase):
         ttk.Button(f, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(anchor="w", padx=10)
         self.disk_combo = ttk.Combobox(f, state="readonly", width=90)
         self.disk_combo.pack(fill="x", padx=10, pady=5)
-        self.disk_combo.bind("<<ComboboxSelected>>", lambda e: self.update_create_button_state())
+        self.disk_combo.bind("<<ComboboxSelected>>", lambda e: self._on_disk_selected(self.disk_combo))
 
         warn_text = _(
             "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
@@ -3622,11 +3707,12 @@ class App(_TkBase):
                 pass
         self.set_iso(image)
         self.flex_status_label.config(text=_("Selected image: {path}").format(path=image))
+        self.refresh_disks()  # so a drive that is already plugged in shows up right away
         messagebox.showinfo(
             _("ChromeOS Flex is ready"),
-            _("The disk image is ready:\n{path}\n\nNext: on tab 2, plug in a USB drive of 16 GB or larger, "
-              "select it and click \"Create Bootable USB Drive\".").format(path=image))
-        self.nb.select(self.tab2)
+            _("The disk image is ready:\n{path}\n\nNext: plug in a USB drive of 16 GB or larger, click "
+              "\"Refresh USB drives list\", select the drive and click "
+              "\"Create Bootable ChromeOS Flex USB\" on this tab.").format(path=image))
 
     def _on_flex_error(self, msg):
         self.flex_download_btn.config(state="normal")
@@ -3760,6 +3846,7 @@ class App(_TkBase):
         self.iso_path.set(path)
         self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
         self.iso_label2.config(text=_("ISO: {path}").format(path=path))
+        self.flex_status_label.config(text=_("Selected image: {path}").format(path=path))
         # Only a default: the user can still switch the image type by hand. The content of
         # the ISO decides; the file name is only the fallback when it cannot be read.
         kind = detect_iso_kind(path)
@@ -3877,11 +3964,12 @@ class App(_TkBase):
             messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
             return
         labels = [d["label"] for d in self.disks]
-        self.disk_combo["values"] = labels
-        if labels:
-            self.disk_combo.current(0)
-        else:
-            self.disk_combo.set("")
+        for combo in (self.disk_combo, self.flex_disk_combo):
+            combo["values"] = labels
+            if labels:
+                combo.current(0)
+            else:
+                combo.set("")
         self.update_create_button_state()
 
     def selected_disk(self):

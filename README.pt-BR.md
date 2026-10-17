@@ -143,7 +143,7 @@ O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe
 O [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) é a versão gratuita do ChromeOS do Google para PCs e Macs. O programa não oferece o ChromeOS comum porque o Google não o publica para computadores em geral.
 
 1. Clique em **"Download ChromeOS Flex from Google"** e escolha onde salvar. O ZIP é extraído automaticamente (e o ZIP que o programa baixou é apagado). Já tem o `latest.bin.zip` ou o `.bin` de dentro dele? Use **"Select existing image..."** — um ZIP é extraído para você.
-2. Na aba 2 o tipo de imagem vira **ChromeOS Flex** sozinho (a imagem é reconhecida pelas partições). Conecte um pendrive de **16 GB ou maior** (exigência do Google), selecione-o e clique em **"Create Bootable USB Drive"**.
+2. Ainda nessa aba, conecte um pendrive de **16 GB ou maior** (exigência do Google), clique em **"Refresh USB drives list"**, selecione o pendrive e clique em **"Create Bootable ChromeOS Flex USB"**. A imagem é reconhecida pelas partições, então o tipo de imagem já fica certo; a confirmação, a senha, a barra de progresso e o **Cancel** funcionam como na aba 2 (que mostra o mesmo pendrive e o log).
 3. Inicie o computador de destino pelo pendrive e siga o [guia do Google](https://support.google.com/chromeosflex/answer/11541904).
 
 O Google lista estes requisitos para o computador: processador Intel ou AMD de 64 bits, 4 GB de RAM, 16 GB de armazenamento interno e boot por USB; só garante modelos certificados ([requisitos](https://support.google.com/chromeosflex/answer/11552529)). O Google também avisa que alguns pendrives podem não funcionar como instaladores. O ChromeOS Flex é fornecido pelo Google sob os termos do próprio Google.

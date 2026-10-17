@@ -173,7 +173,7 @@ The process takes several minutes depending on the speed of your USB drive. Foll
 [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) is Google's free version of ChromeOS for PCs and Macs. This program does not offer regular ChromeOS because Google does not publish it for ordinary computers.
 
 1. Click **"Download ChromeOS Flex from Google"** and choose where to save the file. The ZIP is extracted automatically (and the ZIP the program downloaded is deleted). Already have `latest.bin.zip` or the `.bin` inside it? Use **"Select existing image..."** — a ZIP is extracted for you.
-2. On tab 2 the image type becomes **ChromeOS Flex** by itself (the image is recognised by its partitions). Plug in a USB drive of **16 GB or larger** (Google's requirement), select it and click **"Create Bootable USB Drive"**.
+2. Still on that tab, plug in a USB drive of **16 GB or larger** (Google's requirement), click **"Refresh USB drives list"**, select the drive and click **"Create Bootable ChromeOS Flex USB"**. The image is recognised by its partitions, so the image type is set for you; the confirmation, password, progress bar and **Cancel** work as on tab 2 (which shows the same drive and the log).
 3. Boot the target computer from the drive and follow [Google's guide](https://support.google.com/chromeosflex/answer/11541904).
 
 Google lists these requirements for the computer: Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage and USB boot; it only guarantees certified models ([requirements](https://support.google.com/chromeosflex/answer/11552529)). Google also notes that some USB drives may not work as installers. ChromeOS Flex is provided by Google under Google's own terms.
