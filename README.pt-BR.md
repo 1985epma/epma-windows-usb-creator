@@ -18,7 +18,7 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 [![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
 
 <p align="center">
-  <img src="docs/images/interface.png" alt="Janela do EPMA USB CREATOR: quatro cartões de tipo de imagem (Google Chrome, Windows 11, Linux, Other ISO), a lista de pendrives, o arquivo da imagem com a conferência SHA-256 e o botão Create Bootable USB Drive" width="620">
+  <img src="docs/images/interface.png" alt="Janela do EPMA USB CREATOR: cinco cartões (Google Chrome, Windows 11, Linux, Other ISO, Hardening seed), a opção de reforço do Windows, a lista de pendrives e o botão Create Bootable USB Drive" width="620">
   <br><em>O programa inteiro em uma janela: escolha o tipo de imagem, o pendrive e o arquivo, e crie.</em>
 </p>
 
@@ -57,8 +57,9 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **Conferência SHA-256 de uma ISO que você já tem** (cole o valor esperado ou uma linha de `SHA256SUMS`).
 - **Download com retomada** e novas tentativas automáticas.
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
-- **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos quatro cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
+- **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos cinco cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
+- **Reforço da instalação (opcional, experimental):** uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL e Debian que fazem uma instalação nova começar com configurações mais seguras; veja [Reforço da instalação](#reforço-da-instalação-opcional).
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela: abra **Show details** para lê-lo (ele abre sozinho quando uma gravação falha).
 
 ## Novidades da 1.1.0
@@ -173,7 +174,7 @@ python3 win11_usb_creator.py
 
 ### A janela
 
-Uma janela só, com três etapas numeradas — **1 Image type** (quatro cartões), **2 Image** (onde obter e o arquivo) e **3 USB drive** — e o botão **Create**. Um cabeçalho fino mostra a versão, um indicador **Ready** / **Missing tools** das ferramentas necessárias e o **Help**.
+Uma janela só, com três etapas numeradas — **1 Image type** (cinco cartões: os quatro tipos de imagem e o opcional **Hardening seed**), **2 Image** (onde obter e o arquivo) e **3 USB drive** — e o botão **Create**. Um cabeçalho fino mostra a versão, um indicador **Ready** / **Missing tools** das ferramentas necessárias e o **Help**.
 
 1. **Escolha um cartão** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* ou *Other ISO*. O painel sob os cartões mostra onde obter esse tipo de imagem. Ao selecionar um arquivo de imagem, o cartão certo é escolhido para você, pelo **conteúdo** do arquivo.
 2. **Obtenha a imagem** (pule se já tiver):
@@ -208,6 +209,26 @@ O [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) é a 
 
 O Google lista estes requisitos para o computador: processador Intel ou AMD de 64 bits, 4 GB de RAM, 16 GB de armazenamento interno e boot por USB; só garante modelos certificados ([requisitos](https://support.google.com/chromeosflex/answer/11552529)). O Google também avisa que alguns pendrives podem não funcionar como instaladores. O ChromeOS Flex é fornecido pelo Google sob os termos do próprio Google.
 
+### Reforço da instalação (opcional)
+
+Arquivos opcionais para que uma instalação nova comece com configurações mais seguras. Eles são **inspirados em baselines de segurança comuns**; o programa **não** afirma que o resultado esteja em conformidade com, ou certificado por, qualquer padrão. Nada aqui escolhe disco, cria conta nem define senha ou chave: o Windows Setup e os instaladores Linux continuam interativos.
+
+> **Experimental.** Os scripts foram verificados só com testes automatizados e sistemas simulados (nenhuma instalação real de Windows, Debian, Ubuntu ou Fedora foi executada). Teste primeiro em um computador reserva ou numa máquina virtual e leia os arquivos antes de usar: o `harden-files` grava tudo numa pasta, sem tocar em nenhum pendrive.
+
+<p align="center">
+  <img src="docs/images/interface-hardening.png" alt="O cartão Hardening seed: um segundo pendrive pequeno com configurações de instalação automática, o sistema de destino (Ubuntu, Fedora / RHEL, Debian) e o botão Create Seed Drive" width="620">
+</p>
+
+- **Windows 11 (no mesmo pendrive):** marque **"Add hardening settings to the Windows installation (optional)"** no cartão Windows 11. Um script roda no **fim** da instalação do Windows (log: `C:\Windows\Temp\epma-hardening.log`) e desliga SMBv1 e LLMNR e o AutoRun/AutoPlay, liga o firewall, aplica algumas proteções do Microsoft Defender (uma regra de redução de superfície em modo Block e quatro em modo Audit), desativa o recurso PowerShell 2.0 e o cache de credenciais WDigest, liga o log de blocos de script e uma política de auditoria avançada (o log de Segurança sobe para 128 MiB). **"What does it change?"** lista cada ajuste com o seu risco. BitLocker, níveis de NTLM, contas, discos, idioma e chave do produto não são alterados. Os arquivos são conferidos byte a byte junto com o resto do pendrive, e se a imagem já contiver algum deles o programa para **antes** de apagar qualquer coisa.
+- **Linux e outros (um segundo pendrive):** ISOs gravadas direto não aceitam arquivos extras, então o cartão **Hardening seed** apaga um **segundo pendrive pequeno** (GPT + FAT32) e grava os arquivos nele. Mantenha o pendrive do instalador e conecte o do kit ao lado. **Ubuntu** (`autoinstall`, rótulo `CIDATA`; acrescente `autoinstall` na linha de boot, todas as telas continuam interativas), **Fedora / RHEL** (kickstart, rótulo `OEMDRV`, o instalador encontra sozinho) e **Debian** (o instalador **não** encontra o pendrive: monte-o depois de instalar e rode `sudo bash harden-linux.sh`, ou `su -` se não houver sudo).
+- **O script Linux** (`harden-linux.sh`) é texto puro, aceita `--dry-run`, `--yes`, `--undo` e `--help`, guarda cópia de cada arquivo que altera (`.epma-bak`), mostra cada mudança e grava em `/var/log/epma-hardening.log`. É idempotente e tenta não trancar você para fora: login de root ou por senha no SSH só é desligado quando existe uma conta de administrador com chave, e o firewall não é ligado num computador com Docker, libvirt ou LXD, a não ser que você use `--yes`.
+
+```bash
+python3 win11_usb_creator.py harden-files --target ubuntu --out ./ubuntu-seed          # só os arquivos, sem pendrive
+python3 win11_usb_creator.py harden-seed --target fedora --disk disk4 --dry-run        # plano de um pendrive de kit
+python3 win11_usb_creator.py write --iso Win11.iso --disk disk4 --hardened             # Windows + arquivos de reforço
+```
+
 ### Linha de comando
 
 O mesmo motor está disponível sem a janela (não precisa de Tkinter):
@@ -222,6 +243,8 @@ python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # p
 python3 win11_usb_creator.py fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: baixar + extrair
 python3 win11_usb_creator.py write --iso ~/Downloads/<imagem>.bin --disk disk4 --mode chromeos
 ```
+
+Os comandos de reforço (`harden-files`, `harden-seed`, `write --hardened`) estão em [Reforço da instalação](#reforço-da-instalação-opcional).
 
 O `write` sempre verifica o pendrive e exige que você digite o identificador do disco (ou `--yes` quando não há terminal). Não existe opção para pular a verificação. Sem argumentos, abre a janela.
 
@@ -250,6 +273,7 @@ Esta aplicação **apaga completamente** o disco selecionado e executa comandos 
 - **Conferido antes de apagar:** ferramentas ausentes são detectadas de início (Create fica desativado com uma dica), uma ISO do Windows maior que o pendrive é recusada, e fechar a janela durante a gravação pede confirmação antes.
 - **Nada é repetido às cegas:** um script privilegiado que falha nunca é executado uma segunda vez.
 - **Verificado antes do eject:** uma diferença aborta sem ejetar e o pendrive é declarado inutilizável.
+- **Os arquivos de reforço são dados, não decisões:** nunca escolhem nem apagam um disco, nunca criam conta e nunca trazem senha ou chave; o pendrive do kit é apagado como qualquer outro alvo e passa pelas mesmas conferências, e uma imagem que já traz os mesmos arquivos é recusada antes de qualquer coisa ser apagada.
 
 > Mesmo assim: **confira duas vezes o disco selecionado antes de confirmar.**
 

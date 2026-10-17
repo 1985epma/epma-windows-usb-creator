@@ -187,6 +187,12 @@ writes the same files into a folder, without a drive.
   supports `--dry-run` (which changes nothing), keeps one backup (`.epma-bak`) of every file it modifies and
   is safe to run twice. They are written not to lock the administrator out: the only login path is never
   disabled and no SSH port in use is closed.
+- **Nothing of the image is overwritten silently.** If the Windows image already contains one of the hardening
+  files, `write --hardened` (and the window) refuse **before** the drive is touched; the seed drive is a separate,
+  erased-like-any-other target with the same confirmation, identity pinning, verification and eject rules.
+- **Experimental.** The PowerShell script was never executed by the authors' tooling (no PowerShell available) and
+  the Linux script and seeds were run only against simulated systems; real installs were not tested. Treat the
+  feature as experimental and try it on a spare computer or a virtual machine first.
 - **This is not a compliance claim.** The settings are inspired by common baselines, nothing more. The
   program does not certify, audit or claim that a system meets any standard or regulation; review the
   settings against your own requirements.

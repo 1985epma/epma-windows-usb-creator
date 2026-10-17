@@ -6634,22 +6634,26 @@ def help_sections():
     critical_mounts = ", ".join(CRITICAL_MOUNTPOINTS)
     retries = DOWNLOAD_MAX_ATTEMPTS - 1
     audit_mb = f"{AUDIT_LOG_MAX_BYTES / 1_000_000:g}"
+    windows_settings = "\n".join("• " + line.split(" -- risk:")[0] for line in
+                                 describe_hardening_windows(HARDENING_BASELINE))
+    windows_not_changed = "\n".join("• " + text + ": " + why for _id, text, why in WINDOWS_HARDENING_NOT_CHANGED)
     return [
         ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
 
-## Four image types (the four cards)
+## Four image types and the hardening seed (five cards)
 • Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux and Other ISO — both write the ISO byte for byte to the whole drive (like dd). Use Linux for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images, and Other ISO for any other bootable image. An ISO that cannot boot from a USB drive is refused before anything is erased.
+• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes auto-install settings on it for Ubuntu, Fedora/RHEL or Debian. See "Hardened setup (optional)".
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
 • Everything on the selected drive is erased. Nothing is kept.
-• After writing, the drive is read back and compared with the ISO. Only a drive that passes is ejected.
+• After writing, the drive is read back and compared with the ISO (a hardening seed drive: every file compared byte for byte). Only a drive that passes is ejected.
 
 ## The window, from top to bottom
 • The top row shows the program name and version, a status chip for the tools it needs ("Ready" in green, "Missing tools" in amber with "Install missing dependencies" next to it) and "Help", which opens this documentation (F1 does the same).
-• The page has three numbered steps. 1 Image type: four equal cards choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO).
+• The page has three numbered steps. 1 Image type: five equal cards. Four choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO); the fifth, "Hardening seed", makes a separate drive and needs no image file.
 • 2 Image: the panel under the cards changes with the card and shows where to get that kind of image. "Select existing ISO file..." picks the image you already have; the chosen file is shown with its name, folder, size and the type the program recognised (Windows 11, Linux, ChromeOS Flex or Unknown), with an optional SHA-256 check behind a link.
 • 3 USB drive: the list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Create Bootable USB Drive" (the blue button), the one "Cancel" button for whatever is running (a download, an extraction or the write), its progress bar, and "Show details", which opens the log.
@@ -6668,7 +6672,10 @@ def help_sections():
 • Plug in the USB drive (8 GB or more) and click "Refresh USB drives list". Select your drive.
 • The "Windows 11" card is chosen for you when the ISO is a Windows installer.
 • Click "Create Bootable USB Drive", read the confirmation (model, size, volumes) and confirm.
-• Wait for the progress bar. When the log says the drive was verified and ejected, unplug it.
+• Wait for the progress bar. When the green box says the drive was verified and ejected, unplug it.
+
+## Optional: hardened settings
+• On the "Windows 11" card, tick "Add hardening settings to the Windows installation (optional)" before you click Create. Click "What does it change?" to read the list. See "Hardened setup (optional)" for what it does and does not do.
 
 ## 3. Boot from it
 • The computer must start in UEFI mode (not Legacy/CSM). The drive is UEFI + GPT only.
@@ -6684,10 +6691,43 @@ def help_sections():
 • Confirm. The administrator password is requested before the drive is touched.
 • The ISO is written, then read back and compared, then the drive is ejected.
 
+## Optional: a hardened install
+• Linux ISOs cannot take extra files after they are written, so the hardening settings go on a SECOND, small USB drive made with the "Hardening seed" card. See "Hardened setup (optional)".
+
 ## 3. On macOS: the drive will not appear in Finder
 • macOS cannot read Linux (ISO 9660 / ext) images, so Finder shows nothing and macOS may say "The disk you attached was not readable".
 • Click "Ignore". Never click "Initialize" — it would erase what was just written.
 • This is normal. The content was already verified byte for byte."""),
+
+        ("Hardened setup (optional)", f"""## What it is
+• Optional files that make a fresh install start from safer settings ("Hardened (recommended settings)"). The settings are inspired by common security baselines. This program does NOT claim that the result complies with, or is certified by, any standard.
+• Nothing here chooses a disk, creates an account or sets a password or key. Windows Setup and the Linux installers stay interactive: you still pick the disk, the language and your own account.
+• Every hardening script prints each change, keeps a backup of anything it modifies and can be undone. They were checked with simulated systems and automated tests only, so try them on a spare computer or a virtual machine before relying on them.
+• Want to read the files first? The command line "harden-files" writes them into a folder without touching any drive.
+
+## Windows 11 (same USB drive)
+• Tick "Add hardening settings to the Windows installation (optional)" on the "Windows 11" card. The files are copied onto the same USB drive and checked byte for byte with the rest.
+• Windows Setup runs a script at the END of the installation. Its log will be C:\\Windows\\Temp\\epma-hardening.log. The script runs once and does not retry: a line marked [WARN] means a setting was not in effect (for example another antivirus or Tamper Protection got in the way).
+• If the image already contains one of these files, the program stops BEFORE erasing the drive and tells you, because the files would replace the image's own.
+
+## What the Windows option changes
+{windows_settings}
+
+## What it deliberately leaves alone
+{windows_not_changed}
+
+## Linux and others (a second USB drive)
+• Choose the "Hardening seed" card, pick the target system, select a small USB drive (64 MiB or more) and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
+• Keep your normal installer USB and plug the seed drive in next to it before you start the installer.
+• Ubuntu (autoinstall): the drive is named CIDATA. At the boot menu add the word autoinstall to the boot line (the README.txt on the drive shows the exact steps). Every installer screen stays interactive.
+• Fedora / RHEL (kickstart): the drive is named OEMDRV and the installer finds it by itself. Disk, accounts and the summary stay interactive.
+• Debian (script + preseed): the installer does NOT find this drive by itself. After installing, mount the drive and run the script as administrator (sudo bash harden-linux.sh, or su - if there is no sudo).
+• The script harden-linux.sh is a plain text file on the drive: read it before you use it. It supports --dry-run (changes nothing), --yes, --undo and --help, and it appends to /var/log/epma-hardening.log.
+• It tries not to lock you out of SSH: it only turns off root login or password login when an administrator account with a key exists, and it says so. It does not enable a firewall on a computer that runs Docker, libvirt or LXD unless you pass --yes. Test a second SSH session before you close the first.
+
+## Undo
+• Linux: run the script again with --undo. It restores the files it backed up and removes the ones it created. It does not uninstall packages or turn services off.
+• Windows: the changes are ordinary Windows settings; the log lists each one.""".replace("\\\\", "\\")),
 
         ("ChromeOS Flex", """## What it is
 • ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. It is the official way to run ChromeOS on a computer you already own: Google does not publish regular ChromeOS for ordinary computers, so this program does not offer it.
@@ -6740,10 +6780,11 @@ def help_sections():
 
         ("The drive and the Create button", f"""## The cards
 • Google Chrome (ChromeOS Flex, disk image written directly), Windows 11 (GPT + FAT32, files copied), Linux and Other ISO (the ISO is written directly). The card is chosen from the image contents when you select a file; you can change it.
+• Hardening seed: a separate small drive (GPT + FAT32) with auto-install files; no image file is needed, so the image step is hidden and the button reads "Create Seed Drive".
 
 ## Dependencies
 • Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
-• The Google Chrome, Linux and Other ISO cards need nothing extra.
+• The Google Chrome, Linux and Other ISO cards need nothing extra. The Hardening seed card needs only parted, mkfs.vfat, wipefs and partprobe on Linux and nothing extra on macOS.
 • The dependencies are checked before anything is erased. When one is missing, the Create button stays disabled and a hint says what to install.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
@@ -9013,7 +9054,7 @@ class App(_TkBase):
             return
         if seed:  # a drive known to be too small is refused now, before the confirmation, not after it
             try:
-                check_seed_target_size(disk_size)  # noqa: F821 - added by the engine part of the hardening feature
+                check_seed_target_size(disk_size)
             except ValueError as e:
                 messagebox.showerror(_("Drive too small"), str(e))
                 return
@@ -10009,7 +10050,7 @@ def _prepare_seed(args):
         raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     try:  # a drive known to be too small is refused first: before the plan, the dry run and any confirmation
-        check_seed_target_size(disk.get("size"))  # noqa: F821 - added by the engine part of the hardening feature
+        check_seed_target_size(disk.get("size"))
     except ValueError as e:
         raise CliError(str(e), EXIT_USAGE) from None
     label, files = _hardening_files(args.target)

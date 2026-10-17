@@ -11,8 +11,41 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ## [Unreleased]
 
+### Added
+
+- **Hardened setup (optional, experimental).** Files that make a fresh install start from safer
+  settings, "inspired by common security baselines" (no claim of compliance or certification).
+  Nothing in them selects a disk, creates an account or contains a password or key.
+  - **Windows 11:** the checkbox *Add hardening settings to the Windows installation (optional)*
+    copies `SetupComplete.cmd` and `harden.ps1` into `sources\$OEM$` of the same USB drive. The script runs at
+    the end of Windows Setup and writes `C:\Windows\Temp\epma-hardening.log`: SMBv1, LLMNR and AutoRun
+    off, firewall on, a few Microsoft Defender protections (one attack-surface rule in Block mode, four in
+    Audit mode), PowerShell 2.0 and WDigest off, script-block logging, an advanced audit policy (Security
+    log raised to 128 MiB). BitLocker, NTLM levels, accounts, disks and the product key are not touched.
+    *What does it change?* lists every setting with its risk. The extra files are compared byte for byte
+    with the rest of the drive, and an image that already ships one of them is refused before anything is erased.
+  - **Hardening seed card** (fifth card): erases a second, small USB drive (GPT + FAT32) and writes the
+    auto-install files for **Ubuntu** (`autoinstall`, label `CIDATA`), **Fedora / RHEL** (kickstart,
+    label `OEMDRV`) and **Debian** (preseed + script; the installer does not detect the drive, so the
+    recommended path is to run the script after installing). Storage and the user account stay interactive in
+    every installer. Same safety chain as any write: confirmation, typed identifier for high-risk drives,
+    password, pinned identity, byte-for-byte verification, eject.
+  - **`harden-linux.sh`:** idempotent, `--dry-run`, `--yes`, `--undo`, `--chroot`, `--help`; backs up each file
+    it changes; sysctl, SSH, firewall (ufw / firewalld), automatic security updates, auditd, rarely used
+    kernel modules, core dumps. It only turns off SSH root or password login when an administrator account with a key
+    exists, only raises sysctl values, and does not enable a firewall on a computer that runs Docker,
+    libvirt or LXD unless `--yes` is given.
+  - **Command line:** `write --hardened` (Windows only), `harden-seed --target ubuntu|fedora|debian --disk DISK`
+    and `harden-files --target windows|ubuntu|fedora|debian --out DIR` (writes the files to a new or empty
+    folder, no drive involved, so you can read them first).
+  - **Not verified:** the PowerShell script was never executed (no PowerShell here) and the Linux script and seeds were
+    only run against simulated systems; real Windows, Ubuntu, Fedora and Debian installs, and the loop-device end-to-end
+    tests, were not run when this was written. Try it on a spare computer or a virtual machine first. Two auditpol
+    sub-category GUIDs were written from memory (a wrong one only makes that line of the log say so).
+
 ### Changed
 
+- **Five cards.** The fifth card, *Hardening seed*, needs no image file (see above).
 - **Quieter window.** *Create Bootable USB Drive* is now a filled accent-colour button and the
   only highlighted element; there is a single *Cancel* button that stops whatever is running
   (a download, an extraction or the write) instead of three. The erase warning is one amber

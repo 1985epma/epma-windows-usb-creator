@@ -15,7 +15,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 [![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
 
 <p align="center">
-  <img src="docs/images/interface.png" alt="EPMA USB CREATOR window: four image-type cards (Google Chrome, Windows 11, Linux, Other ISO), the USB drive list, the image file with its SHA-256 check, and the Create Bootable USB Drive button" width="620">
+  <img src="docs/images/interface.png" alt="EPMA USB CREATOR window: five cards (Google Chrome, Windows 11, Linux, Other ISO, Hardening seed), the Windows hardening option, the USB drive list and the Create Bootable USB Drive button" width="620">
   <br><em>The whole program in one window: choose the image type, the drive and the file, then create it.</em>
 </p>
 
@@ -54,8 +54,9 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **SHA-256 check for an ISO you already have** (paste the expected value or a `SHA256SUMS` line).
 - **Resumable downloads** with automatic retries.
 - **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
-- **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its four cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
+- **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its five cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
+- **Hardened setup (optional, experimental):** a Windows option and a *Hardening seed* drive for Ubuntu, Fedora/RHEL and Debian that start a fresh install from safer settings; see [Hardened setup](#hardened-setup-optional).
 - **Real-time log** of every command executed, inside the application window: open **Show details** to read it (it opens by itself when a write fails).
 
 ## New in 1.1.0
@@ -170,7 +171,7 @@ python3 win11_usb_creator.py
 
 ### The window
 
-One window with three numbered steps — **1 Image type** (four cards), **2 Image** (where to get it, and the file) and **3 USB drive** — and the **Create** button. A slim header shows the version, a **Ready** / **Missing tools** chip for the tools the program needs, and **Help**.
+One window with three numbered steps — **1 Image type** (five cards: the four image types and the optional **Hardening seed**), **2 Image** (where to get it, and the file) and **3 USB drive** — and the **Create** button. A slim header shows the version, a **Ready** / **Missing tools** chip for the tools the program needs, and **Help**.
 
 1. **Choose a card** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* or *Other ISO*. The panel under the cards shows where to get that kind of image. Selecting an image file picks the right card for you, from the **contents** of the file.
 2. **Get the image** (skip this if you already have it):
@@ -205,6 +206,26 @@ The interface is always in US English. A Brazilian Portuguese translation exists
 
 Google lists these requirements for the computer: Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage and USB boot; it only guarantees certified models ([requirements](https://support.google.com/chromeosflex/answer/11552529)). Google also notes that some USB drives may not work as installers. ChromeOS Flex is provided by Google under Google's own terms.
 
+### Hardened setup (optional)
+
+Optional files that make a fresh install start from safer settings. They are **inspired by common security baselines**; the program does **not** claim that the result complies with, or is certified by, any standard. Nothing here chooses a disk, creates an account or sets a password or key: Windows Setup and the Linux installers stay interactive.
+
+> **Experimental.** The scripts were checked with automated tests and simulated systems only (no real Windows, Debian, Ubuntu or Fedora install was run). Try them on a spare computer or a virtual machine first, and read the files before using them: `harden-files` writes them to a folder without touching any drive.
+
+<p align="center">
+  <img src="docs/images/interface-hardening.png" alt="The Hardening seed card: a second small USB drive with auto-install settings, the install target (Ubuntu, Fedora / RHEL, Debian) and the Create Seed Drive button" width="620">
+</p>
+
+- **Windows 11 (same USB drive):** tick **"Add hardening settings to the Windows installation (optional)"** on the Windows 11 card. A script runs at the **end** of Windows Setup (log: `C:\Windows\Temp\epma-hardening.log`) and turns off SMBv1 and LLMNR, AutoRun/AutoPlay, turns the firewall on, sets a few Microsoft Defender protections (one attack-surface rule in Block mode, four in Audit mode), disables the PowerShell 2.0 feature and WDigest credential caching, turns on script-block logging and an advanced audit policy (the Security log is raised to 128 MiB). **"What does it change?"** lists every setting with its risk. BitLocker, NTLM levels, accounts, disks, language and the product key are left alone. The files are checked byte for byte with the rest of the drive, and if the image already contains one of them the program stops **before** erasing anything.
+- **Linux and others (a second USB drive):** raw-written ISOs cannot take extra files, so the **Hardening seed** card erases a **second, small** USB drive (GPT + FAT32) and writes the files on it. Keep your installer USB and plug the seed drive in next to it. **Ubuntu** (`autoinstall`, drive label `CIDATA`; add `autoinstall` to the boot line, every screen stays interactive), **Fedora / RHEL** (kickstart, label `OEMDRV`, found by the installer by itself) and **Debian** (the installer does **not** find the drive: mount it after installing and run `sudo bash harden-linux.sh`, or `su -` without sudo).
+- **The Linux script** (`harden-linux.sh`) is plain text, supports `--dry-run`, `--yes`, `--undo` and `--help`, backs up every file it changes (`.epma-bak`), prints each change and logs to `/var/log/epma-hardening.log`. It is idempotent and tries not to lock you out: root or password login over SSH is only turned off when an administrator account with a key exists, and a firewall is not enabled on a computer that runs Docker, libvirt or LXD unless you pass `--yes`.
+
+```bash
+python3 win11_usb_creator.py harden-files --target ubuntu --out ./ubuntu-seed          # just the files, no drive
+python3 win11_usb_creator.py harden-seed --target fedora --disk disk4 --dry-run        # plan for a seed drive
+python3 win11_usb_creator.py write --iso Win11.iso --disk disk4 --hardened             # Windows + hardening files
+```
+
 ### Command line
 
 The same engine is available without the window (no Tkinter needed):
@@ -219,6 +240,8 @@ python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # a
 python3 win11_usb_creator.py fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: download + extract
 python3 win11_usb_creator.py write --iso ~/Downloads/<image>.bin --disk disk4 --mode chromeos
 ```
+
+The hardening commands (`harden-files`, `harden-seed`, `write --hardened`) are shown in [Hardened setup](#hardened-setup-optional).
 
 `write` always verifies the drive and requires you to type the disk identifier (or pass `--yes` when there is no terminal). It never offers a way to skip verification. Run with no arguments to open the window.
 
@@ -247,6 +270,7 @@ This application **completely erases** the selected disk and executes privileged
 - **Checked before anything is erased:** missing tools are detected up front (Create stays disabled with a hint), a Windows ISO larger than the drive is refused, and closing the window during a write asks for confirmation first.
 - **Nothing is retried blindly:** a privileged script that fails is never run a second time.
 - **Verified before eject:** a mismatch aborts without ejecting and the drive is reported as unusable.
+- **Hardening files are data, not decisions:** they never select or erase a disk, never create an account and never contain a password or key; a seed drive is erased like any other target and goes through the same checks, and an image that already ships the same files is refused before anything is erased.
 
 > Even so: **double-check the selected disk before confirming.**
 
