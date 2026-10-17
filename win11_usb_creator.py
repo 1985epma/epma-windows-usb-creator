@@ -37,8 +37,12 @@ isn't available) once per operation. The password is only used locally to
 run disk commands and is never stored to disk or sent anywhere.
 """
 
+import argparse
+import collections
+import contextlib
 import filecmp
 import hashlib
+import inspect
 import json
 import logging
 import os
@@ -46,32 +50,41 @@ import platform
 import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.parse
 import urllib.request
 import webbrowser
 
+# Tkinter is needed by the GUI only. The engine and the command line interface work
+# without it, so a missing Tk is remembered here instead of ending the program at
+# import time; main() prints the hint when the GUI is requested.
+if platform.system() == "Darwin":
+    TK_MISSING_MESSAGE = (
+        "Tkinter is not available for this Python installation.\n"
+        "Install it with: brew install python-tk@<version matching your python>"
+    )
+else:
+    TK_MISSING_MESSAGE = (
+        "Tkinter is not available for this Python installation.\n"
+        "Install it with your package manager, e.g.:\n"
+        "  Debian/Ubuntu: sudo apt install python3-tk\n"
+        "  Fedora:        sudo dnf install python3-tkinter\n"
+        "  Arch:          sudo pacman -S tk\n"
+        "  openSUSE:      sudo zypper install python3-tk"
+    )
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
 except ImportError:
-    _msg = "Tkinter is not available for this Python installation.\n"
-    if platform.system() == "Darwin":
-        _msg += "Install it with: brew install python-tk@<version matching your python>"
-    else:
-        _msg += (
-            "Install it with your package manager, e.g.:\n"
-            "  Debian/Ubuntu: sudo apt install python3-tk\n"
-            "  Fedora:        sudo dnf install python3-tkinter\n"
-            "  Arch:          sudo pacman -S tk\n"
-            "  openSUSE:      sudo zypper install python3-tk"
-        )
-    print(_msg)
-    sys.exit(1)
+    tk = ttk = filedialog = messagebox = None
+
+__version__ = "1.1.0"
 
 IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
@@ -1322,8 +1335,13 @@ def set_macos_app_name(name):
         pass
 
 
-class App(tk.Tk):
+_TkBase = tk.Tk if tk else object  # lets the module import (engine, CLI) without Tk
+
+
+class App(_TkBase):
     def __init__(self):
+        if tk is None:
+            raise RuntimeError(TK_MISSING_MESSAGE)
         set_macos_app_name(APP_NAME)  # must run before the first window exists
         super().__init__(className=APP_NAME)
         self.title("EPMA Windows 11 Creator USB")
@@ -1769,8 +1787,689 @@ class App(tk.Tk):
         messagebox.showerror(title, message)
 
 
-if __name__ == "__main__":
-    if not (IS_MAC or IS_LINUX):
-        print("This script supports macOS and Linux only.")
-        sys.exit(1)
+# ============================================================
+# ===== Command line interface =====
+#
+#   epma-usb-creator                 open the GUI (same as `epma-usb-creator gui`)
+#   epma-usb-creator list            list the USB drives that can be written
+#   epma-usb-creator detect ISO      windows / linux / unknown
+#   epma-usb-creator sha256 ISO      checksum, optionally compared with --expected
+#   epma-usb-creator write ...       create the bootable drive
+#
+# Data goes to stdout; messages, errors and progress go to stderr. Verification
+# of the written drive is part of `write` and cannot be switched off.
+# ============================================================
+EXIT_OK = 0
+EXIT_ERROR = 1
+EXIT_USAGE = 2
+EXIT_VERIFY_FAILED = 3     # the drive does not match the ISO, or the checksum differs
+EXIT_EJECT_FAILED = 4      # written and verified, but the drive could not be ejected
+EXIT_INTERRUPTED = 130     # Ctrl-C
+
+CLI_PROG = "epma-usb-creator"
+MODE_AUTO = "auto"
+KIND_UNKNOWN = "unknown"
+SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+# Engine log lines worth showing without --verbose (everything else is command output).
+CLI_MILESTONE_RE = re.compile(
+    r"warning|error|fail|verif|eject|done!|safety re-check|erasing|writing the iso|copying|"
+    r"splitting|mounting|syncing|note:|could not|aborted", re.IGNORECASE)
+
+
+class CliError(Exception):
+    """A failure the command line reports as a plain message with an exit code."""
+
+    def __init__(self, message, code=EXIT_ERROR):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+def _emit(stream, text, end="\n"):
+    try:
+        stream.write(text + end)
+    except UnicodeEncodeError:  # e.g. LANG=C: the "—" in disk labels cannot be encoded
+        enc = getattr(stream, "encoding", None) or "ascii"
+        stream.write((text + end).encode(enc, "replace").decode(enc, "replace"))
+    with contextlib.suppress(OSError, ValueError):
+        stream.flush()
+
+
+def _out(text=""):
+    _emit(sys.stdout, text)
+
+
+def _err(text=""):
+    _emit(sys.stderr, text)
+
+
+def _use_color(stream):
+    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
+        return False
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
+
+
+def _style(stream, text, code):
+    return f"\033[{code}m{text}\033[0m" if _use_color(stream) else text
+
+
+def _error(message):
+    _err(f"{_style(sys.stderr, 'error:', '1;31')} {message}")
+
+
+def _warn(message):
+    _err(f"{_style(sys.stderr, 'warning:', '33')} {message}")
+
+
+class CliProgress:
+    """Progress sink for the engine: one updating line on a terminal, periodic lines otherwise."""
+
+    def __init__(self, stream=None, clock=time.monotonic):
+        self.stream = stream if stream is not None else sys.stderr
+        isatty = getattr(self.stream, "isatty", None)
+        self.tty = bool(isatty and isatty())
+        self.interval = 0.25 if self.tty else 10.0
+        self.clock = clock
+        self._text = None
+        self._base = 0
+        self._stage_start = 0.0
+        self._last = None
+        self._width = 0
+        self._open = False
+
+    def _format(self, done, total, text, now):
+        if not total:
+            return text
+        pct = min(done / total * 100, 100.0)
+        line = f"{text}  {pct:5.1f}%  {human_size(done)} / {human_size(total)}"
+        elapsed = now - self._stage_start
+        if elapsed >= 1.0 and done > self._base:
+            speed = (done - self._base) / elapsed
+            eta = int((total - done) / speed) if speed > 0 else 0
+            line += f"  {human_size(speed)}/s  ~{eta // 60}m{eta % 60:02d}s left"
+        return line
+
+    def __call__(self, done, total, text):
+        now = self.clock()
+        changed = text != self._text
+        if changed:
+            self._text, self._base, self._stage_start = text, done, now
+        final = bool(total) and done >= total
+        if not (changed or final) and self._last is not None and now - self._last < self.interval:
+            return
+        self._last = now
+        line = self._format(done, total, text, now)
+        if self.tty:
+            self._width = max(self._width, len(line))
+            _emit(self.stream, "\r" + line.ljust(self._width), end="")
+            self._open = True
+        else:
+            _emit(self.stream, line)
+
+    def clear(self):
+        """Wipe the progress line so a log message can be printed in its place."""
+        if self._open:
+            _emit(self.stream, "\r" + " " * self._width + "\r", end="")
+            self._open = False
+
+    def finish(self):
+        if self._open:
+            _emit(self.stream, "")
+            self._open = False
+
+
+class CliLogger:
+    """Log sink for the engine: milestones always, everything with --verbose."""
+
+    def __init__(self, progress, verbose=False):
+        self.progress = progress
+        self.verbose = verbose
+        self.recent = collections.deque(maxlen=20)
+
+    def __call__(self, line):
+        line = str(line).rstrip()
+        if not line:
+            return
+        self.recent.append(line)
+        if self.verbose or (CLI_MILESTONE_RE.search(line) and not line.startswith("$ ")):
+            self.progress.clear()
+            _err(line)
+
+    def dump_recent(self):
+        if self.verbose or not self.recent:
+            return
+        _err("Last log lines:")
+        for line in self.recent:
+            _err("  " + line)
+
+
+class CliPrivilege:
+    """Privilege helper for the command line, duck-typed to what the engine uses.
+
+    Unlike the GUI's PrivilegeHelper it never handles the administrator credential
+    itself: sudo asks on the controlling terminal. Scripts are run once and never
+    retried; a failure is reported as it is.
+    """
+
+    SUDO_REFRESH_SECONDS = 60
+
+    def __init__(self):
+        self.cached_password = None  # always None: sudo owns the credential
+        self._stop = threading.Event()
+        self._thread = None
+
+    @staticmethod
+    def is_root():
+        return os.geteuid() == 0
+
+    def authenticate(self):
+        """Ask sudo for credentials up front, before anything touches the drive."""
+        if self.is_root():
+            return
+        if not shutil.which("sudo"):
+            raise RuntimeError("Administrator privileges are required but 'sudo' was not found. "
+                               "Run this command as root or install sudo.")
+        # stdin/stdout/stderr are inherited, so sudo prompts on the terminal.
+        if subprocess.call(["sudo", "-v"]) != 0:
+            raise RuntimeError("Could not obtain administrator privileges (sudo refused). "
+                               "Nothing was changed.")
+        self._start_keepalive()
+
+    def _start_keepalive(self):
+        # Writing and verifying a large image can outlast sudo's credential cache.
+        if self._thread is not None:
+            return
+
+        def refresh():
+            while not self._stop.wait(self.SUDO_REFRESH_SECONDS):
+                with contextlib.suppress(OSError, subprocess.SubprocessError):
+                    subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                   timeout=30, check=False)
+
+        self._thread = threading.Thread(target=refresh, daemon=True)
+        self._thread.start()
+
+    def clear_cached_password(self):
+        self.cached_password = None
+        self._stop.set()
+
+    def run_script(self, script, log, args=None, **_kw):
+        """Run `script` as root once. Values arrive only as "$1".. arguments."""
+        args = [str(a) for a in (args or [])]
+        argv = ["bash", "-c", script, "win11_usb_creator"] + args
+        if not self.is_root():
+            argv = ["sudo"] + argv
+        log(("$ sudo " if not self.is_root() else "$ ") + "bash -c '<privileged script>' "
+            + " ".join(repr(a) for a in args))
+        with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, bufsize=1) as proc:
+            try:
+                for line in proc.stdout:
+                    log(line.rstrip())
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    proc.terminate()
+                raise
+        if proc.returncode != 0:
+            audit(f"Privileged script failed (exit {proc.returncode})", logging.ERROR)
+            raise RuntimeError(f"Privileged command failed (exit code {proc.returncode}). "
+                               "Check the messages above.")
+
+
+def cli_sha256_file(path, progress=None, chunk=4 * CHUNK_SIZE):
+    """SHA-256 of a file, read in chunks; reports (done, total, text) to `progress`."""
+    total = os.path.getsize(path)
+    digest = hashlib.sha256()
+    done = 0
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+            done += len(block)
+            if progress:
+                progress(done, total, "Computing SHA-256...")
+    return digest.hexdigest()
+
+
+def cli_detect_kind(iso_path):
+    """Return (kind, method): kind is windows, linux or unknown.
+
+    Uses detect_iso_kind() when the engine provides it (reads the ISO); otherwise a
+    filename heuristic (the same one the GUI uses) backed by the hybrid-image signature.
+    """
+    detector = globals().get("detect_iso_kind")
+    if callable(detector):
+        try:
+            kind = detector(iso_path)
+        except Exception:
+            kind = None
+        if isinstance(kind, str) and kind.lower() in (MODE_WINDOWS, MODE_LINUX):
+            return kind.lower(), "content"
+    if "win" in os.path.basename(iso_path).lower():
+        return MODE_WINDOWS, "filename"
+    try:
+        validate_hybrid_iso(iso_path)
+        return MODE_LINUX, "boot-signature"
+    except (ValueError, OSError):
+        return KIND_UNKNOWN, "none"
+
+
+def _is_interactive():
+    return bool(sys.stdin and sys.stdin.isatty() and sys.stderr.isatty())
+
+
+def _is_verification_failure(exc):
+    cls = globals().get("VerificationError")
+    if isinstance(cls, type) and isinstance(exc, cls):
+        return True
+    text = str(exc).lower()
+    return "verification failed" in text or "could not complete the verification" in text
+
+
+def _disk_summary(disk):
+    info = {k: v for k, v in disk.items() if v is None or isinstance(v, (str, int, float, bool))}
+    info["size_human"] = human_size(disk.get("size") or 0)
+    return info
+
+
+def _write_steps(mode, disk_id, eject):
+    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive"]
+    if mode == MODE_LINUX:
+        steps += [f"Unmount /dev/{disk_id} and write the ISO to it byte for byte",
+                  "Read the drive back and compare it with the ISO"]
+    else:
+        steps += [f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{VOL_NAME}')",
+                  "Copy the ISO contents (install.wim is split when it exceeds 4 GB)",
+                  "Verify the copied files against the ISO"]
+    steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
+    return steps
+
+
+def _print_plan(plan, to_stdout):
+    disk = plan["disk"]
+    emit = _out if to_stdout else _err
+    emit("Plan")
+    emit(f"  Disk : /dev/{disk['id']}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
+    if disk.get("model"):
+        emit(f"  Model: {disk['model']}")
+    emit(f"  ISO  : {plan['iso']} ({human_size(plan['iso_size'])})")
+    emit(f"  Mode : {plan['mode']}")
+    emit("  Steps:")
+    for i, step in enumerate(plan["steps"], 1):
+        emit(f"    {i}. {step}")
+
+
+def _engine_kwargs(cancel_event):
+    """Pass cancel_event to build_usb only when the engine accepts it."""
+    try:
+        params = list(inspect.signature(build_usb).parameters.values())
+    except (TypeError, ValueError):
+        return {}, False
+    if any(p.name == "cancel_event" or p.kind is p.VAR_KEYWORD for p in params):
+        return {"cancel_event": cancel_event}, True
+    return {}, False
+
+
+@contextlib.contextmanager
+def _eject_disabled():
+    """Make the engine skip its eject step (it has no switch for that)."""
+    def skip(_dev, log, *_a, **_k):
+        log("Skipping the eject step (--no-eject).")
+        return False
+
+    def report(_ejected, log):
+        log("The drive was left connected (--no-eject). Eject it before unplugging.")
+
+    saved = {}
+    for name, repl in (("macos_eject", skip), ("linux_eject", skip), ("report_eject", report)):
+        if name in globals():
+            saved[name] = globals()[name]
+            globals()[name] = repl
+    try:
+        yield
+    finally:
+        globals().update(saved)
+
+
+def _normalize_disk_id(value):
+    value = (value or "").strip()
+    return value[len("/dev/"):] if value.startswith("/dev/") else value
+
+
+# ---------- commands ----------
+def cmd_list(args):
+    try:
+        disks = get_external_disks()
+    except Exception as e:
+        raise CliError(f"Could not list the drives: {e}") from None
+    if args.json:
+        _out(json.dumps({"disks": [_disk_summary(d) for d in disks]}, indent=2, default=str))
+        return EXIT_OK
+    if not disks:
+        _err("No USB drives found. Plug one in and try again.")
+        return EXIT_OK
+    has_model = any(d.get("model") for d in disks)
+    header = ["ID", "SIZE"] + (["MODEL"] if has_model else []) + ["LABEL"]
+    rows = [[d["id"], human_size(d.get("size") or 0)] + ([str(d.get("model") or "")] if has_model else [])
+            + [str(d.get("label", ""))] for d in disks]
+    widths = [max(len(r[i]) for r in [header] + rows) for i in range(len(header))]
+    for row in [header] + rows:
+        _out("  ".join(c.ljust(widths[i]) for i, c in enumerate(row)).rstrip())
+    return EXIT_OK
+
+
+def cmd_detect(args):
+    iso = os.path.realpath(os.path.expanduser(args.iso))
+    if not os.path.isfile(iso):
+        raise CliError(f"Not a file: {iso}")
+    kind, method = cli_detect_kind(iso)
+    if args.json:
+        _out(json.dumps({"iso": iso, "kind": kind, "method": method}, indent=2))
+    else:
+        _out(kind)
+    return EXIT_OK
+
+
+def cmd_sha256(args):
+    expected = None
+    if args.expected:
+        expected = args.expected.strip().lower()
+        if expected.startswith("sha256:"):
+            expected = expected[len("sha256:"):]
+        if not SHA256_HEX_RE.match(expected):
+            raise CliError("--expected must be a 64-character hexadecimal SHA-256 value.", EXIT_USAGE)
+    iso = os.path.realpath(os.path.expanduser(args.iso))
+    if not os.path.isfile(iso):
+        raise CliError(f"Not a file: {iso}")
+    progress = CliProgress()
+    try:
+        digest = cli_sha256_file(iso, progress)
+    except OSError as e:
+        progress.finish()
+        raise CliError(f"Could not read {iso}: {e.strerror or e}") from None
+    progress.finish()
+    match = None if expected is None else (digest == expected)
+    if args.json:
+        _out(json.dumps({"file": iso, "sha256": digest, "expected": expected, "match": match}, indent=2))
+    else:
+        _out(f"{digest}  {iso}")
+    if match is False:
+        _error(f"The checksum does not match.\n  expected: {expected}\n  actual:   {digest}")
+        return EXIT_VERIFY_FAILED
+    if match:
+        _err("Checksum matches.")
+    return EXIT_OK
+
+
+def _prepare_write(args):
+    """Validate everything and build the plan. Raises CliError; touches nothing."""
+    try:
+        iso = validate_iso_path(args.iso)
+        disk_id = validate_device_name(_normalize_disk_id(args.disk))
+    except ValueError as e:
+        raise CliError(str(e)) from None
+    try:
+        disks = get_external_disks()
+    except Exception as e:
+        raise CliError(f"Could not list the drives: {e}") from None
+    disk = next((d for d in disks if d.get("id") == disk_id), None)
+    if disk is None:
+        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+                       f"Run '{CLI_PROG} list' to see the drives that can be written.")
+    mode = args.mode
+    detected, _method = cli_detect_kind(iso)
+    if mode == MODE_AUTO:
+        if detected == KIND_UNKNOWN:
+            raise CliError("Could not tell whether this is a Windows or a Linux ISO. "
+                           "Pass --mode windows or --mode linux.", EXIT_USAGE)
+        mode = detected
+    elif detected in (MODE_WINDOWS, MODE_LINUX) and detected != mode:
+        _warn(f"This ISO looks like a {detected} image but --mode {mode} was requested.")
+    iso_size = os.path.getsize(iso)
+    size = disk.get("size") or 0
+    if mode == MODE_LINUX:
+        try:
+            validate_hybrid_iso(iso)
+        except ValueError as e:
+            raise CliError(str(e)) from None
+        if size and iso_size > size:
+            raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
+    elif size and iso_size > size:
+        _warn(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}); "
+              "the copy may not fit.")
+    missing = get_missing_dependencies(mode)
+    if missing:
+        raise CliError("Missing required tools: " + ", ".join(missing) + ". Install them and try again.")
+    eject = not args.no_eject
+    return {"iso": iso, "iso_size": iso_size, "mode": mode, "disk": _disk_summary(disk),
+            "steps": _write_steps(mode, disk_id, eject), "eject": eject, "dry_run": bool(args.dry_run)}
+
+
+def _confirm_write(args, plan):
+    """Return normally only when the user has agreed to erase the drive."""
+    if args.yes:
+        return
+    disk_id = plan["disk"]["id"]
+    if not _is_interactive():
+        raise CliError("Refusing to erase a drive without confirmation: this is not an interactive "
+                       "terminal. Review the plan with --dry-run, then pass --yes.", EXIT_USAGE)
+    _err(f"\nThis will PERMANENTLY ERASE all data on /dev/{disk_id}.")
+    _emit(sys.stderr, f"Type the disk id ({disk_id}) to confirm: ", end="")
+    answer = sys.stdin.readline().strip()
+    if answer != disk_id:
+        raise CliError("The confirmation did not match. Nothing was changed.")
+
+
+def _run_write(args, plan, result):
+    needs_priv = IS_LINUX or plan["mode"] == MODE_LINUX
+    priv = CliPrivilege()
+    progress = CliProgress()
+    log = CliLogger(progress, verbose=args.verbose)
+    cancel = threading.Event()
+    kwargs, supports_cancel = _engine_kwargs(cancel)
+    state = {"interrupted": False}
+
+    def on_sigint(_signum, _frame):
+        if state["interrupted"] or not supports_cancel:
+            raise KeyboardInterrupt
+        state["interrupted"] = True
+        cancel.set()
+        _err("\nInterrupted: finishing safely (unmounting) - press Ctrl-C again to force quit.")
+
+    try:
+        previous = signal.signal(signal.SIGINT, on_sigint)
+    except ValueError:  # not the main thread
+        previous = None
+    started = time.time()
+    audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}")
+    ejected, failure = None, None
+    try:
+        if needs_priv:
+            priv.authenticate()
+        guard = contextlib.nullcontext() if plan["eject"] else _eject_disabled()
+        with guard:
+            ejected = build_usb(plan["iso"], plan["disk"]["id"], log, priv,
+                                expected_size=plan["disk"].get("size"), mode=plan["mode"],
+                                progress=progress, **kwargs)
+    except KeyboardInterrupt as e:
+        state["interrupted"] = True
+        failure = e
+    except Exception as e:
+        failure = e
+        if args.debug:
+            progress.clear()
+            traceback.print_exc()
+    finally:
+        progress.finish()
+        priv.clear_cached_password()
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+    result["elapsed_seconds"] = round(time.time() - started, 1)
+
+    if failure is None:
+        result.update(ok=True, verified=True, ejected=bool(ejected))
+        if not plan["eject"]:
+            _err("Done. The drive was written and verified; it was left connected (--no-eject).")
+            return EXIT_OK
+        if ejected:
+            _err("Done. The drive was written, verified and ejected - you can unplug it now.")
+            return EXIT_OK
+        _error("The drive was written and verified, but it could not be ejected. "
+               "Eject it from the file manager before unplugging.")
+        result["error"] = "eject failed"
+        return EXIT_EJECT_FAILED
+
+    if state["interrupted"]:
+        result["error"] = "interrupted"
+        _error("Interrupted. The drive may be partially written and must not be used.")
+        return EXIT_INTERRUPTED
+    result["error"] = str(failure)
+    if _is_verification_failure(failure):
+        _error(str(failure))
+        return EXIT_VERIFY_FAILED
+    if isinstance(failure, (ValueError, RuntimeError)):
+        _error(str(failure))
+    else:
+        _error(f"Unexpected failure ({type(failure).__name__}): {failure}")
+    log.dump_recent()
+    return EXIT_ERROR
+
+
+def cmd_write(args):
+    result = {"ok": False, "mode": None, "iso": None, "disk": None, "verified": False,
+              "ejected": False, "error": None, "exit_code": EXIT_ERROR}
+    try:
+        plan = _prepare_write(args)
+        result.update(mode=plan["mode"], iso=plan["iso"], disk=plan["disk"]["id"])
+        if args.dry_run:
+            if args.json:
+                _out(json.dumps(plan, indent=2, default=str))
+            else:
+                _print_plan(plan, to_stdout=True)
+                _err("Dry run: nothing was changed.")
+            return EXIT_OK
+        _print_plan(plan, to_stdout=False)
+        _confirm_write(args, plan)
+        code = _run_write(args, plan, result)
+    except CliError as e:
+        result.update(error=e.message, exit_code=e.code)
+        if args.json:
+            _out(json.dumps(result, indent=2))
+        raise
+    result["exit_code"] = code
+    if args.json:
+        _out(json.dumps(result, indent=2))
+    return code
+
+
+COMMANDS = {"list": cmd_list, "detect": cmd_detect, "sha256": cmd_sha256, "write": cmd_write}
+
+
+def build_cli_parser():
+    common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    common.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
+                        help="show Python tracebacks for unexpected errors")
+    parser = argparse.ArgumentParser(
+        prog=CLI_PROG, allow_abbrev=False,
+        description="Create bootable USB drives from Windows 11 or hybrid Linux ISOs. "
+                    "Run without arguments to open the graphical interface.",
+        epilog=(
+            "exit codes:\n"
+            "  0    success\n"
+            "  1    error\n"
+            "  2    usage error (also: confirmation missing, ISO kind unknown)\n"
+            "  3    verification failed / checksum mismatch\n"
+            "  4    written and verified, but the drive could not be ejected\n"
+            "  130  interrupted (Ctrl-C)\n\n"
+            "environment:\n"
+            "  NO_COLOR                       disable colored messages\n"
+            "  WIN11USB_DISABLE_AUDIT_LOG=1   do not write the audit log\n\n"
+            "Data is written to stdout; messages, errors and progress to stderr.\n"
+            "The written drive is always read back and compared with the ISO."),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--version", action="version", version=f"{CLI_PROG} {__version__}")
+    parser.add_argument("--debug", action="store_true", help="show Python tracebacks for unexpected errors")
+    sub = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    def add(name, help_text, **kw):
+        return sub.add_parser(name, help=help_text, description=help_text, parents=[common],
+                              allow_abbrev=False, **kw)
+
+    add("gui", "open the graphical interface (the default with no arguments)")
+    p = add("list", "list the USB drives that can be written")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p = add("detect", "tell whether an ISO is a windows or linux image (or unknown)")
+    p.add_argument("iso", metavar="ISO")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p = add("sha256", "compute the SHA-256 of a file, optionally comparing it with a known value")
+    p.add_argument("iso", metavar="ISO")
+    p.add_argument("--expected", metavar="HASH", help="expected SHA-256; exit code 3 if it differs")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p = add("write", "write an ISO to a USB drive, verify it and eject",
+            epilog="The drive is ERASED. Use --dry-run first to see the plan without changing anything.")
+    p.add_argument("--iso", required=True, metavar="ISO", help="path of the ISO image")
+    p.add_argument("--disk", required=True, metavar="DISKID",
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+    p.add_argument("--mode", choices=[MODE_AUTO, MODE_WINDOWS, MODE_LINUX], default=MODE_AUTO,
+                   help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
+                        "auto: detect (default)")
+    p.add_argument("--yes", action="store_true",
+                   help="do not ask for confirmation (required when not in an interactive terminal)")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and exit without touching anything")
+    p.add_argument("--no-eject", action="store_true", help="leave the drive connected when done")
+    p.add_argument("--json", action="store_true", help="machine-readable result on stdout")
+    p.add_argument("-v", "--verbose", action="store_true", help="show every engine log line")
+    return parser
+
+
+def _run_gui():
+    if tk is None:
+        _err(TK_MISSING_MESSAGE)
+        return EXIT_ERROR
     App().mainloop()
+    return EXIT_OK
+
+
+def main(argv=None):
+    """Entry point. Returns the process exit code (see the exit codes in --help)."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv:
+        command, args = "gui", None
+    else:
+        try:
+            args = build_cli_parser().parse_args(argv)
+        except SystemExit as e:  # --help / --version (0) or a usage error (2)
+            return e.code if isinstance(e.code, int) else (EXIT_OK if e.code is None else EXIT_USAGE)
+        command = args.command or "gui"
+    if command in ("gui", "list", "write") and not (IS_MAC or IS_LINUX):
+        _err("This script supports macOS and Linux only.")
+        return EXIT_ERROR
+    debug = bool(getattr(args, "debug", False))
+    try:
+        if command == "gui":
+            return _run_gui()
+        return COMMANDS[command](args)
+    except CliError as e:
+        _error(e.message)
+        return e.code
+    except KeyboardInterrupt:
+        _err("Interrupted.")
+        return EXIT_INTERRUPTED
+    except BrokenPipeError:
+        with contextlib.suppress(Exception):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return EXIT_OK
+    except Exception as e:
+        if debug:
+            traceback.print_exc()
+        _error(str(e) if isinstance(e, (ValueError, RuntimeError, OSError))
+               else f"Unexpected failure ({type(e).__name__}): {e}")
+        return EXIT_ERROR
+
+
+if __name__ == "__main__":
+    sys.exit(main())
