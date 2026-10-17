@@ -6267,7 +6267,9 @@ def help_sections():
 • detect ISO [--json] — prints windows, linux, chromeos or unknown.
 • fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
-• write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
+• write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
+• harden-seed --target ubuntu|fedora|debian --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
+• harden-files --target windows|ubuntu|fedora|debian --out DIR [--json] — write the same hardening files into a new or empty folder. No drive is involved and no administrator rights are needed.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -6275,6 +6277,12 @@ def help_sections():
 • --dry-run shows the plan and changes nothing. It is the safest way to try a command.
 • Without --yes you are asked to type the disk identifier. When there is no terminal, --yes is required.
 • Verification is always performed. There is no option to skip it.
+• --hardened (Windows mode only; anything else is a usage error) adds the optional Hardened (recommended settings) files to the same USB drive. --dry-run lists their names.
+
+## harden-seed and harden-files
+• harden-seed asks for the same confirmation as write (type the disk identifier, or pass --yes), checks the drive the same way, verifies what it wrote and ejects. The seed drive is erased like any other target.
+• The seed files never choose a disk, never partition or format anything and never create accounts or set passwords: storage and the user account stay interactive in the installer.
+• harden-files refuses a folder that is not empty and never overwrites anything.
 
 ## Exit codes
 • {EXIT_OK} success
@@ -9039,7 +9047,7 @@ def _disk_summary(disk):
     return info
 
 
-def _write_steps(mode, disk_id, eject):
+def _write_steps(mode, disk_id, eject, hardening_files=None):
     steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive"]
     if mode in RAW_MODES:
         steps += [f"Unmount /dev/{disk_id} and write the image to it byte for byte",
@@ -9048,6 +9056,8 @@ def _write_steps(mode, disk_id, eject):
         steps += [f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{VOL_NAME}')",
                   "Copy the ISO contents (install.wim is split when it exceeds 4 GB)",
                   "Verify the copied files against the ISO"]
+        if hardening_files:
+            steps.insert(-1, "Add the Hardened (recommended settings) files: " + ", ".join(hardening_files))
     steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
     return steps
 
@@ -9059,8 +9069,14 @@ def _print_plan(plan, to_stdout):
     emit(f"  Disk : /dev/{disk['id']}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
     if disk.get("model"):
         emit(f"  Model: {disk['model']}")
-    emit(f"  ISO  : {plan['iso']} ({human_size(plan['iso_size'])})")
+    if plan["mode"] == MODE_SEED:
+        emit(f"  Seed : {plan['target']} (volume label {plan['volume_label']})")
+        emit(f"  Files: {', '.join(plan['files'])}")
+    else:
+        emit(f"  ISO  : {plan['iso']} ({human_size(plan['iso_size'])})")
     emit(f"  Mode : {plan['mode']}")
+    if plan.get("hardening_files"):
+        emit(f"  Extra: Hardened (recommended settings): {', '.join(plan['hardening_files'])}")
     emit("  Steps:")
     for i, step in enumerate(plan["steps"], 1):
         emit(f"    {i}. {step}")
@@ -9208,6 +9224,8 @@ def cmd_fetch_chromeos(args):
 
 def _prepare_write(args):
     """Validate everything and build the plan. Raises CliError; touches nothing."""
+    if getattr(args, "hardened", False) and args.mode not in (MODE_AUTO, MODE_WINDOWS):
+        raise CliError(HARDENED_WINDOWS_ONLY, EXIT_USAGE)
     try:
         iso = validate_iso_path(args.iso)
         disk_id = validate_device_name(normalize_typed_identifier(args.disk))
@@ -9228,6 +9246,11 @@ def _prepare_write(args):
         mode = detected_mode
     elif detected_mode is not None and detected_mode != mode:
         _warn(f"This ISO looks like a {detected} image but --mode {mode} was requested.")
+    hardening_files = []
+    if getattr(args, "hardened", False):
+        if mode != MODE_WINDOWS:  # --mode auto resolved to a Linux or ChromeOS image
+            raise CliError(HARDENED_WINDOWS_ONLY, EXIT_USAGE)
+        hardening_files = _hardening_file_names(MODE_WINDOWS)
     iso_size = os.path.getsize(iso)
     size = disk.get("size") or 0
     if mode in RAW_MODES:
@@ -9249,7 +9272,10 @@ def _prepare_write(args):
     # so the safety re-check can compare the drive that is erased with the one that was listed.
     return {"iso": iso, "iso_size": iso_size, "mode": mode, "disk": _disk_summary(disk),
             "identity": tuple(disk.get("identity") or ()),
-            "steps": _write_steps(mode, disk_id, eject), "eject": eject, "dry_run": bool(args.dry_run)}
+            "steps": _write_steps(mode, disk_id, eject, hardening_files), "eject": eject,
+            "dry_run": bool(args.dry_run),
+            "hardening": HARDENING_BASELINE if hardening_files else HARDENING_NONE,
+            "hardening_files": hardening_files}
 
 
 def _confirm_write(args, plan):
@@ -9265,6 +9291,18 @@ def _confirm_write(args, plan):
     answer = sys.stdin.readline().strip()
     if answer != disk_id:
         raise CliError("The confirmation did not match. Nothing was changed.", EXIT_USAGE)
+
+
+def _call_engine(plan, log, priv, progress, cancel):
+    """Run the destructive engine call for `plan` (an image write, or the hardening seed drive)."""
+    if plan["mode"] == MODE_SEED:
+        return build_seed_usb(plan["target"], plan["disk"]["id"], log, priv,
+                              expected_size=plan["disk"].get("size"), progress=progress,
+                              cancel_event=cancel, eject=plan["eject"], profile=HARDENING_BASELINE)
+    extra = {"hardening": plan["hardening"]} if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else {}
+    return build_usb(plan["iso"], plan["disk"]["id"], log, priv,
+                     expected_size=plan["disk"].get("size"), mode=plan["mode"],
+                     progress=progress, eject=plan["eject"], cancel_event=cancel, **extra)
 
 
 def _run_write(args, plan, result):
@@ -9287,16 +9325,16 @@ def _run_write(args, plan, result):
     except ValueError:  # not the main thread
         previous = None
     started = time.time()
-    audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}")
+    audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}"
+          + (f" target={plan['target']}" if plan["mode"] == MODE_SEED else "")
+          + (f" hardening={plan['hardening']}" if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else ""))
     ejected, failure = None, None
     try:
         if needs_priv:
             priv.authenticate()
         # Bind the safety re-check (right before erasing) to exactly the drive that was planned.
         pin_target_identity(plan["disk"]["id"], plan.get("identity"))
-        ejected = build_usb(plan["iso"], plan["disk"]["id"], log, priv,
-                            expected_size=plan["disk"].get("size"), mode=plan["mode"],
-                            progress=progress, eject=plan["eject"], cancel_event=cancel)
+        ejected = _call_engine(plan, log, priv, progress, cancel)
     except KeyboardInterrupt as e:
         state["interrupted"] = True
         failure = e
@@ -9370,8 +9408,184 @@ def cmd_write(args):
     return code
 
 
+# ===== hardening: cli =====
+HARDENED_WINDOWS_ONLY = ("--hardened is only available for Windows images (--mode windows). For Linux use "
+                         f"'{CLI_PROG} harden-seed' with a separate USB drive.")
+HARDEN_FILES_TARGETS = ("windows", *SEED_TARGETS)
+
+
+def _hardening_files(kind):
+    """(volume label or None, validated {relative_path: bytes}) for 'windows' or a seed target.
+
+    The shared validator that build_usb()/build_seed_usb() apply is used here too, so a plan or a
+    folder never holds files the engine would refuse. A refusal becomes a CliError.
+    """
+    try:
+        if kind == "windows":
+            label, files = None, hardening_files_windows(HARDENING_BASELINE)
+        else:
+            label, files = hardening_files_seed(kind, HARDENING_BASELINE)
+        return label, validate_seed_files(files)
+    except ValueError as e:
+        raise CliError(f"The hardening files are not valid: {e}") from None
+
+
+def _hardening_file_names(kind):
+    """The names (never the contents) of the hardening files for 'windows' or a seed target, sorted."""
+    return sorted(_hardening_files(kind)[1])
+
+
+def _prepare_seed(args):
+    """Validate everything for `harden-seed` and build the plan. Raises CliError; touches nothing."""
+    try:
+        disk_id = validate_device_name(normalize_typed_identifier(args.disk))
+    except ValueError as e:
+        raise CliError(str(e)) from None
+    disks = _list_disks()
+    disk = next((d for d in disks if d.get("id") == disk_id), None)
+    if disk is None:
+        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+                       f"Run '{CLI_PROG} list' to see the drives that can be written.")
+    label, files = _hardening_files(args.target)
+    names = sorted(files)
+    missing = get_missing_dependencies(MODE_SEED)
+    if missing:
+        raise CliError("Missing required tools: " + ", ".join(missing) + ". " + missing_dependencies_hint(missing))
+    eject = not args.no_eject
+    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive",
+             f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{label}')",
+             f"Copy {len(names)} seed files: " + ", ".join(names),
+             "Read the drive back and compare every file byte for byte",
+             "Eject the drive" if eject else "Leave the drive connected (--no-eject)"]
+    # The identity (serial, WWN, ...) is kept for the safety re-check, like in _prepare_write().
+    return {"iso": None, "iso_size": 0, "mode": MODE_SEED, "target": args.target, "volume_label": label,
+            "files": names, "disk": _disk_summary(disk), "identity": tuple(disk.get("identity") or ()),
+            "steps": steps, "eject": eject, "dry_run": bool(args.dry_run),
+            "hardening": HARDENING_BASELINE, "hardening_files": []}
+
+
+def cmd_harden_seed(args):
+    """Erase a small separate USB drive and write the hardening seed files on it (never an OS image)."""
+    result = {"ok": False, "mode": MODE_SEED, "target": args.target, "disk": None, "verified": False,
+              "ejected": False, "error": None, "exit_code": EXIT_ERROR}
+    try:
+        plan = _prepare_seed(args)
+        result.update(disk=plan["disk"]["id"], volume_label=plan["volume_label"], files=plan["files"])
+        if args.dry_run:
+            if args.json:
+                _out(json.dumps({**plan, "identity": dict(plan["identity"])}, indent=2, default=str))
+            else:
+                _print_plan(plan, to_stdout=True)
+                _err("Dry run: nothing was changed.")
+            return EXIT_OK
+        _print_plan(plan, to_stdout=False)
+        _confirm_write(args, plan)
+        code = _run_write(args, plan, result)
+    except CliError as e:
+        result.update(error=e.message, exit_code=e.code)
+        if args.json:
+            _out(json.dumps(result, indent=2))
+        raise
+    result["exit_code"] = code
+    if args.json:
+        _out(json.dumps(result, indent=2))
+    return code
+
+
+def _fill_staging_folder(stage, files):
+    """Write `files` into the private staging folder `stage`.
+
+    Nothing the user can see is touched here, so a failure leaves nothing behind (the caller removes
+    the staging folder). Folders end up 0755 and files 0644, whatever the umask.
+    """
+    os.chmod(stage, 0o755)  # noqa: S103 - plain files to read, 0755/0644 on purpose
+    for rel, data in files.items():
+        parts = rel.split("/")
+        target = os.path.normpath(os.path.join(stage, *parts))
+        # validate_seed_files() already refused these; this is the second lock on the same door.
+        if ".." in parts or "" in parts or os.path.commonpath([stage, target]) != stage or target == stage:
+            raise ValueError(f"Refusing a path outside the folder: {rel}")
+        folder = os.path.dirname(target)
+        if folder != stage and not os.path.isdir(folder):
+            os.makedirs(folder, mode=0o755)
+            part = folder
+            while part != stage:  # makedirs applies the umask to every level it creates
+                os.chmod(part, 0o755)  # noqa: S103 - plain files to read, 0755/0644 on purpose
+                part = os.path.dirname(part)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        os.chmod(target, 0o644)
+
+
+def _install_staged(stage, out, out_existed):
+    """Move the staged entries to `out` (a new name, or an existing empty folder). Undone on failure."""
+    if not out_existed:
+        os.rename(stage, out)  # one atomic step: the folder appears complete or not at all
+        return
+    moved = []
+    try:
+        for name in sorted(os.listdir(stage)):
+            dest = os.path.join(out, name)
+            if os.path.lexists(dest):  # the folder was empty a moment ago: never overwrite what appeared
+                raise FileExistsError(f"{dest} appeared while the files were being written")
+            os.rename(os.path.join(stage, name), dest)
+            moved.append(dest)
+        os.rmdir(stage)
+    except BaseException:
+        for dest in moved:
+            if os.path.isdir(dest) and not os.path.islink(dest):
+                shutil.rmtree(dest, ignore_errors=True)
+            else:
+                _silent_remove(dest)
+        raise
+
+
+def cmd_harden_files(args):
+    """Write the hardening files for one target into a new or empty folder. No drive, no privileges."""
+    target = args.target
+    out = os.path.abspath(os.path.expanduser(args.out))
+    if os.path.islink(out):
+        raise CliError(f"{out} is a symbolic link. Pass a real folder that is new or empty.")
+    out_existed = os.path.lexists(out)
+    if out_existed:
+        if not os.path.isdir(out):
+            raise CliError(f"Not a folder: {out}")
+        if os.listdir(out):
+            raise CliError(f"The folder is not empty: {out}. Pass a new folder or an empty one; "
+                           "nothing was written.")
+    parent = os.path.dirname(out)
+    if not os.path.isdir(parent):
+        raise CliError(f"The parent folder does not exist: {parent}")
+    label, files = _hardening_files(target)
+    stage = None
+    try:
+        # Staging beside the destination keeps the final move on one filesystem (an atomic rename).
+        stage = tempfile.mkdtemp(prefix=".epma-harden-", dir=parent)
+        _fill_staging_folder(stage, files)
+        _install_staged(stage, out, out_existed)
+    except (OSError, ValueError) as e:
+        raise CliError(f"Could not write the hardening files to {out}: "
+                       f"{getattr(e, 'strerror', None) or e}. Nothing was left behind.") from None
+    finally:
+        if stage is not None and os.path.lexists(stage):
+            shutil.rmtree(stage, ignore_errors=True)
+    names = sorted(files)
+    if args.json:
+        _out(json.dumps({"target": target, "out": out, "volume_label": label,
+                         "files": [{"path": n, "bytes": len(files[n])} for n in names]}, indent=2))
+    else:
+        for name in names:
+            _out(name)
+    _err(f"Wrote {len(names)} files to {out}. They are plain text: read them before using them. "
+         "No drive was touched.")
+    return EXIT_OK
+# ===== end hardening: cli =====
+
+
 COMMANDS = {"list": cmd_list, "detect": cmd_detect, "sha256": cmd_sha256, "write": cmd_write,
-            "fetch-chromeos": cmd_fetch_chromeos}
+            "fetch-chromeos": cmd_fetch_chromeos, "harden-seed": cmd_harden_seed,
+            "harden-files": cmd_harden_files}
 
 
 # What `--help` says about exit codes and environment variables. Both lists are written out here,
@@ -9404,6 +9618,16 @@ def cli_epilog():
             f"environment (all optional):\n{env}\n\n"
             "Data is written to stdout; messages, errors and progress to stderr.\n"
             "The written drive is always read back and compared with the ISO.")
+
+
+def _add_write_flags(p):
+    """The confirmation, dry-run, eject, output and verbosity flags every drive-writing command shares."""
+    p.add_argument("--yes", action="store_true",
+                   help="do not ask for confirmation (required when not in an interactive terminal)")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and exit without touching anything")
+    p.add_argument("--no-eject", action="store_true", help="leave the drive connected when done")
+    p.add_argument("--json", action="store_true", help="machine-readable result on stdout")
+    p.add_argument("-v", "--verbose", action="store_true", help="show every engine log line")
 
 
 def build_cli_parser():
@@ -9446,12 +9670,25 @@ def build_cli_parser():
     p.add_argument("--mode", choices=[MODE_AUTO, *ALL_MODES], default=MODE_AUTO,
                    help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
                         "chromeos: raw write of a ChromeOS Flex disk image; auto: detect (default)")
-    p.add_argument("--yes", action="store_true",
-                   help="do not ask for confirmation (required when not in an interactive terminal)")
-    p.add_argument("--dry-run", action="store_true", help="print the plan and exit without touching anything")
-    p.add_argument("--no-eject", action="store_true", help="leave the drive connected when done")
-    p.add_argument("--json", action="store_true", help="machine-readable result on stdout")
-    p.add_argument("-v", "--verbose", action="store_true", help="show every engine log line")
+    p.add_argument("--hardened", action="store_true",
+                   help="also add the optional Hardened (recommended settings) files to the Windows drive "
+                        "(Windows mode only; --dry-run lists them)")
+    _add_write_flags(p)
+    p = add("harden-seed", "erase a small separate USB drive and write the hardening seed files on it "
+                           "(no operating system image)",
+            epilog="The drive is ERASED. Use --dry-run first to see the plan without changing anything. "
+                   "The seed files never choose a disk or create accounts.")
+    p.add_argument("--target", required=True, choices=SEED_TARGETS,
+                   help="ubuntu (autoinstall), fedora (kickstart) or debian (script + preseed)")
+    p.add_argument("--disk", required=True, metavar="DISKID",
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+    _add_write_flags(p)
+    p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
+            epilog="Nothing is overwritten: a folder that is not empty is refused.")
+    p.add_argument("--target", required=True, choices=HARDEN_FILES_TARGETS,
+                   help="windows, ubuntu, fedora or debian")
+    p.add_argument("--out", required=True, metavar="DIR", help="a new folder, or an empty one")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
     return parser
 
 
@@ -9474,7 +9711,7 @@ def main(argv=None):
         except SystemExit as e:  # --help / --version (0) or a usage error (2)
             return e.code if isinstance(e.code, int) else (EXIT_OK if e.code is None else EXIT_USAGE)
         command = args.command or "gui"
-    if command in ("gui", "list", "write") and not (IS_MAC or IS_LINUX):
+    if command in ("gui", "list", "write", "harden-seed") and not (IS_MAC or IS_LINUX):
         _err("This script supports macOS and Linux only.")
         return EXIT_ERROR
     debug = bool(getattr(args, "debug", False))
