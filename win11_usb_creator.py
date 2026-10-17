@@ -583,6 +583,22 @@ PT_BR = {
     "Seed drive created and verified": "Pendrive do kit criado e verificado",
     "The hardening files were added to the drive.": "Os arquivos de reforço foram adicionados ao pendrive.",
     # ===== end hardening: GUI =====
+    # ===== hardening: windows content =====
+    # One entry per line of describe_hardening_windows() (the GUI shows them through _()); a test checks them all.
+    "Turn off SMBv1 (obsolete file-sharing protocol) -- risk: Very old NAS boxes, scanners or Windows XP-era PCs that only speak SMBv1 can no longer connect.": "Desativar o SMBv1 (protocolo obsoleto de compartilhamento de arquivos) -- risco: NAS muito antigos, scanners ou PCs da época do Windows XP que só falam SMBv1 não conseguem mais se conectar.",
+    "Turn off LLMNR name lookups -- risk: Single-word names that only resolve through LLMNR stop resolving on networks without proper DNS.": "Desativar a resolução de nomes LLMNR -- risco: Nomes de uma só palavra que só se resolvem pelo LLMNR deixam de funcionar em redes sem DNS adequado.",
+    "Turn off AutoRun and AutoPlay on every drive type -- risk: Inserted USB sticks and discs no longer start installers or show the AutoPlay prompt, and phones and cameras no longer show the import-photos prompt; open them from File Explorer.": "Desativar a Execução Automática e o AutoPlay em todos os tipos de unidade -- risco: Pendrives e discos inseridos não iniciam mais instaladores nem mostram o aviso do AutoPlay, e celulares e câmeras não mostram mais o aviso de importar fotos; abra-os pelo Explorador de Arquivos.",
+    "Windows Firewall on for all network profiles, inbound blocked unless a rule allows it -- risk: A program that must accept incoming connections (game server, file sharing, remote tools) needs an allow rule. The script runs once at the end of Setup and does not retry; the log says [WARN] if the firewall settings are not in effect.": "Firewall do Windows ativado em todos os perfis de rede, com entrada bloqueada a menos que uma regra permita -- risco: Um programa que precisa aceitar conexões de entrada (servidor de jogo, compartilhamento de arquivos, ferramentas remotas) precisa de uma regra de permissão. O script roda uma única vez no fim da instalação e não tenta de novo; o log mostra [WARN] se os ajustes do firewall não estiverem em vigor.",
+    "Defender: block potentially unwanted apps and turn cloud protection on -- risk: Some bundled freeware may be flagged, and cloud protection sends file metadata to Microsoft. The script runs once at the end of Setup and does not retry; Tamper Protection, another antivirus or a Defender that is not ready yet can stop the change, and the log then says [WARN].": "Defender: bloquear aplicativos potencialmente indesejados e ativar a proteção na nuvem -- risco: Alguns programas gratuitos que vêm agrupados podem ser sinalizados, e a proteção na nuvem envia metadados dos arquivos à Microsoft. O script roda uma única vez no fim da instalação e não tenta de novo; a Proteção contra Adulteração, outro antivírus ou um Defender que ainda não está pronto podem impedir a alteração, e o log então mostra [WARN].",
+    "Defender attack surface rule in Block mode: no credential stealing from LSASS -- risk: Rarely, security or backup tools that read LSASS memory are blocked and Defender shows a notification. The script runs once at the end of Setup and does not retry; the log says [WARN] if the rule is not in effect.": "Regra de redução da superfície de ataque do Defender em modo Bloquear: sem roubo de credenciais do LSASS -- risco: Raramente, ferramentas de segurança ou de backup que leem a memória do LSASS são bloqueadas e o Defender mostra uma notificação. O script roda uma única vez no fim da instalação e não tenta de novo; o log mostra [WARN] se a regra não estiver em vigor.",
+    "Defender attack surface rules in Audit mode (log only): email executable content, Office child processes, obfuscated scripts, script-launched downloads -- risk: Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block. The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect.": "Regras de redução da superfície de ataque do Defender em modo Auditoria (somente registro): conteúdo executável de e-mail, processos filhos do Office, scripts ofuscados, downloads iniciados por scripts -- risco: O modo Auditoria só grava eventos e não bloqueia nada. Revise o log de eventos do Defender antes de mudar qualquer regra para Bloquear. O script roda uma única vez no fim da instalação e não tenta de novo; o log mostra [WARN] para uma regra que não esteja em vigor.",
+    "Do not keep plain-text WDigest credentials in memory -- risk: Only legacy digest authentication against very old web servers is affected.": "Não manter credenciais WDigest em texto simples na memória -- risco: Só é afetada a autenticação digest antiga em servidores web muito antigos.",
+    "PowerShell script block logging -- risk: Adds events to the PowerShell log; secrets typed inside a script would be logged as well.": "Registro de blocos de script do PowerShell -- risco: Adiciona eventos ao log do PowerShell; segredos digitados dentro de um script também seriam registrados.",
+    "Disable the PowerShell 2.0 optional feature -- risk: Very old scripts or tools that insist on running with -Version 2 stop working.": "Desativar o recurso opcional PowerShell 2.0 -- risco: Scripts ou ferramentas muito antigos que insistem em rodar com -Version 2 deixam de funcionar.",
+    "Turn off Remote Assistance invitations -- risk: Old-style Remote Assistance invitations stop working; Quick Assist and Remote Desktop are not changed.": "Desativar os convites de Assistência Remota -- risco: Os convites no estilo antigo da Assistência Remota deixam de funcionar; o Assistência Rápida e a Área de Trabalho Remota não são alterados.",
+    "Advanced audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation; Security log size raised to 128 MiB -- risk: The Security event log fills much faster (process creation and sign-ins are frequent events), so its maximum size is raised to 128 MiB (never lowered). Retention is still limited: on a busy PC the oldest events can be overwritten within days, so export the log if you need to keep it.": "Política de auditoria avançada: logons, bloqueios de conta, alterações de contas e grupos, alterações da política de auditoria, criação de processos; tamanho do log de Segurança aumentado para 128 MiB -- risco: O log de eventos de Segurança enche muito mais rápido (criação de processos e logons são eventos frequentes); por isso o tamanho máximo dele sobe para 128 MiB (nunca é reduzido). A retenção continua limitada: num PC muito usado, os eventos mais antigos podem ser sobrescritos em poucos dias; exporte o log se precisar guardá-lo.",
+    "Keep User Account Control switched on -- risk: Only acts when UAC was switched off; takes effect after the next restart.": "Manter o Controle de Conta de Usuário ativado -- risco: Só age quando o UAC estava desativado; vale após a próxima reinicialização.",
+    # ===== end hardening: windows content =====
 }
 
 
@@ -2882,7 +2898,7 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
 
 
 # ===== hardening: engine-windows =====
-# Extra files for a Windows drive (autounattend.xml and a SetupComplete script, see
+# Extra files for a Windows drive (a SetupComplete script and its PowerShell script, see
 # hardening_files_windows). They are checked first, written after the ISO's own files, read back
 # from the device and compared byte for byte.
 def validate_hardening(mode, hardening):
@@ -4628,7 +4644,6 @@ def get_missing_dependencies(mode=MODE_WINDOWS):
 #
 # Honest naming: these are "recommended settings inspired by common baselines", NOT a compliance profile.
 WINDOWS_HARDENING_LOG = "%windir%\\Temp\\epma-hardening.log"  # where SetupComplete.cmd and harden.ps1 write
-WINDOWS_HARDENING_AUTOUNATTEND = "autounattend.xml"
 WINDOWS_HARDENING_SCRIPTS_DIR = "sources/$OEM$/$$/Setup/Scripts"  # `$$` is copied to %windir% by Windows Setup
 WINDOWS_HARDENING_CMD = WINDOWS_HARDENING_SCRIPTS_DIR + "/SetupComplete.cmd"
 WINDOWS_HARDENING_PS1 = WINDOWS_HARDENING_SCRIPTS_DIR + "/harden.ps1"
@@ -4643,25 +4658,33 @@ WINDOWS_HARDENING_SETTINGS = (
     ("llmnr", "Turn off LLMNR name lookups",
      "Single-word names that only resolve through LLMNR stop resolving on networks without proper DNS."),
     ("autorun", "Turn off AutoRun and AutoPlay on every drive type",
-     "Inserted USB sticks and discs no longer start installers or show the AutoPlay prompt; open them from File Explorer."),
+     "Inserted USB sticks and discs no longer start installers or show the AutoPlay prompt, and phones and cameras "
+     "no longer show the import-photos prompt; open them from File Explorer."),
     ("firewall", "Windows Firewall on for all network profiles, inbound blocked unless a rule allows it",
-     "A program that must accept incoming connections (game server, file sharing, remote tools) needs an allow rule."),
+     "A program that must accept incoming connections (game server, file sharing, remote tools) needs an allow rule. "
+     "The script runs once at the end of Setup and does not retry; the log says [WARN] if the firewall settings are not in effect."),
     ("defender_cloud", "Defender: block potentially unwanted apps and turn cloud protection on",
-     "Some bundled freeware may be flagged, and cloud protection sends file metadata to Microsoft. Fails harmlessly when another antivirus is active."),
+     "Some bundled freeware may be flagged, and cloud protection sends file metadata to Microsoft. "
+     "The script runs once at the end of Setup and does not retry; Tamper Protection, another antivirus or a Defender "
+     "that is not ready yet can stop the change, and the log then says [WARN]."),
     ("asr_lsass", "Defender attack surface rule in Block mode: no credential stealing from LSASS",
-     "Rarely, security or backup tools that read LSASS memory are blocked and Defender shows a notification."),
+     "Rarely, security or backup tools that read LSASS memory are blocked and Defender shows a notification. "
+     "The script runs once at the end of Setup and does not retry; the log says [WARN] if the rule is not in effect."),
     ("asr_audit", "Defender attack surface rules in Audit mode (log only): email executable content, Office child processes, obfuscated scripts, script-launched downloads",
-     "Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block."),
+     "Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block. "
+     "The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect."),
     ("wdigest", "Do not keep plain-text WDigest credentials in memory",
      "Only legacy digest authentication against very old web servers is affected."),
     ("ps_logging", "PowerShell script block logging",
      "Adds events to the PowerShell log; secrets typed inside a script would be logged as well."),
-    ("ps2", "Remove the PowerShell 2.0 optional feature",
+    ("ps2", "Disable the PowerShell 2.0 optional feature",
      "Very old scripts or tools that insist on running with -Version 2 stop working."),
     ("remote_assist", "Turn off Remote Assistance invitations",
      "Old-style Remote Assistance invitations stop working; Quick Assist and Remote Desktop are not changed."),
-    ("audit", "Basic audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation",
-     "The Security event log fills faster; Windows overwrites the oldest events when it is full."),
+    ("audit", "Advanced audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation; Security log size raised to 128 MiB",
+     "The Security event log fills much faster (process creation and sign-ins are frequent events), so its maximum size is raised "
+     "to 128 MiB (never lowered). Retention is still limited: on a busy PC the oldest events can be overwritten within days, "
+     "so export the log if you need to keep it."),
     ("uac", "Keep User Account Control switched on",
      "Only acts when UAC was switched off; takes effect after the next restart."),
 )
@@ -4673,7 +4696,7 @@ WINDOWS_HARDENING_NOT_CHANGED = (
     ("ntlm", "NTLM authentication levels are left as they are",
      "Stricter levels can break access to older file shares, printers and NAS devices without any warning."),
     ("accounts_disks", "Accounts, passwords, disks, language, licence and product key",
-     "Windows Setup stays fully interactive; the answer file never touches them."),
+     "Windows Setup stays fully interactive; the hardening script never touches them."),
 )
 
 
@@ -4692,38 +4715,6 @@ def describe_hardening_windows(profile):
     if not _windows_hardening_check(profile):
         return []
     return [f"{text} -- risk: {risk}" for _sid, text, risk in WINDOWS_HARDENING_SETTINGS]
-
-
-def _windows_autounattend_xml():
-    # A deliberately tiny answer file. Windows Setup stays interactive: no disk selection, no licence
-    # acceptance, no keys, no accounts, no language or region forcing, no requirement bypasses and no
-    # shutdown or seal action. The only thing it sets is the most protective privacy choice of the first-run
-    # screens that still lets the person create an account normally.
-    # ProtectYourPC = 1 means "recommended": automatic updates and SmartScreen stay ON (the value 3 would turn
-    # automatic updates OFF, so it must never be used). Recent Windows 11 builds may ignore the element, which
-    # is harmless. The component is listed for both processor families because Setup ignores the one that does
-    # not match the media; the SetupComplete script under sources does the real work.
-    component = (
-        '    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="{arch}"'
-        ' publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"'
-        ' xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"'
-        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
-        "      <OOBE>\n"
-        "        <ProtectYourPC>1</ProtectYourPC>\n"
-        "      </OOBE>\n"
-        "    </component>\n"
-    )
-    return (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        "<!-- EPMA USB CREATOR: optional hardened setup (recommended settings). Setup stays interactive. -->\n"
-        "<!-- Edit or delete this file freely; the media installs fine without it. -->\n"
-        '<unattend xmlns="urn:schemas-microsoft-com:unattend">\n'
-        '  <settings pass="oobeSystem">\n'
-        + component.format(arch="amd64")
-        + component.format(arch="arm64")
-        + "  </settings>\n"
-        "</unattend>\n"
-    ).encode("utf-8")
 
 
 def _windows_setupcomplete_cmd():
@@ -4756,12 +4747,12 @@ try {
     $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 0
     $note = 'server side already off'
     if ($c1) { $note = 'server side turned off' }
-    $feature = Get-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -ErrorAction SilentlyContinue
-    if ($null -eq $feature) {
+    $state = Get-FeatureState 'SMB1Protocol'
+    if ($null -eq $state) {
         $note = $note + '; optional feature not present'
-    } elseif ($feature.State -eq 'Enabled') {
+    } elseif ($state -eq 'Enabled') {
         Disable-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -NoRestart | Out-Null
-        $note = $note + '; optional feature removed'
+        $note = $note + '; optional feature disabled'
     } else {
         $note = $note + '; optional feature already off'
     }
@@ -4792,11 +4783,18 @@ try {
 try {
     $profiles = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
     $todo = @($profiles | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
-    if ($todo.Count -eq 0) {
-        Write-Result 'OK' '@WHAT@' 'already set'
-    } else {
+    $changedNote = 'already set'
+    if ($todo.Count -gt 0) {
         Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultInboundAction Block
-        Write-Result 'OK' '@WHAT@' ('changed on ' + $todo.Count + ' profile(s)')
+        $changedNote = 'changed on ' + $todo.Count + ' profile(s)'
+    }
+    # Read the profiles back: "no error" is not the same as "in effect" (a Group Policy or another firewall can win).
+    $after = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
+    $off = @($after | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
+    if ($off.Count -eq 0) {
+        Write-Result 'OK' '@WHAT@' $changedNote
+    } else {
+        Write-Result 'WARN' '@WHAT@ not in effect' ('still off or open on ' + $off.Count + ' profile(s); likely reason: Group Policy, another firewall product or the firewall service not ready yet')
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
@@ -4817,7 +4815,14 @@ try {
             Set-MpPreference -MAPSReporting Advanced
             $changed += 'cloud protection'
         }
-        if ($changed.Count -eq 0) {
+        # Read the values back: the cmdlets can return without an error and still change nothing.
+        $after = Get-MpPreference
+        $missing = @()
+        if ([int]$after.PUAProtection -ne 1) { $missing += 'PUA protection' }
+        if ([int]$after.MAPSReporting -ne 2) { $missing += 'cloud protection' }
+        if ($missing.Count -gt 0) {
+            Write-Result 'WARN' '@WHAT@ not in effect' (($missing -join ', ') + ' still off; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
+        } elseif ($changed.Count -eq 0) {
             Write-Result 'OK' '@WHAT@' 'already set'
         } else {
             Write-Result 'OK' '@WHAT@' ('turned on: ' + ($changed -join ', '))
@@ -4832,8 +4837,14 @@ try {
     if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
         Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
     } else {
-        $r = Set-AsrRule -Id '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2' -Action 'Enabled'
-        Write-Result 'OK' '@WHAT@' $r
+        $ruleId = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'
+        $r = Set-AsrRule -Id $ruleId -Action 'Enabled'
+        $now = Get-AsrAction $ruleId
+        if ($now -eq 1) {
+            Write-Result 'OK' '@WHAT@' $r
+        } else {
+            Write-Result 'WARN' '@WHAT@ not in effect' 'rule is not in Block mode; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet'
+        }
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
@@ -4851,11 +4862,19 @@ try {
             'd3e037e1-3eb8-44c8-a917-57927947596d'
         )
         $applied = 0
+        $missing = 0
         foreach ($id in $rules) {
             $r = Set-AsrRule -Id $id -Action 'AuditMode'
             if ($r -eq 'changed') { $applied++ }
+            # In effect when the rule is in Audit mode, or already stricter (Block 1 or Warn 6).
+            $now = Get-AsrAction $id
+            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) { $missing++ }
         }
-        Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
+        if ($missing -gt 0) {
+            Write-Result 'WARN' '@WHAT@ not in effect' ('' + $missing + ' of ' + $rules.Count + ' rules are not active; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
+        } else {
+            Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
+        }
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
@@ -4880,21 +4899,21 @@ try {
     "ps2": r"""
 try {
     $found = $false
-    $removed = $false
+    $disabled = $false
     foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
-        $feature = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
-        if ($null -ne $feature) {
+        $state = Get-FeatureState $name
+        if ($null -ne $state) {
             $found = $true
-            if ($feature.State -eq 'Enabled') {
+            if ($state -eq 'Enabled') {
                 Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
-                $removed = $true
+                $disabled = $true
             }
         }
     }
     if (-not $found) {
         Write-Result 'SKIP' '@WHAT@' 'feature not present on this Windows build'
-    } elseif ($removed) {
-        Write-Result 'OK' '@WHAT@' 'feature removed'
+    } elseif ($disabled) {
+        Write-Result 'OK' '@WHAT@' 'feature disabled'
     } else {
         Write-Result 'OK' '@WHAT@' 'already off'
     }
@@ -4914,30 +4933,57 @@ try {
 """,
     "audit": r"""
 try {
-    # Subcategories are addressed by GUID because their names are translated on non-English Windows.
+    # ADVANCED audit subcategories (not the nine basic categories), addressed by GUID because their names are
+    # translated on non-English Windows. The GUIDs are not checked against a live system here: if auditpol
+    # rejects one, a FAIL line names it. List the valid ones with: auditpol /list /subcategory:* /v
     # Logon, Account Lockout, User Account Management, Security Group Management, Audit Policy Change
     # (success and failure); Process Creation (success only, no command-line capture).
     $items = @(
-        @('{0CCE9215-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
-        @('{0CCE9217-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
-        @('{0CCE9235-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
-        @('{0CCE9237-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
-        @('{0CCE922F-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
-        @('{0CCE922B-69AE-11D9-BED3-505054503030}', '/success:enable', '')
+        @('{0CCE9215-69AE-11D9-BED3-505054503030}', 'Logon', '/success:enable', '/failure:enable'),
+        @('{0CCE9217-69AE-11D9-BED3-505054503030}', 'Account Lockout', '/success:enable', '/failure:enable'),
+        @('{0CCE9235-69AE-11D9-BED3-505054503030}', 'User Account Management', '/success:enable', '/failure:enable'),
+        @('{0CCE9237-69AE-11D9-BED3-505054503030}', 'Security Group Management', '/success:enable', '/failure:enable'),
+        @('{0CCE922F-69AE-11D9-BED3-505054503030}', 'Audit Policy Change', '/success:enable', '/failure:enable'),
+        @('{0CCE922B-69AE-11D9-BED3-505054503030}', 'Process Creation', '/success:enable', '')
     )
     $bad = 0
     foreach ($item in $items) {
-        if ($item[2] -eq '') {
-            & auditpol.exe /set ('/subcategory:' + $item[0]) $item[1] | Out-Null
+        if ($item[3] -eq '') {
+            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] | Out-String
         } else {
-            & auditpol.exe /set ('/subcategory:' + $item[0]) $item[1] $item[2] | Out-Null
+            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] $item[3] | Out-String
         }
-        if ($LASTEXITCODE -ne 0) { $bad++ }
+        if ($LASTEXITCODE -ne 0) {
+            $bad++
+            Write-Result 'FAIL' ('Audit subcategory ' + $item[1] + ' ' + $item[0]) ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim() + ' List valid GUIDs with: auditpol /list /subcategory:* /v')
+        }
     }
-    if ($bad -gt 0) {
-        Write-Result 'FAIL' '@WHAT@' ('auditpol failed for ' + $bad + ' of ' + $items.Count + ' subcategories')
+    # The Security log wraps quickly with these events, so raise its maximum size to 128 MiB. Only ever raised.
+    $wantBytes = 134217728
+    $sizeOk = $true
+    $sizeNote = ''
+    try {
+        $oldBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
+        if ($oldBytes -ge $wantBytes) {
+            $sizeNote = 'Security log size left at ' + [math]::Round($oldBytes / 1MB) + ' MiB (already 128 MiB or more)'
+        } else {
+            & wevtutil.exe sl Security ('/ms:' + $wantBytes) | Out-Null
+            $newBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
+            if ($newBytes -ge $wantBytes) {
+                $sizeNote = 'Security log size raised from ' + [math]::Round($oldBytes / 1MB) + ' MiB to ' + [math]::Round($newBytes / 1MB) + ' MiB'
+            } else {
+                $sizeOk = $false
+                $sizeNote = 'Security log size is still ' + [math]::Round($newBytes / 1MB) + ' MiB (was ' + [math]::Round($oldBytes / 1MB) + ' MiB); a Group Policy may control it'
+            }
+        }
+    } catch {
+        $sizeOk = $false
+        $sizeNote = 'could not raise the Security log size: ' + $_.Exception.Message
+    }
+    if (($bad -gt 0) -or (-not $sizeOk)) {
+        Write-Result 'WARN' '@WHAT@ not fully in effect' ('' + $bad + ' of ' + $items.Count + ' subcategories rejected; ' + $sizeNote)
     } else {
-        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories set')
+        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories set; ' + $sizeNote)
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
@@ -4963,14 +5009,17 @@ _WINDOWS_PS_HELPERS = r"""
 $ErrorActionPreference = 'Stop'
 $script:CountOk = 0
 $script:CountSkip = 0
+$script:CountWarn = 0
 $script:CountFail = 0
 
-# One log line per setting: [OK], [SKIP] or [FAIL], what it was, and why. SetupComplete.cmd appends the
-# output of this script to the log file, so nothing here opens the log itself.
+# One log line per setting: [OK], [SKIP], [WARN] or [FAIL], what it was, and why. [OK] means the value was read
+# back and is in effect; [WARN] means the command did not fail but the value is not in effect. SetupComplete.cmd
+# appends the output of this script to the log file, so nothing here opens the log itself.
 function Write-Result {
     param([string]$Status, [string]$What, [string]$Why)
     if ($Status -eq 'OK') { $script:CountOk++ }
     elseif ($Status -eq 'SKIP') { $script:CountSkip++ }
+    elseif ($Status -eq 'WARN') { $script:CountWarn++ }
     else { $script:CountFail++ }
     Write-Host ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
 }
@@ -4995,25 +5044,50 @@ function Set-RegDword {
     return $true
 }
 
+# State of an optional Windows feature ('Enabled', 'Disabled', ...) or $null when it does not exist. The list is
+# read ONCE, on first use, and kept: Get-WindowsOptionalFeature is slow and Setup should finish quickly.
+$script:Features = $null
+$script:FeaturesError = $null
+function Get-FeatureState {
+    param([string]$Name)
+    if ($null -eq $script:Features) {
+        $script:Features = @{}
+        try {
+            foreach ($f in @(Get-WindowsOptionalFeature -Online)) {
+                $script:Features[[string]$f.FeatureName] = [string]$f.State
+            }
+        } catch {
+            $script:FeaturesError = $_.Exception.Message
+        }
+    }
+    if ($null -ne $script:FeaturesError) { throw $script:FeaturesError }
+    if ($script:Features.ContainsKey($Name)) { return $script:Features[$Name] }
+    return $null
+}
+
+# Current action of one attack surface reduction rule (0 off, 1 Block, 2 Audit, 6 Warn) or $null when not listed.
+function Get-AsrAction {
+    param([string]$Id)
+    $pref = Get-MpPreference
+    if ($null -eq $pref.AttackSurfaceReductionRules_Ids) { return $null }
+    $ids = @($pref.AttackSurfaceReductionRules_Ids)
+    $actions = @($pref.AttackSurfaceReductionRules_Actions)
+    for ($i = 0; $i -lt $ids.Count; $i++) {
+        if ([string]$ids[$i] -ieq $Id) { return [int]$actions[$i] }
+    }
+    return $null
+}
+
 # Attack surface reduction rule: 'Enabled' (Block) or 'AuditMode'. A rule that is already Block or Warn is
-# never weakened to Audit. Returns 'changed' or 'already set'.
+# never weakened to Audit. Returns 'changed' or 'already set'; the caller reads the result back.
 function Set-AsrRule {
     param([string]$Id, [string]$Action)
-    $pref = Get-MpPreference
-    $ids = @()
-    $actions = @()
-    if ($null -ne $pref.AttackSurfaceReductionRules_Ids) {
-        $ids = @($pref.AttackSurfaceReductionRules_Ids)
-        $actions = @($pref.AttackSurfaceReductionRules_Actions)
-    }
+    $current = Get-AsrAction $Id
     $wanted = 2
     if ($Action -eq 'Enabled') { $wanted = 1 }
-    for ($i = 0; $i -lt $ids.Count; $i++) {
-        if ([string]$ids[$i] -ieq $Id) {
-            $current = [int]$actions[$i]
-            if ($current -eq $wanted) { return 'already set' }
-            if (($wanted -eq 2) -and (($current -eq 1) -or ($current -eq 6))) { return 'already set' }
-        }
+    if ($null -ne $current) {
+        if ($current -eq $wanted) { return 'already set' }
+        if (($wanted -eq 2) -and (($current -eq 1) -or ($current -eq 6))) { return 'already set' }
     }
     if ($wanted -eq 1) {
         Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions Enabled
@@ -5040,9 +5114,14 @@ def _windows_harden_ps1():
         "# EPMA USB CREATOR - optional hardened setup for Windows 11 (recommended settings inspired by common",
         "# baselines; this is NOT a compliance profile). Runs once from SetupComplete.cmd as SYSTEM, can be run",
         "# again at any time and changes nothing that is already set. PowerShell 5.1; no network access, no",
-        "# downloads, no extra tools (auditpol.exe is part of Windows). Every setting has its own error handler",
-        "# and writes one line: [OK], [SKIP] or [FAIL], what it is, and why. Output goes to",
+        "# downloads, no extra tools (auditpol.exe and wevtutil.exe are part of Windows). Every setting has its own",
+        "# error handler and writes one line: [OK], [SKIP], [WARN] or [FAIL], what it is, and why. Output goes to",
         "# " + WINDOWS_HARDENING_LOG + " (appended by SetupComplete.cmd). The exit code is always 0.",
+        "#",
+        "# The script runs ONCE, at the end of Windows Setup, and does NOT retry. Firewall, Defender and the attack",
+        "# surface rules are read back after they are set: [OK] means the value is in effect; [WARN] means the command",
+        "# did not fail but the value is not in effect (Tamper Protection, another antivirus, Defender or the firewall",
+        "# service not ready yet). Run this file again as administrator to try those settings once more.",
         "#",
         "# Settings, each with the risk it carries:",
         *_windows_ps_comment_lines(WINDOWS_HARDENING_SETTINGS),
@@ -5056,7 +5135,7 @@ def _windows_harden_ps1():
         body.append(f"\n# setting: {sid}\n{code}\n")
     tail = (
         "\nWrite-Host ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, '"
-        " + $script:CountFail + ' failed')\n"
+        " + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')\n"
         "exit 0\n"
     )
     text = (
@@ -5071,14 +5150,14 @@ def _windows_harden_ps1():
 def hardening_files_windows(profile):
     """The files the Windows 11 install media gets for the hardened setup: {relative posix path: bytes}.
 
-    autounattend.xml (tiny, Setup stays interactive), sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd and
-    harden.ps1 (applied once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log).
+    Exactly two files, both under sources/$OEM$/$$/Setup/Scripts (Windows Setup copies `$$` to %windir%, so
+    no answer file is needed and Setup stays fully interactive): SetupComplete.cmd and harden.ps1 (applied
+    once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log).
     Empty for HARDENING_NONE; an unknown profile raises ValueError.
     """
     if not _windows_hardening_check(profile):
         return {}
     return {
-        WINDOWS_HARDENING_AUTOUNATTEND: _windows_autounattend_xml(),
         WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(),
         WINDOWS_HARDENING_PS1: _windows_harden_ps1(),
     }
