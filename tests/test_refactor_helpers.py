@@ -602,10 +602,13 @@ class SudoRefreshTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
 
     def test_loop_gives_up_after_max_seconds(self):
-        with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.01), \
-                mock.patch.object(app, "_sudo_refresh") as refresh:
-            app._sudo_refresh_loop(threading.Event(), max_seconds=0.05)
-        self.assertGreaterEqual(refresh.call_count, 1)
+        # a fake clock makes this independent of how slow the machine is: the deadline is read once at
+        # the start (t=0 -> 5), the first check is inside it, the second is past it
+        with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.001), \
+                mock.patch.object(app, "_sudo_refresh") as refresh, \
+                mock.patch.object(app.time, "monotonic", side_effect=[0.0, 1.0, 9.0]):
+            app._sudo_refresh_loop(threading.Event(), max_seconds=5)
+        self.assertEqual(refresh.call_count, 1)
 
     def test_both_helpers_run_the_loop_and_keep_their_public_attributes(self):
         with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.01), \
