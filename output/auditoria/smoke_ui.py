@@ -52,7 +52,7 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
-    "report_callback_exception", "_fit_window", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
 ]
 
@@ -196,6 +196,17 @@ try:
     except Exception as e:
         print(f"  [FALHA] progresso da criação: {type(e).__name__}: {e}")
         falhas.append("progresso da criação")
+
+    try:
+        assert str(janela.cget("menu")), "a barra de menus (Help) não foi criada"
+        janela.show_help()
+        janela.show_help(len(app.help_sections()) - 1)   # segunda chamada reaproveita a janela
+        janela._help_win.destroy()
+        janela.show_about()                                # messagebox silencioso
+        print("  [OK]    menu Help, janela de documentação e About")
+    except Exception as e:
+        print(f"  [FALHA] menu Help: {type(e).__name__}: {e}")
+        falhas.append("menu Help")
 
     app.messagebox = messagebox_real
     print(f"\n  ({len(dialogos_chamados)} diálogos interceptados, nenhum exibido)")

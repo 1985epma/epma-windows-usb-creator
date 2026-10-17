@@ -48,6 +48,7 @@ import json
 import logging
 import logging.handlers
 import os
+import pathlib
 import platform
 import plistlib
 import re
@@ -84,8 +85,9 @@ else:
 try:
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
+    from tkinter import font as tkfont
 except ImportError:
-    tk = ttk = filedialog = messagebox = None
+    tk = ttk = filedialog = messagebox = tkfont = None
 
 __version__ = "1.1.0"
 
@@ -95,6 +97,7 @@ IS_LINUX = platform.system() == "Linux"
 APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as the Linux window class
 
 MS_DOWNLOAD_PAGE = "https://www.microsoft.com/en-us/software-download/windows11"
+PROJECT_URL = "https://github.com/1985epma/epma-windows-usb-creator"
 FAT32_MAX_FILE_SIZE = 4_294_967_295  # 4GB - 1 byte
 CHUNK_SIZE = 1024 * 1024
 VOL_NAME = "WIN11USB"
@@ -434,6 +437,14 @@ PT_BR = {
         "Não foi possível concluir a operação.\n\nMotivo: {reason}\n\n"
         "O detalhe técnico completo foi gravado na caixa de log abaixo e no "
         "log de auditoria em:\n{path}",
+    "EPMA USB CREATOR Help": "Ajuda do EPMA USB CREATOR",
+    "Open the audit log folder": "Abrir a pasta do log de auditoria",
+    "Project page (GitHub)": "Página do projeto (GitHub)",
+    "About EPMA USB CREATOR": "Sobre o EPMA USB CREATOR",
+    "Help": "Ajuda",
+    "Close": "Fechar",
+    "Audit log": "Log de auditoria",
+    "Could not open the folder: {reason}": "Não foi possível abrir a pasta: {reason}",
 }
 
 
@@ -2789,6 +2800,223 @@ def set_macos_app_name(name):
 _TkBase = tk.Tk if tk else object  # lets the module import (engine, CLI) without Tk
 
 
+# ============================================================
+# Built-in documentation (Help menu)
+#
+# The text lives here, as data, so tests can check it against the code: every command
+# line command, exit code, environment variable and risk threshold it mentions comes
+# from the same constants the program uses. The documentation is in English only.
+# ============================================================
+def help_sections():
+    """Return the documentation as a list of (title, body). Lines starting with "## " are
+    sub-headings and lines starting with "• " are bullets (see App._render_help)."""
+    audit_path = audit_log_path()
+    large_gb = LARGE_DISK_BYTES // 1024 ** 3
+    used_gb = SUBSTANTIAL_USED_BYTES // 1024 ** 3
+    hosts = ", ".join(DEFAULT_TRUSTED_ISO_HOSTS)
+    return [
+        ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
+
+## Two image types
+• Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
+• Linux / other hybrid ISO — writes the ISO byte for byte to the whole drive (like dd). Use it for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images. An ISO that cannot boot from a USB drive is refused before anything is erased.
+
+## What always happens
+• Only drives attached over USB are offered. The system disk and internal disks are never listed.
+• Everything on the selected drive is erased. Nothing is kept.
+• After writing, the drive is read back and compared with the ISO. Only a drive that passes is ejected.
+
+## Where things are
+• Tab 1 "Download ISO": get the Windows 11 ISO, or pick an ISO you already have, and check its SHA-256.
+• Tab 2 "Create USB drive": choose the drive and write it.
+• Help menu: this documentation, the audit log folder, the project page and About."""),
+
+        ("Quick start: Windows 11", """## 1. Get the ISO (tab 1)
+• Click "Open Microsoft's official page". Under "Download Windows 11 Disk Image (ISO)" choose "Windows 11 (multi-edition ISO)", pick the language and confirm.
+• Right-click the blue 64-bit button and choose "Copy Link Address". Do not click it to download in the browser.
+• Paste the link into "Direct ISO link". If Microsoft shows a SHA-256 checksum, paste it into "Expected SHA-256" so the download is checked automatically.
+• Click "Download ISO" and choose where to save it.
+• Already have the ISO? Click "Select existing ISO file..." instead.
+
+## 2. Write the drive (tab 2)
+• The dependency line must say "All dependencies OK". If something is missing, click "Install missing dependencies".
+• Plug in the USB drive (8 GB or more) and click "Refresh USB drives list". Select your drive.
+• Image type "Windows 11" is preselected when the ISO is a Windows installer.
+• Click "Create Bootable USB Drive", read the confirmation (model, size, volumes) and confirm.
+• Wait for the progress bar. When the log says the drive was verified and ejected, unplug it.
+
+## 3. Boot from it
+• The computer must start in UEFI mode (not Legacy/CSM). The drive is UEFI + GPT only.
+• This tool does not bypass the Windows 11 requirements (TPM 2.0, Secure Boot)."""),
+
+        ("Quick start: Linux and other ISOs", """## 1. Choose the ISO (tab 1)
+• Download the ISO from your distribution's website, then click "Select existing ISO file...".
+• Optional but recommended: in "Verify the selected ISO (SHA-256)" paste the checksum published by the distribution (or the whole line from its SHA256SUMS file) and click "Calculate SHA-256". Continue only on MATCH.
+
+## 2. Write the drive (tab 2)
+• Image type must be "Linux / other hybrid ISO" (preselected when the contents are not a Windows installer).
+• Plug in the drive, click "Refresh USB drives list", select it, and click "Create Bootable USB Drive".
+• Confirm. The administrator password is requested before the drive is touched.
+• The ISO is written, then read back and compared, then the drive is ejected.
+
+## 3. On macOS: the drive will not appear in Finder
+• macOS cannot read Linux (ISO 9660 / ext) images, so Finder shows nothing and macOS may say "The disk you attached was not readable".
+• Click "Ignore". Never click "Initialize" — it would erase what was just written.
+• This is normal. The content was already verified byte for byte."""),
+
+        ("Tab 1: Download ISO", """## Direct ISO link
+• Only https:// links are accepted: an unencrypted link could be altered on the way.
+• Links to servers outside Microsoft's known download hosts (@HOSTS@) show a warning. Download Windows only from Microsoft.
+
+## Expected SHA-256 (optional)
+• 64 hexadecimal characters. If the downloaded file does not match, it is discarded.
+
+## Download controls
+• The bar shows percentage, speed and time left.
+• "Cancel" keeps the partial file. Downloading to the same file again resumes where it stopped when the server supports it, and temporary network errors are retried up to 3 times.
+• A file that fails the checksum is deleted.
+
+## Select existing ISO file...
+• The type of image (Windows or Linux) is detected from the contents of the ISO, not from its name. You can still change it on tab 2.
+
+## Verify the selected ISO (SHA-256)
+• Appears after an ISO is selected. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
+• MATCH (green): the file is identical to the published one. MISMATCH (red): do not use it.
+• With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts)),
+
+        ("Tab 2: Create USB drive", f"""## Image type
+• Windows 11 (GPT + FAT32, files copied) or Linux / other hybrid ISO (written directly). It is preselected from the ISO contents; you can change it.
+
+## Dependencies
+• Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
+• Linux mode needs nothing extra.
+• "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
+
+## The drive list
+• Each entry shows the device, its model, size and volumes, for example "/dev/disk4 — SanDisk Ultra — 58.6 GB — 2 volumes ('Untitled', 'EFI')". Click "Refresh USB drives list" after plugging a drive in.
+
+## The confirmation
+• The dialog shows model, size and every volume with its used space, so you can recognise the drive.
+• Drives that do not look like a spare stick need you to type their identifier (for example disk4). That applies to drives larger than {large_gb} GB, with {used_gb} GB or more in use, with a name that suggests backups or personal data, that look like an external hard disk or SSD, with {MANY_VOLUMES} or more volumes, or whose contents could not be read.
+
+## Administrator password
+• Needed on Linux, and on macOS for the Linux (direct write) mode. It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• It is used only to run local disk commands. It is not stored, logged or sent anywhere.
+
+## Progress, Cancel and the log
+• The bar shows the percentage, speed and time left while writing and while verifying. Some steps (comparing files) show a moving bar without a percentage.
+• "Cancel" stops the operation. The drive is then left unusable until it is written again.
+• The black box shows every command that runs. Keep it if you need to report a problem."""),
+
+        ("Safety", """## What protects you
+• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. Disks that hold the system (/, /boot, /home, /usr, /var, /etc) are never listed.
+• You see the model, size and contents before erasing. Large or data-filled drives need the identifier typed.
+• Right before erasing, the drive is looked up again and must still be the same device (size, serial number, model). If it was swapped, the operation stops.
+• A privileged command that fails is never run a second time on its own.
+• The result is verified before the drive is ejected.
+• The administrator password is checked up front and is not kept in memory for the whole operation.
+
+## What it cannot do for you
+• It cannot tell which of your USB drives you meant. Read the model, size and volumes in the confirmation every time.
+• It erases the whole drive, including partitions macOS or Linux may not show.
+• A drive that was canceled or interrupted mid-write is not usable until written again."""),
+
+        ("Verification and eject", """## Verification
+• Linux mode: the whole image is read back from the drive and compared byte for byte with the ISO.
+• Windows mode: the drive is unmounted and mounted again so it is read from the device, then every file is compared by checksum with the ISO. A split install image is also checked with wimlib-imagex verify.
+• Verification cannot be skipped. If anything differs, the drive is NOT ejected, the message says so, and the drive must not be used. Write it again; if it keeps failing, try another USB port or another drive.
+
+## Eject
+• After a successful verification the drive is ejected. If it is busy, the program unmounts it by force and tries again.
+• The log ends with "Drive ejected — you can unplug it now." When it says the drive could not be ejected, eject it from Finder or your file manager before unplugging.
+• Always wait for that message before pulling the drive out."""),
+
+        ("Command line", f"""The same engine works without the window. Run the program with a command (no Tkinter needed):
+
+## Commands
+• list [--json] — USB drives that can be used.
+• detect ISO [--json] — prints windows, linux or unknown.
+• sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
+• write --iso ISO --disk DISK [--mode auto|windows|linux] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
+• gui, or no command — open this window.
+• --version, --help — program version and the full help.
+
+## write
+• --dry-run shows the plan and changes nothing. It is the safest way to try a command.
+• Without --yes you are asked to type the disk identifier. When there is no terminal, --yes is required.
+• Verification is always performed. There is no option to skip it.
+
+## Exit codes
+• {EXIT_OK} success
+• {EXIT_ERROR} generic error
+• {EXIT_USAGE} wrong usage or missing confirmation
+• {EXIT_VERIFY_FAILED} verification failed or checksum mismatch
+• {EXIT_EJECT_FAILED} written and verified, but the drive could not be ejected
+• {EXIT_INTERRUPTED} interrupted (Ctrl-C)
+
+Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is honored."""),
+
+        ("Troubleshooting", """## No drive appears in the list
+• Only USB drives are listed (SD cards, internal disks and the system disk never are). Check the connection and click "Refresh USB drives list".
+
+## The drive does not show in Finder after a Linux ISO (macOS)
+• Expected. See "Quick start: Linux and other ISOs". Click Ignore, never Initialize.
+
+## "Verification FAILED"
+• The drive does not match the ISO. It was not ejected and must not be used. Write it again; try another port or drive if it repeats.
+
+## "Aborted for safety: /dev/... is no longer listed as an external drive"
+• The drive changed between choosing it and writing. Refresh the list and select it again.
+
+## "Could not find sources/install.wim or sources/install.esd on the ISO"
+• The ISO is not a Windows installation image. Download the official multi-edition ISO from Microsoft, or use the Linux mode for a Linux ISO.
+
+## "This ISO is not a bootable hybrid image"
+• Linux mode needs a hybrid image. Current Ubuntu, Debian, Fedora, Mint and Arch ISOs are. A Windows ISO needs the Windows mode.
+
+## "wimlib-imagex not found"
+• Install wimlib (macOS: brew install wimlib) or use "Install missing dependencies".
+
+## "Neither 'sudo' nor 'pkexec' was found"
+• Install sudo, or run the program as root.
+
+## "Tkinter is not available for this Python installation"
+• Install Tk for your Python (macOS: brew install python-tk@3.13; Debian/Ubuntu: sudo apt install python3-tk).
+
+## The computer does not boot from the drive
+• Windows drives are UEFI + GPT only: choose the UEFI entry in the boot menu and make sure Legacy/CSM is off.
+
+## A cancel or crash during writing
+• The drive is unusable until it is written again. Nothing else is affected."""),
+
+        ("Files, logs and settings", f"""## Audit log
+• Every destructive operation is recorded with its start, result and the SHA-256 of the ISO, together with security events such as hidden disks and rejected identifiers. Passwords are never logged.
+• Location: {audit_path}
+• It rotates at 1 MB (5 files are kept) and is readable only by you. "Help > Open the audit log folder" opens it.
+
+## Environment variables (all optional)
+• {ENV_AUDIT_LOG} — another path for the audit log.
+• {ENV_DISABLE_AUDIT_LOG} — set to 1 to turn the audit log off.
+• {ENV_TRUSTED_HOSTS} — comma-separated list of trusted download hosts (replaces the Microsoft list).
+• {ENV_ALLOW_ANY_HOST} — set to 1 to silence the unrecognised-server warning. This lowers security.
+• {ENV_EXPECTED_SHA256} — pre-fills the expected checksum field on tab 1.
+• {ENV_LANG} — set to pt for a Brazilian Portuguese window. The default is US English whatever the system language.
+
+## Privacy
+• No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO download you ask for."""),
+
+        ("About", f"""EPMA USB CREATOR {__version__}
+Writes verified bootable USB drives from Windows 11 and Linux ISOs on macOS and Linux.
+
+Platform: {platform_display_name()}
+License: GNU General Public License v3 or later
+Copyright (C) 2026 EPMA
+Project: {PROJECT_URL}
+
+The program has no third-party dependencies: it uses only the Python standard library."""),
+    ]
+
+
 class App(_TkBase):
     def __init__(self):
         if tk is None:
@@ -2806,6 +3034,8 @@ class App(_TkBase):
         self._log_lock = threading.Lock()
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
+        self._help_win = None
+        self._build_menu()
         self._build_ui()
         self._fit_window()
         self.after(LOG_FLUSH_MS, self._log_tick)
@@ -3011,6 +3241,113 @@ class App(_TkBase):
         path = filedialog.askopenfilename(title=_("Select the Windows 11 ISO file"), filetypes=[(_("ISO image"), "*.iso")])
         if path:
             self.set_iso(path)
+
+    # ---------- Help menu and built-in documentation ----------
+    def _build_menu(self):
+        menubar = tk.Menu(self)
+        # name="help" lets macOS treat it as the system Help menu.
+        help_menu = tk.Menu(menubar, name="help", tearoff=False)
+        help_menu.add_command(label=_("EPMA USB CREATOR Help"), accelerator="F1", command=self.show_help)
+        help_menu.add_separator()
+        help_menu.add_command(label=_("Open the audit log folder"), command=self.open_audit_log_folder)
+        help_menu.add_command(label=_("Project page (GitHub)"), command=self.open_project_page)
+        if not IS_MAC:  # on macOS "About" lives in the application menu (see createcommand below)
+            help_menu.add_separator()
+            help_menu.add_command(label=_("About EPMA USB CREATOR"), command=self.show_about)
+        menubar.add_cascade(label=_("Help"), menu=help_menu)
+        self.config(menu=menubar)
+        self.bind_all("<F1>", lambda _event: self.show_help())
+        if IS_MAC:
+            self.createcommand("tk::mac::ShowHelp", self.show_help)
+            self.createcommand("tkAboutDialog", self.show_about)
+
+    def show_help(self, section=0):
+        """Open the documentation window (or bring it to the front) on the given section."""
+        sections = help_sections()
+        win = self._help_win
+        if win is not None and win.winfo_exists():
+            win.deiconify()
+            win.lift()
+            win.focus_force()
+            win._select(section)
+            return
+        win = tk.Toplevel(self)
+        win.title(_("EPMA USB CREATOR Help"))
+        win.geometry("880x640")
+        win.minsize(640, 420)
+        style = ttk.Style(win)
+        bg = style.lookup("TLabel", "background") or "#ececec"
+        fg = style.lookup("TLabel", "foreground") or "#000000"
+
+        body = ttk.Frame(win)
+        body.pack(fill="both", expand=True, padx=8, pady=8)
+        body.columnconfigure(1, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        nav = tk.Listbox(body, width=28, exportselection=False, activestyle="none", bg=bg, fg=fg,
+                         highlightthickness=0, borderwidth=0)
+        nav.grid(row=0, column=0, sticky="ns", padx=(0, 8))
+        for title, _body in sections:
+            nav.insert("end", title)
+
+        text = tk.Text(body, wrap="word", bg=bg, fg=fg, insertbackground=fg, borderwidth=0,
+                       highlightthickness=0, padx=14, pady=10, spacing1=2, spacing3=2, cursor="arrow")
+        scroll = ttk.Scrollbar(body, orient="vertical", command=text.yview)
+        text.configure(yscrollcommand=scroll.set)
+        text.grid(row=0, column=1, sticky="nsew")
+        scroll.grid(row=0, column=2, sticky="ns")
+        base = tkfont.nametofont("TkDefaultFont")
+        text.tag_configure("h2", font=(base.actual("family"), base.actual("size") + 1, "bold"),
+                           spacing1=10, spacing3=3)
+        text.tag_configure("bullet", lmargin1=12, lmargin2=28)
+        text.tag_configure("title", font=(base.actual("family"), base.actual("size") + 5, "bold"), spacing3=8)
+
+        def select(index):
+            index = max(0, min(int(index), len(sections) - 1))
+            nav.selection_clear(0, "end")
+            nav.selection_set(index)
+            nav.see(index)
+            self._render_help(text, *sections[index])
+
+        win._select = select
+        nav.bind("<<ListboxSelect>>", lambda _e: select(nav.curselection()[0]) if nav.curselection() else None)
+        ttk.Button(win, text=_("Close"), command=win.destroy).pack(anchor="e", padx=10, pady=(0, 10))
+        win.bind("<Escape>", lambda _e: win.destroy())
+        self._help_win = win
+        select(section)
+        win.lift()
+        win.focus_force()
+
+    @staticmethod
+    def _render_help(text, title, body):
+        """Show one documentation section in the (read-only) Text widget."""
+        text.configure(state="normal")
+        text.delete("1.0", "end")
+        text.insert("end", title + "\n", "title")
+        for line in body.split("\n"):
+            if line.startswith("## "):
+                text.insert("end", line[3:] + "\n", "h2")
+            elif line.startswith("• "):
+                text.insert("end", line + "\n", "bullet")
+            else:
+                text.insert("end", line + "\n")
+        text.configure(state="disabled")
+        text.yview_moveto(0)
+
+    def show_about(self):
+        about = dict(help_sections())["About"]
+        messagebox.showinfo(_("About EPMA USB CREATOR"), about)
+
+    def open_audit_log_folder(self):
+        folder = os.path.dirname(audit_log_path())
+        try:
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            webbrowser.open(pathlib.Path(folder).as_uri())
+        except OSError as e:
+            messagebox.showerror(_("Audit log"), _("Could not open the folder: {reason}").format(reason=e))
+
+    def open_project_page(self):
+        webbrowser.open(PROJECT_URL)
 
     def _fit_window(self):
         """Grow the window height (never shrink it) so everything on the current tab is visible.

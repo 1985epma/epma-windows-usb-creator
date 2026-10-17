@@ -44,6 +44,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **SHA-256 check for an ISO you already have** (paste the expected value or a `SHA256SUMS` line).
 - **Resumable downloads** with automatic retries.
 - **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
+- **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for both tabs, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
 - **Real-time log** of every command executed, inside the application window.
 

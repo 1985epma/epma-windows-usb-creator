@@ -46,6 +46,7 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 - **Conferência SHA-256 de uma ISO que você já tem** (cole o valor esperado ou uma linha de `SHA256SUMS`).
 - **Download com retomada** e novas tentativas automáticas.
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
+- **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, referência das duas abas, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela.
 
 ## Como funciona
