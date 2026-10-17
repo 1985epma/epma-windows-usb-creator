@@ -142,6 +142,12 @@ ALL_MODES = (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS)
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
 MODE_AUTO = "auto"  # command line only: take the mode from what detect_iso_kind() finds in the image
+MODE_SEED = "seed"  # a drive that carries only the hardening seed files (no operating system image)
+HARDENING_NONE = "none"
+HARDENING_BASELINE = "baseline"
+HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
+SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -152,10 +158,13 @@ ISO_KIND_UNKNOWN = "unknown"
 KIND_UNKNOWN = ISO_KIND_UNKNOWN
 KIND_MODE = {ISO_KIND_WINDOWS: MODE_WINDOWS, ISO_KIND_LINUX: MODE_LINUX, ISO_KIND_CHROMEOS: MODE_CHROMEOS}
 
-# The four choices at the top of the window ("cards"), and how each one writes the drive.
+# The choices at the top of the window ("cards"), and how each one writes the drive. Four of them are image
+# types; the fifth, "Hardening seed", needs no image: it makes a second, small drive with auto-install files.
 CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER = "chrome", "windows", "linux", "other"
-CARD_ORDER = (CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER)
-CARD_MODE = {CARD_CHROME: MODE_CHROMEOS, CARD_WINDOWS: MODE_WINDOWS, CARD_LINUX: MODE_LINUX, CARD_OTHER: MODE_LINUX}
+CARD_SEED = "seed"
+CARD_ORDER = (CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER, CARD_SEED)
+CARD_MODE = {CARD_CHROME: MODE_CHROMEOS, CARD_WINDOWS: MODE_WINDOWS, CARD_LINUX: MODE_LINUX, CARD_OTHER: MODE_LINUX,
+             CARD_SEED: MODE_SEED}
 # The card a detected image selects (a hybrid image keeps "Other ISO" when that one is already chosen).
 KIND_CARD = {ISO_KIND_CHROMEOS: CARD_CHROME, ISO_KIND_WINDOWS: CARD_WINDOWS, ISO_KIND_LINUX: CARD_LINUX}
 LOG_MAX_LINES = 5000   # the on-screen log keeps only this many lines
@@ -545,6 +554,39 @@ PT_BR = {
     "The content of this image could not be identified, so the image type was not changed. Check that the selected card ({card}) is the right one.": "Não foi possível identificar o conteúdo desta imagem, então o tipo de imagem não foi alterado. Confira se o cartão selecionado ({card}) é o correto.",
     "Not much free space": "Pouco espaço livre",
     "The download (about 1.4 GB) and the extracted image (about 9.5 GB) need roughly {need} free in this folder, and only {free} is available. It may fail part-way.\n\nContinue anyway?": "O download (cerca de 1,4 GB) e a imagem extraída (cerca de 9,5 GB) precisam de aproximadamente {need} livres nesta pasta, e há só {free}. Pode falhar no meio.\n\nContinuar mesmo assim?",
+    # ===== hardening: GUI =====
+    "Hardening seed": "Kit de reforço",
+    "Auto-install files": "Instalação automática",
+    "Add hardening settings to the Windows installation (optional)": "Adicionar ajustes de segurança à instalação do Windows (opcional)",
+    "Adds a few files to the same drive so Windows setup starts from safer settings.": "Adiciona alguns arquivos ao mesmo pendrive para que a instalação do Windows comece com ajustes mais seguros.",
+    "What does it change?": "O que isto altera?",
+    "Hide the list": "Ocultar a lista",
+    "Firewall on for every network profile.": "Firewall ativado em todos os perfis de rede.",
+    "Microsoft Defender protections and SmartScreen on.": "Proteções do Microsoft Defender e SmartScreen ativados.",
+    "The old SMBv1 file-sharing protocol off.": "Protocolo antigo de compartilhamento de arquivos SMBv1 desativado.",
+    "Autorun off for removable drives.": "Execução automática desativada em unidades removíveis.",
+    "Remote Assistance off.": "Assistência Remota desativada.",
+    "Every change is written to a log on the computer. You choose the disk, the account and the edition during setup as usual.": "Cada alteração é registrada em um log no computador. Você escolhe o disco, a conta e a edição durante a instalação, como de costume.",
+    "Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, hardened Linux install. Write the installer to its own drive with the Linux card, then plug both drives into the computer you install on. The files never choose or erase a disk on that computer: you still pick the disk and create the account yourself. No image file is needed; writing this drive ERASES it.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para uma instalação automática e reforçada do Linux. Grave o instalador no pendrive dele com o cartão Linux e depois conecte os dois pendrives ao computador onde vai instalar. Os arquivos nunca escolhem nem apagam um disco desse computador: você continua escolhendo o disco e criando a conta. Não é preciso nenhum arquivo de imagem; gravar este pendrive o APAGA.",
+    "Install target:": "Sistema de destino:",
+    "Ubuntu (autoinstall)": "Ubuntu (autoinstall)",
+    "Fedora / RHEL (kickstart)": "Fedora / RHEL (kickstart)",
+    "Debian (script + preseed)": "Debian (script + preseed)",
+    "Ubuntu's installer looks for settings on a drive labelled CIDATA. It still asks for the disk and your account.": "O instalador do Ubuntu procura os ajustes em um pendrive com o nome CIDATA. Ele continua perguntando o disco e a sua conta.",
+    "The installer looks for a kickstart file on a drive labelled OEMDRV. It still asks for the disk and your account.": "O instalador procura um arquivo kickstart em um pendrive com o nome OEMDRV. Ele continua perguntando o disco e a sua conta.",
+    "Debian does not look for the drive by itself: the README on it explains the boot parameter, and the script to run after the install is on it too.": "O Debian não procura o pendrive sozinho: o README nele explica o parâmetro de inicialização, e o script para rodar depois da instalação também está nele.",
+    "Create Seed Drive": "Criar o pendrive do kit",
+    "Image remembered: {name}. The Hardening seed card does not use it; choose the matching card to write it.": "Imagem guardada: {name}. O cartão Kit de reforço não a usa; escolha o cartão correspondente para gravá-la.",
+    "Choose which system the seed drive is for. Nothing was changed.": "Escolha para qual sistema é o pendrive do kit. Nada foi alterado.",
+    "the hardening seed files": "os arquivos do kit de reforço",
+    "Windows 11 and add the hardening files": "o Windows 11 e adicionar os arquivos de reforço",
+    "Canceled during verification. The seed files were written but NOT verified; do not rely on this drive.": "Cancelado durante a verificação. Os arquivos do kit foram gravados, mas NÃO verificados; não confie neste pendrive.",
+    "The operation was canceled during verification.\n\nThe seed files were written to the drive but NOT verified, so do not rely on it. Create it again to verify it.": "A operação foi cancelada durante a verificação.\n\nOs arquivos do kit foram gravados no pendrive, mas NÃO verificados; portanto, não confie nele. Crie-o novamente para verificá-lo.",
+    "The seed files were checked on the drive and it was ejected — you can unplug it now. Plug it in next to the installer USB drive before you start the installation.": "Os arquivos do kit foram conferidos no pendrive e ele foi ejetado — você já pode removê-lo. Conecte-o junto com o pendrive instalador antes de iniciar a instalação.",
+    "The seed files were checked on the drive, but it could not be ejected automatically. Eject it from the file manager before unplugging, then plug it in next to the installer USB drive before you start the installation.": "Os arquivos do kit foram conferidos no pendrive, mas ele não pôde ser ejetado automaticamente. Ejete-o pelo gerenciador de arquivos antes de removê-lo e depois conecte-o junto com o pendrive instalador antes de iniciar a instalação.",
+    "Seed drive created and verified": "Pendrive do kit criado e verificado",
+    "The hardening files were added to the drive.": "Os arquivos de reforço foram adicionados ao pendrive.",
+    # ===== end hardening: GUI =====
 }
 
 
@@ -3628,7 +3670,7 @@ class _LazyLabel(_LabelBase):
 
 
 class OptionCard(_CanvasBase):
-    """A square, clickable choice: one of the four image types at the top of the window.
+    """A square, clickable choice: one of the cards (image types and the hardening seed) at the top of the window.
 
     Drawn on a canvas so it looks the same on macOS and Linux and follows the light/dark
     theme. It works from the keyboard too (Tab to focus, Space/Return to choose). The symbols
@@ -3728,11 +3770,26 @@ class OptionCard(_CanvasBase):
             self.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, fill=glyph, outline=glyph)
         elif self.key == CARD_LINUX:            # a terminal prompt
             self.create_text(cx, cy, text=">_", fill=glyph, font=("Menlo", 26, "bold"))
+        elif self.key == CARD_SEED:             # a shield with a tick: the hardening seed
+            self.create_polygon(cx, cy - 21, cx + 17, cy - 14, cx + 17, cy + 2, cx + 10, cy + 14, cx, cy + 21,
+                                cx - 10, cy + 14, cx - 17, cy + 2, cx - 17, cy - 14, outline=glyph, fill="",
+                                width=3, joinstyle="round")
+            self.create_line(cx - 8, cy, cx - 2, cy + 7, cx + 8, cy - 6, fill=glyph, width=3, capstyle="round",
+                             joinstyle="round")
         else:                                   # a disc
             self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, outline=glyph, width=3)
             self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, outline=glyph, width=3)
-        self.create_text(cx, 82, text=self._title, fill=text_color, font=self._title_font)
-        self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._sub_font)
+        self.create_text(cx, 82, text=self._title, fill=text_color, font=self._fit_font(self._title_font, self._title))
+        self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._fit_font(self._sub_font, self._subtitle))
+
+    def _fit_font(self, font, text):
+        """`font` (a family, size[, style] tuple), made smaller until `text` fits inside the card (never below
+        8 pt): five cards share the width of the window, so a longer title or a translation must not overflow."""
+        family, size, *style = font
+        room = self._cw - 16
+        while size > 8 and tkfont.Font(family=family, size=size, weight="bold" if style else "normal").measure(text) > room:
+            size -= 1
+        return (family, size, *style)
 
 
 class AccentButton(_CanvasBase):
@@ -4424,7 +4481,7 @@ class App(_TkBase):
         row = ttk.Frame(page)
         row.pack(fill="x", pady=(0, 10))
         self.cards_row = row
-        for column in range(4):  # four equal columns sharing the window width
+        for column in range(len(CARD_ORDER)):  # equal columns sharing the window width
             row.columnconfigure(column, weight=1, uniform="cards")
         self.card_var = tk.StringVar(value=CARD_WINDOWS)
         self.mode_var = tk.StringVar(value=MODE_WINDOWS)
@@ -4435,9 +4492,12 @@ class App(_TkBase):
             (CARD_WINDOWS, _("Windows 11"), _("Copies the files")),
             (CARD_LINUX, _("Linux"), _("Ubuntu, Fedora...")),
             (CARD_OTHER, _("Other ISO"), _("Any bootable image")),
+            (CARD_SEED, _("Hardening seed"), _("Auto-install files")),
         )):
             card = OptionCard(row, key, title, subtitle, self.select_card)
-            card.grid(row=0, column=column, sticky="ew", padx=((0, 9), (3, 6), (6, 3), (9, 0))[column])  # 9 px of gap in every cell
+            # Worked out for five cards: each card is its cell minus 10 px wide and two neighbours are 12 px
+            # apart (the left padding grows by 2 px per column, the right one shrinks by 2 px).
+            card.grid(row=0, column=column, sticky="ew", padx=(2 * column, 10 - 2 * column))
             self.cards[key] = card
             self.card_titles[key] = title
 
@@ -4503,6 +4563,7 @@ class App(_TkBase):
             side="left", padx=(0, 12))
         self.download_btn = ttk.Button(btns, text=_("Download ISO"), command=self.start_download)
         self.download_btn.pack(side="left")
+        self._build_hardening_option(f)
         self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
         self.progress_label = _LazyLabel(f, anchor="w")  # takes no room while it has no text
@@ -4521,11 +4582,144 @@ class App(_TkBase):
                    "file below. Images that cannot boot from a USB drive are refused before anything is erased.")
         ).pack(anchor="nw")
 
+        self._build_seed_panel(self.panels[CARD_SEED])
+
         for panel in self.panels.values():
             panel.grid_remove()
         # The progress bars appear only when a download runs.
         self.windows_dl.hide_bar()
         self.flex_dl.hide_bar()
+
+    # ===== hardening: GUI =====
+    # The Windows option (a checkbox on the Windows 11 card) and the "Hardening seed" card. The files themselves
+    # and the writing of the second drive come from the engine (hardening_files_*, build_usb(hardening=...),
+    # build_seed_usb); this part only asks for them and goes through the same safety flow as every other write.
+    @staticmethod
+    def seed_target_texts():
+        """(target, translated name) for the three radio buttons of the Hardening seed card."""
+        return (
+            (SEED_UBUNTU, _("Ubuntu (autoinstall)")),
+            (SEED_FEDORA, _("Fedora / RHEL (kickstart)")),
+            (SEED_DEBIAN, _("Debian (script + preseed)")),
+        )
+
+    def _build_hardening_option(self, panel):
+        """The optional hardening checkbox of the Windows 11 card: off by default, remembered only while the
+        program runs (the variable lives as long as the window), with a one-line explanation and a link that
+        lists what it changes."""
+        self.hardening_var = tk.BooleanVar(self, value=False)  # master=self: never another window's interpreter
+        box = ttk.Frame(panel)
+        box.pack(fill="x", pady=(10, 0))
+        self.hardening_check = ttk.Checkbutton(
+            box, text=_("Add hardening settings to the Windows installation (optional)"),
+            variable=self.hardening_var)
+        self.hardening_check.pack(anchor="w")
+        ttk.Label(
+            box, justify="left", wraplength=PANEL_WRAP - 24, foreground="#8e8e93",
+            text=_("Adds a few files to the same drive so Windows setup starts from safer settings.")
+        ).pack(anchor="w", padx=(24, 0))
+        self.hardening_toggle = _Disclosure(box, _("What does it change?"), _("Hide the list"),
+                                            self._on_hardening_details_toggled)
+        self.hardening_toggle.pack(anchor="w", padx=(24, 0), pady=(2, 0))
+        self.hardening_details = ttk.Label(box, justify="left", wraplength=PANEL_WRAP - 40, text="")
+
+    @staticmethod
+    def _hardening_details_text():
+        """The list of settings the Windows option applies: the engine's own description when it has one, else
+        the short list below. KEEP IN SYNC with what hardening_files_windows() does."""
+        try:
+            described = describe_hardening_windows(HARDENING_BASELINE)  # noqa: F821 - written by the engine part
+        except NameError:
+            described = None
+        if isinstance(described, str):
+            lines = [line for line in described.splitlines() if line.strip()]
+        elif described:
+            lines = [str(line) for line in described]
+        else:
+            lines = [
+                _("Firewall on for every network profile."),
+                _("Microsoft Defender protections and SmartScreen on."),
+                _("The old SMBv1 file-sharing protocol off."),
+                _("Autorun off for removable drives."),
+                _("Remote Assistance off."),
+            ]
+        lines = [line if line.startswith("•") else "• " + line for line in lines]
+        footer = _("Every change is written to a log on the computer. You choose the disk, the account and the "
+                   "edition during setup as usual.")
+        return "\n".join([*lines, "", footer])
+
+    def _on_hardening_details_toggled(self, is_open):
+        if is_open:
+            self.hardening_details.config(text=self._hardening_details_text())
+            self.hardening_details.pack(anchor="w", padx=(24, 0), pady=(2, 0), after=self.hardening_toggle)
+        else:
+            self.hardening_details.pack_forget()
+        self.after_idle(self._fit_window)
+
+    def hardening_selected(self, mode=None):
+        """HARDENING_BASELINE when the Windows option is ticked and Windows is what is written, else HARDENING_NONE.
+        The tick is ignored on every other card (it is only shown on the Windows one)."""
+        mode = mode or self.mode_var.get()
+        return HARDENING_BASELINE if (mode == MODE_WINDOWS and self.hardening_var.get()) else HARDENING_NONE
+
+    def _build_seed_panel(self, panel):
+        """The "Hardening seed" card: what the second drive is, and which system it is for. No image file."""
+        ttk.Label(
+            panel, justify="left", wraplength=PANEL_WRAP,
+            text=_("Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, "
+                   "hardened Linux install. Write the installer to its own drive with the Linux card, then plug "
+                   "both drives into the computer you install on. The files never choose or erase a disk on "
+                   "that computer: you still pick the disk and create the account yourself. No image file is "
+                   "needed; writing this drive ERASES it.")).pack(anchor="w", pady=(0, 6))
+        self.seed_target_var = tk.StringVar(self, value=SEED_UBUNTU)
+        self.seed_radios = {}
+        row = ttk.Frame(panel)
+        row.pack(fill="x")
+        ttk.Label(row, text=_("Install target:")).pack(side="left", padx=(0, 10))
+        for target, text in self.seed_target_texts():
+            radio = ttk.Radiobutton(row, text=text, value=target, variable=self.seed_target_var,
+                                    command=self._on_seed_target_changed)
+            radio.pack(side="left", padx=(0, 12))
+            self.seed_radios[target] = radio
+        self.seed_note = ttk.Label(panel, justify="left", wraplength=PANEL_WRAP, foreground="#8e8e93")
+        self.seed_note.pack(anchor="w", pady=(6, 0))
+        self._on_seed_target_changed()
+
+    def seed_target_note(self, target):
+        """One line about how the chosen system finds the seed drive."""
+        return {
+            SEED_UBUNTU: _("Ubuntu's installer looks for settings on a drive labelled CIDATA. It still asks for "
+                           "the disk and your account."),
+            SEED_FEDORA: _("The installer looks for a kickstart file on a drive labelled OEMDRV. It still asks for "
+                           "the disk and your account."),
+            SEED_DEBIAN: _("Debian does not look for the drive by itself: the README on it explains the boot "
+                           "parameter, and the script to run after the install is on it too."),
+        }.get(target, "")
+
+    def _on_seed_target_changed(self):
+        self.seed_note.config(text=self.seed_target_note(self.seed_target_var.get()))
+
+    def _apply_card_layout(self, key):
+        """What changes with the card besides its panel: the seed card needs no image, so the file row, the
+        chosen-file card and the SHA-256 link are taken off the page and the heading and the Create button say
+        what is being made."""
+        seed = CARD_MODE[key] == MODE_SEED
+        if seed != self._image_block_hidden:
+            self._image_block_hidden = seed
+            for widget in (self.image_row, self.iso_card, self.sha_toggle, self.iso_check_frame):
+                widget.pack_forget()
+            if not seed:  # back in their places, in order (each one anchored to the one above)
+                self.image_row.pack(fill="x", pady=(10, 0), after=self._panel_holder)
+                self.iso_card.pack(fill="x", pady=(6, 4), after=self.image_row)
+                if self.iso_card.has_file:
+                    self.sha_toggle.pack(anchor="w", pady=(0, 6), after=self.iso_card)
+                    if self.sha_toggle.is_open:
+                        self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.sha_toggle)
+        heading = self.step_headings[2]
+        heading.title = _("Auto-install files") if seed else _("Image")
+        heading.label.config(text=heading.title)
+        self.create_btn.config(text=_("Create Seed Drive") if seed else _("Create Bootable USB Drive"))
+    # ===== end hardening: GUI =====
 
     def _build_drive(self, page):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
@@ -4539,6 +4733,8 @@ class App(_TkBase):
     def _build_image(self, page):
         row = ttk.Frame(page)
         row.pack(fill="x", pady=(10, 0))
+        self.image_row = row  # taken off the page on the Hardening seed card (see _apply_card_layout)
+        self._image_block_hidden = False
         ttk.Label(row, text=_("Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?")).pack(side="left")
         self.pick_btn = ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso)
         self.pick_btn.pack(side="left", padx=(8, 0))
@@ -4676,7 +4872,9 @@ class App(_TkBase):
                 panel.grid()
             else:
                 panel.grid_remove()
+        self._apply_card_layout(key)
         self.on_mode_change()
+        self.after_idle(self._fit_window)  # the panels differ in height
 
     # ---------- dependencies ----------
     def on_mode_change(self):
@@ -5008,6 +5206,8 @@ class App(_TkBase):
         was erased ("could not find install.wim"); a non-ChromeOS file under "Google Chrome"
         is refused outright.
         """
+        if mode == MODE_SEED:  # the seed drive carries no image: there is nothing to compare
+            return True
         image = self.iso_path.get()
         kind = detect_iso_kind(image)
         if mode == MODE_CHROMEOS and kind != ISO_KIND_CHROMEOS:
@@ -5076,6 +5276,14 @@ class App(_TkBase):
         except OSError:
             size = None
         self.iso_card.show(path, kind, size)
+        if self.card_var.get() == CARD_SEED:
+            # The Hardening seed card needs no image and the user chose it on purpose, so a finished download
+            # does not pull them to another card: the image is only remembered for when they choose one.
+            self.log(_("Image remembered: {name}. The Hardening seed card does not use it; choose the matching "
+                       "card to write it.").format(name=os.path.basename(path)))
+            self._reset_iso_sha()
+            self.after_idle(self._fit_window)
+            return
         if kind == ISO_KIND_UNKNOWN:
             card = self.card_var.get()
             self.log(_("The content of this image could not be identified, so the image type was not changed. "
@@ -5302,11 +5510,14 @@ class App(_TkBase):
             self.cancel_create_btn.config(state="normal" if (self._download_running or self._flex_busy)
                                           else "disabled")
         self.pick_btn.config(state=busy if (creating or self._flex_busy) else "normal")
+        self.hardening_check.config(state=busy if creating else "normal")  # the choices are read when Create is clicked
+        for radio in self.seed_radios.values():
+            radio.config(state=busy if creating else "normal")
         self.install_deps_btn.config(state=busy if (creating or self._installing) else "normal")
 
     def update_create_button_state(self):
         disk = self.selected_disk()
-        has_image = bool(self.iso_path.get())
+        has_image = bool(self.iso_path.get()) or self.mode_var.get() == MODE_SEED  # the seed card needs no image
         # The tools the chosen mode needs: without them the drive would be erased and the copy would then fail.
         missing = [] if self._creating else get_missing_dependencies(self.mode_var.get())
         ok = (has_image and disk is not None and not missing and not self._creating and not self._installing
@@ -5501,9 +5712,21 @@ class App(_TkBase):
                 _("The size of this drive could not be read (it reports 0 bytes). It may be an empty card "
                   "reader or a drive that is not ready. Nothing was changed."))
             return
-        if not self._image_matches_choice(mode):
+        seed = mode == MODE_SEED
+        target = self.seed_target_var.get() if seed else None
+        if seed and target not in SEED_TARGETS:  # the radio buttons only give valid values; never trust the variable
+            messagebox.showerror(_("Hardening seed"), _("Choose which system the seed drive is for. "
+                                                        "Nothing was changed."))
             return
-        what = _image_label(mode, _("the selected Linux image"))
+        hardening = self.hardening_selected(mode)  # read once: what is confirmed is what is written
+        if not seed and not self._image_matches_choice(mode):
+            return
+        if seed:
+            what = _("the hardening seed files")
+        elif hardening != HARDENING_NONE:
+            what = _("Windows 11 and add the hardening files")
+        else:
+            what = _image_label(mode, _("the selected Linux image"))
         if mode in RAW_MODES:
             try:
                 image_size = os.path.getsize(self.iso_path.get())
@@ -5545,15 +5768,24 @@ class App(_TkBase):
 
         def worker():
             try:
-                ejected = build_usb(iso, dev, self.log_threadsafe, self.priv,
-                                    expected_size=expected_size, mode=mode,
-                                    progress=lambda d, t, s: self._post(self._on_create_progress, d, t, s),
-                                    cancel_event=self.create_cancel_event)
+                def progress(done, total, text):
+                    self._post(self._on_create_progress, done, total, text)
+
+                if seed:  # the same flow as every other write; only the engine call differs (no image)
+                    ejected = build_seed_usb(target, dev, self.log_threadsafe, self.priv,  # noqa: F821 - engine part
+                                             expected_size=expected_size, progress=progress,
+                                             cancel_event=self.create_cancel_event)
+                else:
+                    extra = {"hardening": hardening} if hardening != HARDENING_NONE else {}
+                    ejected = build_usb(iso, dev, self.log_threadsafe, self.priv,
+                                        expected_size=expected_size, mode=mode, progress=progress,
+                                        cancel_event=self.create_cancel_event, **extra)
                 self._post(self._finish_create_progress, True)
-                self._post(self._show_create_success, ejected)
+                self._post(self._show_create_success, ejected, mode, hardening)
             except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
-                log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True), getattr(e, "written", False))
+                log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True),
+                                                             getattr(e, "written", False), seed)
                 self._post(self._finish_create_progress, False, True)
                 self._post(self.log, log_text)
                 self._post(self._notify, "info", title, body)
@@ -5578,10 +5810,16 @@ class App(_TkBase):
         return True
 
     @staticmethod
-    def _canceled_texts(drive_touched, written=False):
+    def _canceled_texts(drive_touched, written=False, seed=False):
         """(log line, dialog title, dialog text) after a cancel. The engine says whether it had already
         started to change the drive (when it did not, the drive must not be called unusable) and
         whether the whole image had been written (canceled during the final check)."""
+        if drive_touched and written and seed:
+            return (_("Canceled during verification. The seed files were written but NOT verified; do not rely "
+                      "on this drive."),
+                    _("Canceled"),
+                    _("The operation was canceled during verification.\n\nThe seed files were written to the "
+                      "drive but NOT verified, so do not rely on it. Create it again to verify it."))
         if drive_touched and written:
             return (_("Canceled during verification. The image was written but NOT verified; do not rely "
                       "on this drive."),
@@ -5597,14 +5835,25 @@ class App(_TkBase):
                 _("Canceled"),
                 _("The operation was canceled.\n\nThe USB drive was NOT modified."))
 
-    def _show_create_success(self, ejected):
+    def _show_create_success(self, ejected, mode=None, hardening=HARDENING_NONE):
         """The write was verified: the inline panel replaces the old "Done" dialog. Without the eject the
-        panel is amber and says the drive must be ejected by hand before it is unplugged."""
+        panel is amber and says the drive must be ejected by hand before it is unplugged. `mode` and `hardening`
+        say what was written (the seed drive and the Windows hardening files have their own wording)."""
         if self._closing:
+            return
+        if mode == MODE_SEED:
+            note = (_("The seed files were checked on the drive and it was ejected — you can unplug it now. "
+                      "Plug it in next to the installer USB drive before you start the installation.") if ejected else
+                    _("The seed files were checked on the drive, but it could not be ejected automatically. "
+                      "Eject it from the file manager before unplugging, then plug it in next to the installer "
+                      "USB drive before you start the installation."))
+            self.show_success(_("Seed drive created and verified"), note, verified_and_ejected=bool(ejected))
             return
         note = (_("It was verified against the ISO and ejected — you can unplug it now.") if ejected else
                 _("It was verified against the ISO, but could not be ejected automatically. "
                   "Eject it from the file manager before unplugging."))
+        if hardening != HARDENING_NONE:
+            note += " " + _("The hardening files were added to the drive.")
         self.show_success(_("Bootable USB drive created successfully!"), note, verified_and_ejected=bool(ejected))
 
     def _notify(self, kind, title, message):

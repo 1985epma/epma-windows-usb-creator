@@ -45,7 +45,9 @@ class CardTests(unittest.TestCase):
 
     def test_every_card_has_a_mode_and_an_order(self):
         self.assertEqual(set(app.CARD_ORDER), set(app.CARD_MODE))
-        self.assertEqual(len(app.CARD_ORDER), 4)
+        # four image types, then the fifth card (the hardening seed), which needs no image
+        self.assertEqual(len(app.CARD_ORDER), 5)
+        self.assertEqual(app.CARD_ORDER[-1], app.CARD_SEED)
         self.assertEqual(app.CARD_ORDER[0], app.CARD_CHROME)  # Google Chrome first, as designed
 
     def test_how_each_card_writes(self):
