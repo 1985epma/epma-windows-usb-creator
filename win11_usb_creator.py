@@ -4581,6 +4581,8 @@ def chromeos_drive_too_small(mode, drive_size):
 
 
 def get_missing_dependencies(mode=MODE_WINDOWS):
+    if mode == MODE_SEED:  # the seed drive needs no ISO tools: no rsync, no wimlib (see LINUX_SEED_TOOLS)
+        return [] if IS_MAC else [t for t in LINUX_SEED_TOOLS if not shutil.which(t)]
     if mode in RAW_MODES:
         return [] if shutil.which("dd") else ["dd"]  # raw write needs nothing else
     if IS_MAC:
@@ -5330,6 +5332,400 @@ def hardening_files_seed(target, profile):
     files["README.txt"] = _seed_readme(target).encode("ascii")
     return SEED_LABELS[target], files
 # ===== end hardening: seed content =====
+
+
+# ===== hardening: engine-seed =====
+# The "seed drive": a small GPT + FAT32 drive with a special volume label that carries only the
+# hardening seed files (cloud-init / kickstart / preseed + a script). It holds no operating system,
+# so none of the ISO machinery is involved; the erase, the copy, the read-back and the eject follow
+# the Windows-mode path (macos_build_usb / linux_build_usb) and keep all of its protections.
+SEED_MAX_FILE_BYTES = 256 * 1024          # one seed file
+SEED_MAX_TOTAL_BYTES = 2 * 1024 * 1024    # all seed files together
+SEED_MAX_PATH_CHARS = 240                 # a relative path on the drive
+SEED_MAX_FILES = 128
+SEED_MIN_DRIVE_BYTES = 64 * 1024 * 1024   # a smaller drive is refused (it cannot hold a FAT32 volume anyway)
+SEED_LABEL_MAX = 11                       # FAT volume labels have 11 characters at most
+SEED_LABEL_RE = re.compile(r"[A-Z0-9_][A-Z0-9_-]{0,10}")  # used with fullmatch(); never starts with "-"
+SEED_FAT_FORBIDDEN_CHARS = frozenset('"*:<>?|')  # not allowed in a FAT long file name (slashes are handled apart)
+SEED_RESERVED_NAMES = frozenset(["CON", "PRN", "AUX", "NUL"]
+                                + [f"COM{i}" for i in range(1, 10)] + [f"LPT{i}" for i in range(1, 10)])
+# What the seed drive needs on Linux: no rsync, no wimlib-imagex (those are for copying a Windows ISO).
+LINUX_SEED_TOOLS = ["parted", "mkfs.vfat", "wipefs", "partprobe"]
+# Printed by the root seed script (exit status 0) when it stops on request: the drive was not touched yet,
+# or it was (and is now incomplete).
+SEED_UNTOUCHED_MARKER = "SEED_NOT_TOUCHED"
+SEED_CANCELED_MARKER = "SEED_CANCELED"
+
+
+def _seed_name(path):
+    """A path for an error message: short and printable, whatever it contains."""
+    text = path if len(path) <= 80 else path[:77] + "..."
+    return repr(text)
+
+
+def validate_seed_label(label):
+    """The FAT32 volume label of a seed drive: 1 to 11 characters of A-Z 0-9 _ -, not starting with "-".
+
+    Returns the label; raises ValueError otherwise. The label reaches `mkfs.vfat -n` / `diskutil eraseDisk` as
+    one separate argument, but it is validated all the same so that nothing odd can ever get that far.
+    """
+    if not isinstance(label, str) or not SEED_LABEL_RE.fullmatch(label):
+        raise ValueError(f"Invalid seed drive label {_seed_name(str(label))}: use 1 to {SEED_LABEL_MAX} characters "
+                         "from A-Z, 0-9, '_' and '-' (not starting with '-').")
+    return label
+
+
+def _check_seed_path(path):
+    """Raise ValueError unless `path` is a safe relative POSIX path that FAT32 can store."""
+    shown = _seed_name(path)
+    if not path:
+        raise ValueError("A seed file has an empty path.")
+    if "\x00" in path:
+        raise ValueError(f"Seed file path {shown} contains a NUL character.")
+    if "\\" in path:
+        raise ValueError(f"Seed file path {shown} contains a backslash; use '/' to separate folders.")
+    if len(path) > SEED_MAX_PATH_CHARS:
+        raise ValueError(f"Seed file path {shown} is longer than {SEED_MAX_PATH_CHARS} characters.")
+    if path.startswith("/"):
+        raise ValueError(f"Seed file path {shown} is absolute; it must be relative to the root of the drive.")
+    try:
+        path.encode("utf-8")
+    except UnicodeError:
+        raise ValueError(f"Seed file path {shown} is not valid text.") from None
+    if any(ord(c) < 32 or ord(c) == 127 for c in path):
+        raise ValueError(f"Seed file path {shown} contains a control character.")
+    for part in path.split("/"):
+        if part in ("", "."):
+            raise ValueError(f"Seed file path {shown} has an empty or '.' component.")
+        if part == "..":
+            raise ValueError(f"Seed file path {shown} contains '..'.")
+        if part.endswith((" ", ".")):
+            raise ValueError(f"Seed file path {shown} has a name ending in a space or a dot.")
+        bad = SEED_FAT_FORBIDDEN_CHARS.intersection(part)
+        if bad:
+            raise ValueError(f"Seed file path {shown} contains {''.join(sorted(bad))!r}, which FAT32 cannot store.")
+        if part.split(".")[0].rstrip().upper() in SEED_RESERVED_NAMES:
+            raise ValueError(f"Seed file path {shown} uses a reserved device name.")
+
+
+def validate_seed_files(files):
+    """Check the files that are going to be written to a drive and return a cleaned copy.
+
+    `files` is {relative_posix_path: bytes}. Every path must be relative (no leading "/", no "..", no
+    backslash, no NUL, no control characters, at most 240 characters, nothing FAT32 cannot store); every
+    file at most 256 KiB, all together at most 2 MiB; no two names may differ only by case (FAT32 is case
+    insensitive), and no name may be both a file and a folder. "$" is an ordinary character (Windows media
+    needs `sources/$OEM$/$$/...`). Raises ValueError with a message that names the first offending path.
+    """
+    if not isinstance(files, dict) or not files:
+        raise ValueError("There are no seed files to write.")
+    if len(files) > SEED_MAX_FILES:
+        raise ValueError(f"Too many seed files ({len(files)}); the limit is {SEED_MAX_FILES}.")
+    clean, folded, total = {}, {}, 0
+    for path, data in files.items():
+        if not isinstance(path, str):
+            raise ValueError(f"A seed file path is not text: {type(path).__name__}.")
+        _check_seed_path(path)
+        if isinstance(data, (bytearray, memoryview)):
+            data = bytes(data)
+        if not isinstance(data, bytes):
+            raise ValueError(f"Seed file {_seed_name(path)} is not bytes.")
+        if len(data) > SEED_MAX_FILE_BYTES:
+            raise ValueError(f"Seed file {_seed_name(path)} is {human_size(len(data))}; "
+                             f"the limit is {human_size(SEED_MAX_FILE_BYTES)} per file.")
+        total += len(data)
+        if total > SEED_MAX_TOTAL_BYTES:
+            raise ValueError(f"The seed files are larger than {human_size(SEED_MAX_TOTAL_BYTES)} together.")
+        key = path.casefold()
+        if key in folded:
+            raise ValueError(f"Seed file {_seed_name(path)} has the same name as {_seed_name(folded[key])} "
+                             "(FAT32 ignores letter case).")
+        folded[key] = path
+        clean[path] = data
+    for key, path in folded.items():
+        parts = key.split("/")
+        for i in range(1, len(parts)):
+            if "/".join(parts[:i]) in folded:
+                raise ValueError(f"Seed file {_seed_name(path)} is inside {_seed_name(folded['/'.join(parts[:i])])}, "
+                                 "which is a file.")
+    return clean
+
+
+def _seed_manifest_sha256(files):
+    """SHA-256 over the names and contents of the seed files (for the audit trail)."""
+    digest = hashlib.sha256()
+    for path in sorted(files):
+        digest.update(path.encode("utf-8") + b"\0" + str(len(files[path])).encode() + b"\0" + files[path])
+    return digest.hexdigest()
+
+
+def _seed_local_path(root, rel):
+    """`rel` (already validated) below `root`; refuses anything that would resolve outside it."""
+    full = os.path.join(root, *rel.split("/"))
+    if os.path.commonpath([os.path.abspath(root), os.path.abspath(full)]) != os.path.abspath(root):
+        raise ValueError(f"Seed file path {_seed_name(rel)} would leave the drive.")
+    return full
+
+
+def stage_seed_files(files):
+    """Write the (validated) seed files to a new private directory and return its path (owner only, 0700)."""
+    stage = tempfile.mkdtemp(prefix="epmaseed_")
+    try:
+        for rel, data in files.items():
+            path = _seed_local_path(stage, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+    except BaseException:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+    return stage
+
+
+def copy_seed_files(stage_dir, dst_root, files, log, progress=None, cancel_event=None):
+    """Copy the staged seed files onto the mounted drive, flushing each one. Cancelable between files."""
+    total = sum(len(d) for d in files.values())
+    done = 0
+    log(f"Copying {len(files)} seed file(s) to the USB drive...")
+    for rel, data in files.items():
+        check_canceled(cancel_event)
+        dst = _seed_local_path(dst_root, rel)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(_seed_local_path(stage_dir, rel), "rb") as src, open(dst, "wb") as out:
+            shutil.copyfileobj(src, out)
+            out.flush()
+            os.fsync(out.fileno())
+        done += len(data)
+        log(rel)
+        if progress:
+            progress(min(done, total), total, "Copying files...")
+    if progress:
+        progress(total, total, "Flushing data to the drive...")
+    check_canceled(cancel_event)
+    log("Syncing writes to disk...")
+    run_cmd(["sync"], log, check=False)
+
+
+def verify_seed_files(files, dst_root, log, progress=None, cancel_event=None):
+    """Read every seed file back from the drive and compare it byte for byte. Raises on any mismatch."""
+    log("Verifying the seed files (reading them back from the drive)...")
+    if progress:
+        progress(0, 0, "Verifying the copied files...")
+    bad = []
+    for rel, data in files.items():
+        check_canceled(cancel_event, written=True)
+        path = _seed_local_path(dst_root, rel)
+        try:
+            if os.path.islink(path) or not os.path.isfile(path):
+                bad.append(f"{rel} (missing)")
+            elif os.path.getsize(path) != len(data):
+                bad.append(f"{rel} (size differs)")
+            else:
+                with open(path, "rb") as fh:
+                    if fh.read(len(data) + 1) != data:
+                        bad.append(f"{rel} (content differs)")
+        except OSError as e:
+            bad.append(f"{rel} (unreadable: {e.strerror or type(e).__name__})")
+    if bad:
+        audit(f"VERIFICATION FAILED: {len(bad)} seed file(s) differ", logging.ERROR)
+        raise RuntimeError(
+            f"Verification FAILED: {len(bad)} file(s) on the drive are missing or differ from the seed "
+            f"files (for example: {bad[0]}).\n\nThe drive was NOT ejected and should not be used.")
+    audit("Verification passed (seed files match)")
+    log("Verification passed: the seed files on the drive are identical to the originals.")
+
+
+# Root script of the Linux seed drive: unmount, wipe, GPT + one FAT32 partition, label, mount for the user.
+# Values arrive as "$1".."$6", never pasted into the text. "$6" is the cancel flag file (see cancel_flag):
+# the script looks at it between its steps. Nothing is printed on success.
+LINUX_SEED_PREP_SCRIPT = (
+    'set -eu\n'
+    'DEV="$1"; PART="$2"; LABEL="$3"; USB_MNT="$4"; OWNER="$5"; FLAG="$6"\n'
+    'umount_parts() { for p in "$DEV"[0-9]* "$DEV"p[0-9]*; do umount "$p" 2>/dev/null || true; done; }\n'
+    'if [ -e "$FLAG" ]; then echo SEED_NOT_TOUCHED; exit 0; fi\n'
+    'umount_parts\n'
+    # Unmounting changes no data, so a cancel seen here still leaves the drive as it was.
+    'if [ -e "$FLAG" ]; then echo SEED_NOT_TOUCHED; exit 0; fi\n'
+    'wipefs -a "$DEV"\n'
+    'parted -s "$DEV" mklabel gpt\n'
+    # No "esp" flag: this is a data drive, and an installer must never take it for an EFI system partition.
+    'parted -s "$DEV" mkpart primary fat32 1MiB 100%\n'
+    'partprobe "$DEV"\n'
+    'udevadm settle --timeout=15 2>/dev/null || sleep 2\n'
+    'i=0\n'
+    'while [ ! -b "$PART" ] && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done\n'
+    '[ -b "$PART" ] || { echo "The new partition $PART did not appear." >&2; exit 1; }\n'
+    'umount_parts\n'
+    'if [ -e "$FLAG" ]; then echo SEED_CANCELED; exit 0; fi\n'
+    'mkfs.vfat -F 32 -n "$LABEL" "$PART"\n'
+    'udevadm settle --timeout=15 2>/dev/null || true\n'
+    'umount_parts\n'
+    'mount -o uid="${OWNER%%:*}",gid="${OWNER##*:}" "$PART" "$USB_MNT"\n'
+)
+# Remount the partition read-only so the check reads from the device and not from the cache.
+LINUX_SEED_REMOUNT_SCRIPT = (
+    'set -eu\n'
+    'sync\n'
+    'umount "$2"\n'
+    '{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null || true\n'
+    'mount -o ro,uid="${3%%:*}",gid="${3##*:}" "$1" "$2"\n'
+)
+LINUX_SEED_CLEANUP_SCRIPT = (
+    'set -eu\n'
+    'umount "$1" || true\n'
+)
+
+
+def macos_build_seed_usb(label, files, stage_dir, dev, log, progress=None, cancel_event=None, eject=True):
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    log(f"Erasing and formatting /dev/{dev} as GPT + FAT32 ('{label}')...")
+    run_cmd(["diskutil", "eraseDisk", "FAT32", label, "GPT", f"/dev/{dev}"], log, timeout=600)
+    try:
+        target = macos_find_mountpoint_by_volname(dev, label)
+        log(f"USB drive ready at: {target}")
+        check_canceled(cancel_event)
+        copy_seed_files(stage_dir, target, files, log, progress, cancel_event)
+        log("Remounting the drive to read it back from the device...")
+        macos_unmount(dev, log)
+        run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log, timeout=DISKUTIL_TIMEOUT)
+        target = macos_find_mountpoint_by_volname(dev, label)
+        verify_seed_files(files, target, log, progress, cancel_event)
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. Unmounting the drive; the files were copied completely "
+                "but NOT verified.")
+        else:
+            log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
+        macos_unmount(dev, log, check=False)
+        raise
+    ejected = macos_eject(dev, log) if eject else None
+    log("Done! The seed drive is ready: plug it in next to the installer USB drive.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def linux_build_seed_usb(label, files, stage_dir, dev_name, log, priv, progress=None, cancel_event=None,
+                         eject=True):
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    dev = f"/dev/{dev_name}"
+    part = linux_partition_path(dev_name, 1)
+    owner = f"{os.getuid()}:{os.getgid()}"
+    usb_mount = tempfile.mkdtemp(prefix="epmaseed_usb_")
+    state = {"untouched": False, "canceled": False}
+    mounted = False
+
+    def watch(line):
+        text = line.strip()
+        if text == SEED_UNTOUCHED_MARKER:
+            state["untouched"] = True
+        elif text == SEED_CANCELED_MARKER:
+            state["canceled"] = True
+        else:
+            log(line)
+
+    log(f"Erasing and formatting {dev} as GPT + FAT32 ('{label}') (administrator privileges required)...")
+    try:
+        with cancel_flag(cancel_event) as flag:
+            # Every value arrives as a positional parameter ("$1".."$6"), never pasted into the script.
+            priv.run_script(LINUX_SEED_PREP_SCRIPT, watch, args=[dev, part, label, usb_mount, owner, flag])
+        if state["untouched"]:
+            log("Canceled before the drive was touched; nothing was changed.")
+            raise OperationCanceled("Canceled by the user before the drive was touched.", drive_touched=False)
+        if state["canceled"]:
+            raise OperationCanceled("Canceled by the user.")
+        mounted = True
+        check_canceled(cancel_event)
+        copy_seed_files(stage_dir, usb_mount, files, log, progress, cancel_event)
+        log("Remounting the drive read-only to read it back from the device...")
+        priv.run_script(LINUX_SEED_REMOUNT_SCRIPT, log, args=[part, usb_mount, owner])
+        verify_seed_files(files, usb_mount, log, progress, cancel_event)
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. The files were copied completely but NOT verified.")
+        elif e.drive_touched:
+            log("Canceled. The drive is left incomplete and unusable.")
+        raise
+    finally:
+        if mounted:
+            log("Unmounting...")
+            try:
+                priv.run_script(LINUX_SEED_CLEANUP_SCRIPT, log, args=[usb_mount])
+            except Exception as cleanup_err:
+                log(f"Warning: cleanup failed: {cleanup_err}")
+        _silent_rmdir(usb_mount)
+
+    ejected = linux_eject(dev_name, log, priv) if eject else None
+    log("Done! The seed drive is ready: plug it in next to the installer USB drive.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, cancel_event=None, eject=True,
+                   profile=HARDENING_BASELINE):
+    """Create a seed drive for `target` (ubuntu, fedora or debian): GPT + FAT32 with the label and the files
+    `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
+
+    Returns True if the drive was ejected. Raises ValueError (nothing touched) for a bad target, label, file
+    set or drive, and OperationCanceled on a cancel (see its docstring: `drive_touched` is False when nothing on
+    the drive was changed).
+    """
+    if target not in SEED_TARGETS:
+        raise ValueError(f"Unknown seed target: {target!r}")
+    if profile not in HARDENING_PROFILES:
+        raise ValueError(f"Unknown hardening profile: {profile!r}")
+    validate_device_name(dev)
+    label, files = hardening_files_seed(target, profile)  # noqa: F821 - written by the hardening-content part
+    label = validate_seed_label(label)
+    files = validate_seed_files(files)
+    if expected_size and expected_size < SEED_MIN_DRIVE_BYTES:
+        raise ValueError(f"The drive ({human_size(expected_size)}) is too small for a seed drive "
+                         f"(at least {human_size(SEED_MIN_DRIVE_BYTES)}). Nothing was changed.")
+    missing = get_missing_dependencies(MODE_SEED)
+    if missing:
+        raise ValueError(f"Cannot continue: required tool(s) not found: {', '.join(missing)}. "
+                         f"{missing_dependencies_hint(missing)} Nothing was changed.")
+    stage_dir = stage_seed_files(files)  # still before the drive is touched
+    try:
+        try:
+            reverify_target_disk(dev, expected_size, log)
+            check_canceled(cancel_event, drive_touched=False)
+        except OperationCanceled:
+            # The safety re-check changes nothing: the drive is exactly as it was.
+            audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+                  logging.WARNING)
+            raise OperationCanceled("Canceled by the user before the drive was touched.",
+                                    drive_touched=False) from None
+        audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing the {target} hardening seed "
+              f"(profile={profile}, label={label}, files={len(files)}, "
+              f"bytes={sum(len(d) for d in files.values())}, sha256={_seed_manifest_sha256(files)})")
+        try:
+            with prevent_sleep(log):
+                if IS_MAC:
+                    ejected = macos_build_seed_usb(label, files, stage_dir, dev, log, progress=progress,
+                                                   cancel_event=cancel_event, eject=eject)
+                else:
+                    ejected = linux_build_seed_usb(label, files, stage_dir, dev, log, priv, progress,
+                                                   cancel_event, eject)
+        except OperationCanceled as e:
+            if not e.drive_touched:
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+                      "nothing was changed", logging.WARNING)
+            elif e.written:
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+                      "the seed files were written but NOT verified", logging.WARNING)
+            else:
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+                      logging.WARNING)
+            raise
+        except Exception as e:
+            audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
+            raise
+        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+        return bool(ejected)
+    finally:
+        shutil.rmtree(stage_dir, ignore_errors=True)
+# ===== end hardening: engine-seed =====
 
 
 # ============================================================

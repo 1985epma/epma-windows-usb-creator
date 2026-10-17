@@ -27,6 +27,12 @@ Scenarios (each with its own loop device, always detached in `finally`):
                 a byte flipped on the drive after the copy must fail the verification.
   verify-diff   verify_windows_payload (no loop device needed) must reject a missing
                 file, a changed file and a changed install image.
+  seed-drive    build_seed_usb (the hardening seed drive) on a 128 MiB loop device: refused when
+                too small and when canceled before the start (device untouched), then GPT + ONE
+                FAT32 partition (not an EFI system partition) with the label from the seed, every
+                file byte for byte (nested folder, '$' in a name), and verify_seed_files must
+                reject a changed and a missing file. Only the USB-only safety re-check is stood in
+                for (a loop device is not a USB drive); everything else is the real code.
 
 Environment:
   E2E_REQUIRE=1   a missing prerequisite is a FAILURE instead of a skip (CI sets this).
@@ -45,8 +51,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _appimport import import_app  # noqa: E402
@@ -430,12 +438,127 @@ def scenario_verify_diff(app, workdir, priv, rec):
     expect_raises(RuntimeError, run, src, dst, contains="Verification FAILED")
 
 
+# ===== hardening: engine-seed =====
+EFI_SYSTEM_PARTITION_GUID = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+
+
+def seed_test_files():
+    """A small seed set with a nested folder and a name containing '$' (like the real ones)."""
+    return {
+        "user-data": b"#cloud-config\nautoinstall:\n  version: 1\n",
+        "meta-data": b"",
+        "README.txt": b"seed drive e2e\n",
+        "scripts/$setup$/harden-linux.sh": random.Random(41).randbytes(60_000),
+    }
+
+
+@contextlib.contextmanager
+def seed_engine_patches(app, loop_name, label, files):
+    """Point build_seed_usb at the loop device: the real USB-only listing would (rightly) not list it.
+
+    Only the safety re-check is replaced, and only to insist that it is asked about THIS loop device;
+    every other step (validation, scripts, copy, read-back) is the real code. hardening_files_seed is
+    replaced too, so this scenario does not depend on the wording of the real seed files.
+    """
+    def recheck(dev, expected_size, log, expected_identity=None):
+        assert dev == loop_name, f"build_seed_usb re-checked {dev!r}, expected {loop_name!r}"
+        log(f"(e2e) safety re-check stands in for the USB listing: {dev}")
+
+    with mock.patch.object(app, "hardening_files_seed", create=True,
+                           side_effect=lambda target, profile: (label, dict(files))), \
+            mock.patch.object(app, "reverify_target_disk", side_effect=recheck):
+        yield
+
+
+def check_seed_drive(app, dev, label, files):
+    part = f"{dev}p1"
+    assert os.path.exists(part), f"{part} does not exist: the partition table was not created"
+    assert not os.path.exists(f"{dev}p2"), "the seed drive must have exactly one partition"
+    assert sudo("blkid", "-p", "-s", "PTTYPE", "-o", "value", dev).stdout.strip() == "gpt", "not a GPT disk"
+    assert sudo("blkid", "-p", "-s", "TYPE", "-o", "value", part).stdout.strip() == "vfat", "not FAT"
+    got = sudo("blkid", "-p", "-s", "LABEL", "-o", "value", part).stdout.strip()
+    assert got == label, f"volume label is {got!r}, expected {label!r}"
+    entry = sudo("blkid", "-p", "-s", "PART_ENTRY_TYPE", "-o", "value", part).stdout.strip().lower()
+    assert entry != EFI_SYSTEM_PARTITION_GUID, "a data drive must not be an EFI system partition"
+    assert not [m for m in mounted_under("/") if m[0] == part], "the partition is still mounted after the build"
+
+    mnt = tempfile.mkdtemp(prefix="check_")
+    sudo("mount", "-o", "ro", part, mnt)
+    try:
+        for rel, data in files.items():
+            path = os.path.join(mnt, *rel.split("/"))
+            assert os.path.isfile(path), f"missing on the drive: {rel}"
+            with open(path, "rb") as fh:
+                assert fh.read() == data, f"content differs on the drive: {rel}"
+    finally:
+        sudo("umount", mnt, check=False)
+        with contextlib.suppress(OSError):
+            os.rmdir(mnt)
+
+
+def scenario_seed_drive(app, workdir, priv, rec):
+    files = seed_test_files()
+    label = "CIDATA"
+
+    with loop_device(workdir, "seed", size="128M") as dev:
+        name = os.path.basename(dev)
+        size = 128 * MIB
+        with seed_engine_patches(app, name, label, files):
+            # Refused before the device is touched: too small a drive, and a cancel before the start.
+            expect_raises(ValueError, app.build_seed_usb, "ubuntu", name, rec.log, priv,
+                          expected_size=32 * MIB, contains="too small")
+            cancel = threading.Event()
+            cancel.set()
+            e = expect_raises(app.OperationCanceled, app.build_seed_usb, "ubuntu", name, rec.log, priv,
+                              expected_size=size, cancel_event=cancel)
+            assert e.drive_touched is False, "a cancel before the start must not claim the drive was touched"
+            assert sudo("cmp", "-n", str(MIB), "/dev/zero", dev, check=False).returncode == 0, \
+                "the device was modified although the build was refused or canceled"
+
+            # The real thing: erase, GPT + FAT32, label, copy, read-back, unmount, eject step.
+            ejected = app.build_seed_usb("ubuntu", name, rec.log, priv, expected_size=size, progress=rec.progress)
+            assert isinstance(ejected, bool), "build_seed_usb must return a bool"
+            assert any("Verification passed" in line for line in rec.lines), "verification did not pass"
+            assert rec.progress_calls, "no progress was reported"
+            check_seed_drive(app, dev, label, files)
+
+            # The read-back must notice a changed file (same size, other content) and a missing one.
+            part = f"{dev}p1"
+            mnt = tempfile.mkdtemp(prefix="seedverify_")
+            try:
+                sudo("mount", part, mnt)
+                sudo("sh", "-c", 'head -c "$1" /dev/zero > "$2"', "sh", str(len(files["README.txt"])),
+                     os.path.join(mnt, "README.txt"))
+                sudo("umount", mnt)
+                sudo("mount", "-o", "ro", part, mnt)
+                expect_raises(RuntimeError, app.verify_seed_files, files, mnt, rec.log, rec.progress,
+                              contains="README.txt (content differs)")
+                sudo("umount", mnt)
+                sudo("mount", part, mnt)
+                sudo("rm", "-f", os.path.join(mnt, "meta-data"))
+                sudo("umount", mnt)
+                sudo("mount", "-o", "ro", part, mnt)
+                expect_raises(RuntimeError, app.verify_seed_files, files, mnt, rec.log, rec.progress,
+                              contains="Verification FAILED")
+            finally:
+                sudo("umount", mnt, check=False)
+                with contextlib.suppress(OSError):
+                    os.rmdir(mnt)
+
+        # The same drive again with another label: the label really comes from the seed.
+        with seed_engine_patches(app, name, "EPMA-SEED", files):
+            app.build_seed_usb("debian", name, Recorder().log, priv, expected_size=size)
+        check_seed_drive(app, dev, "EPMA-SEED", files)
+# ===== end hardening: engine-seed =====
+
+
 SCENARIOS = [
     ("raw-write", scenario_raw_write),
     ("windows-copy", scenario_windows_copy),
     ("windows-split", scenario_windows_split),
     ("windows-hardening", scenario_windows_hardening),
     ("verify-diff", scenario_verify_diff),
+    ("seed-drive", scenario_seed_drive),
 ]
 
 
