@@ -2796,7 +2796,8 @@ class App(_TkBase):
         set_macos_app_name(APP_NAME)  # must run before the first window exists
         super().__init__(className=APP_NAME)
         self.title("EPMA Windows 11 Creator USB")
-        self.geometry("760x700")
+        self._window_size = (760, 700)  # grows when content needs more room (see _fit_window)
+        self.geometry("%dx%d" % self._window_size)
         self.iso_path = tk.StringVar(value="")
         self.cancel_event = threading.Event()
         self.create_cancel_event = threading.Event()  # cancels the USB creation (not the download)
@@ -2806,6 +2807,7 @@ class App(_TkBase):
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
         self._build_ui()
+        self._fit_window()
         self.after(LOG_FLUSH_MS, self._log_tick)
 
     # ---------- UI ----------
@@ -3010,6 +3012,20 @@ class App(_TkBase):
         if path:
             self.set_iso(path)
 
+    def _fit_window(self):
+        """Grow the window height (never shrink it) so everything on the current tab is visible.
+
+        The size used to be fixed, which clipped panels that appear later (the ISO checksum
+        panel) on screens with larger fonts. It is capped to the screen.
+        """
+        self.update_idletasks()
+        width = self._window_size[0]  # only the height needs to grow; keep the familiar width
+        height = max(self._window_size[1], self.winfo_reqheight())
+        height = min(height, max(self.winfo_screenheight() - 120, 700))
+        if (width, height) != self._window_size:
+            self._window_size = (width, height)
+            self.geometry("%dx%d" % self._window_size)
+
     def set_iso(self, path):
         self.iso_path.set(path)
         self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
@@ -3028,6 +3044,7 @@ class App(_TkBase):
         self.on_mode_change()
         self._reset_iso_sha()
         self.iso_check_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.after_idle(self._fit_window)
 
     def start_download(self):
         try:
@@ -3257,6 +3274,7 @@ class App(_TkBase):
             outcome_label = _("MISMATCH")
             self.log(_("Expected SHA-256: {expected}").format(expected=expected))
         self.iso_sha_result.config(text=text, foreground=color)
+        self.after_idle(self._fit_window)  # the result lines can add height
         self.log(_("SHA-256 of {name}: {digest}").format(name=os.path.basename(path), digest=digest))
         self.log(_("Checksum comparison: {outcome}").format(outcome=outcome_label))
         audit(f"ISO SHA-256 check result={outcome}", logging.WARNING if outcome == "mismatch" else logging.INFO)
