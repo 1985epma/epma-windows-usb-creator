@@ -674,17 +674,42 @@ class ImageTypeChoiceTests(GuiTestCase, TempDirTestCase):
 
 
 class HintLayoutTests(GuiTestCase):
+    """The hint must sit between the Create row and the progress bar.
+
+    The order is checked on the PACKING order, which does not depend on the window being drawn
+    (a headless CI runner never maps it, so on-screen coordinates are all the same there). When
+    the widgets really are on screen the coordinates must agree with that order too.
+    """
+
+    def page_order(self):
+        win = self.win
+        page = win.create_hint.master
+        slaves = page.pack_slaves()
+        row = win.create_btn.master
+        return {name: slaves.index(widget) for name, widget in (
+            ("row", row), ("hint", win.create_hint), ("progress", win.create_progress), ("log", win.log_text))}
+
+    def assert_order(self):
+        order = self.page_order()
+        self.assertLess(order["row"], order["hint"], order)
+        self.assertLess(order["hint"], order["progress"], order)
+        self.assertLess(order["progress"], order["log"], order)
+        win = self.win
+        if win.create_btn.winfo_ismapped() and win.log_text.winfo_ismapped():  # drawn: coordinates must agree
+            top = {name: widget.winfo_rooty() for name, widget in (
+                ("button", win.create_btn), ("hint", win.create_hint),
+                ("progress", win.create_progress), ("log", win.log_text))}
+            self.assertLess(top["button"], top["hint"], top)
+            self.assertLess(top["hint"], top["progress"], top)
+            self.assertLess(top["progress"], top["log"], top)
+
     def test_vertical_order_button_hint_progress_log(self):
         self.win.iso_path.set("")
         self.win.update_create_button_state()
         self.assertTrue(str(self.win.create_hint.cget("text")))
         self.win.update_idletasks()
-        top = {name: widget.winfo_rooty() for name, widget in (
-            ("button", self.win.create_btn), ("hint", self.win.create_hint),
-            ("progress", self.win.create_progress), ("log", self.win.log_text))}
-        self.assertLess(top["button"], top["hint"], top)
-        self.assertLess(top["hint"], top["progress"], top)
-        self.assertLess(top["progress"], top["log"], top)
+        self.assertTrue(self.win.create_hint.winfo_manager(), "the hint should be packed while it has text")
+        self.assert_order()
 
     def test_the_order_survives_the_hint_changing(self):
         for _round in range(3):
@@ -695,8 +720,8 @@ class HintLayoutTests(GuiTestCase):
         self.win.iso_path.set("")
         self.win.update_create_button_state()
         self.win.update_idletasks()
-        self.assertLess(self.win.create_hint.winfo_rooty(), self.win.create_progress.winfo_rooty())
-        self.assertLess(self.win.create_hint.winfo_rooty(), self.win.log_text.winfo_rooty())
+        self.assertTrue(self.win.create_hint.winfo_manager())
+        self.assert_order()
 
     def test_sha_labels_keep_progress_above_verdict_in_any_order(self):
         win = self.win

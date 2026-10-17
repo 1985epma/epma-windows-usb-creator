@@ -4046,11 +4046,14 @@ class App(_TkBase):
                             "No supported package manager found (apt/dnf/yum/pacman/zypper/apk). "
                             "Please install manually: " + ", ".join(missing)
                         )
-                    script = linux_build_install_command(mgr, missing)
+                    install_command = linux_build_install_command(mgr, missing)
                     # Show exactly what will run as root before it runs.
-                    self.log_threadsafe(f"About to run as administrator: {script}")
+                    self.log_threadsafe(f"About to run as administrator: {install_command}")
                     audit(f"Installing dependencies via {mgr}: {', '.join(missing)}")
-                    self.priv.run_script("set -eu\n" + script, self.log_threadsafe)
+                    # A fixed prefix (so a failing step stops the script) in front of a command that
+                    # linux_build_install_command() builds only from the fixed package allow-list.
+                    script = "set -eu\n" + install_command
+                    self.priv.run_script(script, self.log_threadsafe)
             except (ValueError, RuntimeError) as e:
                 self.after(0, self._report_error, "Error", str(e))
             except Exception as e:

@@ -418,7 +418,8 @@ class WriteRunTests(CliTestCase):
 
     def test_windows_mode_on_macos_needs_no_privileges(self):
         win = self.make_iso("Win11.iso", hybrid=False)
-        with mock.patch.object(app, "IS_LINUX", False):
+        # Simulate macOS completely: on a Linux machine IS_LINUX alone off would be "no supported system".
+        with mock.patch.object(app, "IS_LINUX", False), mock.patch.object(app, "IS_MAC", True):
             code, _out, _err = run_main(self.write_args(win, "--yes", "--mode", "windows"))
         self.assertEqual(code, 0)
         self.authenticate.assert_not_called()
