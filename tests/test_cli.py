@@ -753,7 +753,7 @@ class CliPrivilegeTests(TempDirTestCase):
         self.assertTrue(any("Verification passed" in line for line in log.lines))
         with open(device, "r+b") as fh:
             fh.seek(MIB)
-            fh.write(b"\xff")
+            fh.write(bytes([data[MIB] ^ 0xFF]))   # always differs (the ISO bytes are random)
         with self.assertRaisesRegex(RuntimeError, "Verification FAILED"):
             app.verify_raw_write(iso, device, log, app.CliPrivilege(), None)
 
