@@ -24,8 +24,8 @@
 class EpmaWindowsUsbCreator < Formula
   desc "Create verified bootable USB drives from Windows 11, Linux and ChromeOS Flex"
   homepage "https://github.com/1985epma/epma-windows-usb-creator"
-  url "https://github.com/1985epma/epma-windows-usb-creator/archive/refs/tags/v1.0.0.tar.gz"
-  sha256 "d836915b03fb2a617e6f27a5c0e18f7b4c158a6a1139f14989f22436660b234a"
+  url "https://github.com/1985epma/epma-windows-usb-creator/archive/refs/tags/v1.1.0.tar.gz"
+  sha256 "644ae570a194e1915562b14b7760a9e2a6407e1c253647582c6e67cb93197583"
   license "GPL-3.0-or-later"
   head "https://github.com/1985epma/epma-windows-usb-creator.git", branch: "main"
 
