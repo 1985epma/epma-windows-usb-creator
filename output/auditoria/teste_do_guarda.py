@@ -119,6 +119,54 @@ CENARIOS = [
         lambda s: s.replace("hashlib.sha256()", "hashlib.md5()"),
         "G13",
     ),
+    # ===== hardening: engine-seed =====
+    (
+        "Colar o rótulo do pendrive de sementes dentro do script de administrador",
+        lambda s: s.replace(
+            "'mkfs.vfat -F 32 -n \"$LABEL\" \"$PART\"\\n'",
+            "f'mkfs.vfat -F 32 -n {label} \"$PART\"\\n'",
+        ),
+        "G01",
+    ),
+    (
+        "Tirar o 'set -eu' do script do pendrive de sementes",
+        lambda s: s.replace(
+            "LINUX_SEED_PREP_SCRIPT = (\n    'set -eu\\n'",
+            "LINUX_SEED_PREP_SCRIPT = (\n    '# sem set -eu\\n'",
+        ),
+        "G09",
+    ),
+    (
+        "Pendrive de sementes: o script deixa de olhar a bandeira de cancelamento antes de apagar",
+        lambda s: s.replace(
+            "    'if [ -e \"$FLAG\" ]; then echo SEED_NOT_TOUCHED; exit 0; fi\\n'\n", ""),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: build_seed_usb deixa de reconferir o disco antes de apagar",
+        lambda s: s.replace(
+            "            reverify_target_disk(dev, expected_size, log)\n            check_canceled(",
+            "            check_canceled(",
+        ),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: build_seed_usb deixa de validar os arquivos",
+        lambda s: s.replace(
+            "    files = validate_seed_files(files)\n    if expected_size and",
+            "    files = dict(files)\n    if expected_size and",
+        ),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: o script vira texto montado com .format()",
+        lambda s: s.replace(
+            "LINUX_SEED_REMOUNT_SCRIPT = (\n    'set -eu\\n'",
+            "LINUX_SEED_REMOUNT_SCRIPT = ('{}'.format('x') + \n    'set -eu\\n'",
+        ),
+        "G14",
+    ),
+    # ===== end hardening: engine-seed =====
 ]
 
 print("Autoteste do guarda de segurança")
@@ -142,7 +190,8 @@ for descricao, quebrar, regra_esperada in CENARIOS:
     try:
         r = subprocess.run([sys.executable, GUARDA, caminho],
                            capture_output=True, text=True)
-        detectou = r.returncode != 0 and regra_esperada in r.stdout
+        # A linha "[FALHA] Gxx" (e não só "Gxx", que também aparece nas linhas [OK]) prova que foi ESSA regra.
+        detectou = r.returncode != 0 and f"[FALHA] {regra_esperada}" in r.stdout
         if detectou:
             print(f"  [OK   ] {descricao}\n           -> guarda barrou ({regra_esperada})")
         else:

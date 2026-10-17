@@ -452,6 +452,101 @@ if "hashlib.md5" not in FONTE and "hashlib.sha1" not in FONTE:
     ok("G13", "nenhum algoritmo fraco (MD5/SHA-1) em uso")
 
 
+# ===== hardening: engine-seed =====
+# ============================================================
+# G14 — Pendrive de sementes (hardening): as MESMAS proteções do modo Windows
+#
+# O pendrive de sementes também apaga um disco. Então build_seed_usb() precisa
+# validar tudo ANTES de tocar na unidade, reconferir a identidade do disco
+# (reverify_target_disk) e registrar início e fim na auditoria; e os scripts de
+# administrador dele precisam ser texto fixo (sem f-string, sem concatenação),
+# começar com 'set -eu', receber o rótulo como parâmetro posicional ("$3") e
+# olhar o arquivo-bandeira de cancelamento ANTES do primeiro comando destrutivo.
+# ============================================================
+print("\n=== G14 — Pendrive de sementes (hardening) ===")
+
+funcoes_modulo = {no.name: no for no in ARVORE.body if isinstance(no, ast.FunctionDef)}
+
+for nome in ("validate_seed_files", "validate_seed_label"):
+    if nome in funcoes_modulo:
+        ok("G14", f"função {nome}() presente")
+    else:
+        erro("G14", f"função {nome}()",
+             f"A função de validação {nome}() foi removida. Sem ela, caminhos ou rótulos "
+             "arbitrários chegariam à unidade e aos comandos de administrador.")
+
+seed_fn = funcoes_modulo.get("build_seed_usb")
+if seed_fn is None:
+    erro("G14", "build_seed_usb() presente", "A função build_seed_usb() sumiu.")
+else:
+    primeira_linha = {}
+    for no in ast.walk(seed_fn):
+        if isinstance(no, ast.Call):
+            alvo = ast.unparse(no.func)
+            primeira_linha[alvo] = min(no.lineno, primeira_linha.get(alvo, no.lineno))
+    destrutivas = [primeira_linha[n] for n in ("macos_build_seed_usb", "linux_build_seed_usb") if n in primeira_linha]
+    ordem = ["validate_device_name", "hardening_files_seed", "validate_seed_label", "validate_seed_files",
+             "reverify_target_disk"]
+    faltando = [n for n in ordem if n not in primeira_linha]
+    if faltando or not destrutivas:
+        erro("G14", "build_seed_usb valida e reconfere antes de apagar",
+             f"build_seed_usb() não chama mais: {', '.join(faltando) or 'a gravação do pendrive'}. "
+             "As mesmas proteções do modo Windows precisam continuar valendo.")
+    else:
+        linhas = [primeira_linha[n] for n in ordem] + [min(destrutivas)]
+        if linhas == sorted(linhas) and len(set(linhas)) == len(linhas):
+            ok("G14", "build_seed_usb valida entradas e reconfere o disco antes de apagar")
+        else:
+            erro("G14", "ordem das proteções em build_seed_usb",
+                 "Em build_seed_usb() a validação e a reconferência do disco precisam vir ANTES de "
+                 "qualquer chamada que apague a unidade.")
+    texto_seed = texto_literal(seed_fn)
+    if "DESTRUCTIVE OPERATION START" in texto_seed and "DESTRUCTIVE OPERATION COMPLETED" in texto_seed:
+        ok("G14", "build_seed_usb registra início e fim na auditoria")
+    else:
+        erro("G14", "auditoria em build_seed_usb",
+             "build_seed_usb() não registra mais o início e o fim da operação destrutiva.")
+
+scripts_seed = []
+for no in ARVORE.body:
+    if isinstance(no, ast.Assign):
+        for alvo in no.targets:
+            if isinstance(alvo, ast.Name) and "SEED" in alvo.id and "script" in alvo.id.lower():
+                scripts_seed.append((alvo.id, no))
+if not scripts_seed:
+    erro("G14", "scripts de administrador do pendrive de sementes",
+         "Nenhum script *SEED*SCRIPT* encontrado. O código foi reestruturado? Revise esta regra.")
+for nome, no in scripts_seed:
+    valor = no.value
+    texto_fixo = isinstance(valor, ast.Constant) and isinstance(valor.value, str)
+    if not texto_fixo:
+        erro("G14", f"'{nome}' é texto fixo",
+             f"O script '{nome}' deixou de ser um literal de texto (f-string, concatenação com variável ou "
+             ".format). Valores devem chegar só como parâmetros posicionais.", no.lineno)
+        continue
+    corpo = valor.value
+    if not corpo.startswith("set -eu\n"):
+        erro("G14", f"'{nome}' começa com 'set -eu'",
+             f"O script '{nome}' precisa começar com 'set -eu'.", no.lineno)
+        continue
+    if re.search(r"mkfs\.vfat[^\n]*\s-n\s+(?!\"\$[A-Za-z_0-9]+\")", corpo):
+        erro("G14", f"'{nome}' recebe o rótulo por parâmetro",
+             "O rótulo do volume precisa ser passado a mkfs.vfat como parâmetro posicional (\"$3\" ou uma "
+             "variável do script), nunca como texto colado.", no.lineno)
+        continue
+    if "wipefs" in corpo:
+        antes = corpo.split("wipefs")[0]
+        if '[ -e "$' in antes:
+            ok("G14", f"'{nome}' olha a bandeira de cancelamento antes de apagar")
+        else:
+            erro("G14", f"'{nome}' honra o cancelamento",
+                 f"O script '{nome}' não olha o arquivo-bandeira de cancelamento antes do primeiro "
+                 "comando destrutivo (wipefs).", no.lineno)
+            continue
+    ok("G14", f"'{nome}' é texto fixo, começa com 'set -eu' e recebe valores por parâmetro")
+# ===== end hardening: engine-seed =====
+
+
 # ============================================================
 # Resultado
 # ============================================================
