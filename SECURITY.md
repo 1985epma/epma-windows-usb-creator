@@ -166,6 +166,41 @@ as high risk.
 - In the command line, Ctrl-C does not leave a root `dd` running, and the drive identity
   (serial/model/UUID) is pinned the same way as in the window.
 
+### 13. Hardening files and the seed drive
+
+The optional *Hardened (recommended settings)* setup adds files that make a fresh installation start from
+safer settings: for Windows 11 an `autounattend.xml` and a post-setup script on the same installer USB
+drive (`write --hardened`), and for Linux a **separate** small "seed" USB drive (`harden-seed`) that holds a
+cloud-init (Ubuntu), kickstart (Fedora / RHEL) or preseed and script (Debian) file set. `harden-files`
+writes the same files into a folder, without a drive.
+
+- **The files are data, not code that runs here.** They are written to the drive byte for byte, read back
+  and compared, and never executed by this program or with administrator rights. Every file name passes one
+  shared validator (relative POSIX paths only: no `..`, no absolute path, no backslash, no NUL, at most 240
+  characters; at most 256 KiB per file and 2 MiB in total) before anything is written to a drive or folder.
+  The files are plain text: read them before you use them.
+- **Seeds never select or erase a disk and never create accounts.** Storage and identity stay interactive in
+  the installer, so the person installing chooses the disk and the user. The seeds contain no partitioning
+  or disk-selection directive, no password, no password hash and no SSH key or token. The tests assert these
+  absences.
+- **The scripts are idempotent, can be previewed and can be undone.** Each one prints every change it makes,
+  supports `--dry-run` (which changes nothing), keeps one backup (`.epma-bak`) of every file it modifies and
+  is safe to run twice. They are written not to lock the administrator out: the only login path is never
+  disabled and no SSH port in use is closed.
+- **This is not a compliance claim.** The settings are inspired by common baselines, nothing more. The
+  program does not certify, audit or claim that a system meets any standard or regulation; review the
+  settings against your own requirements.
+- **The seed drive is erased like any other target.** `harden-seed` and the window's *Hardening seed* card go
+  through the same checks as `write`: only USB drives are listed, the drive identity is pinned and
+  re-verified right before erasing, high-risk drives need the typed identifier, the administrator password
+  flow is unchanged, the written files are read back and compared before the drive is ejected, a failure or
+  cancellation is reported as such, and every step is recorded in the audit log. The privileged steps are
+  fixed scripts that receive their values only as positional parameters. In the command line the exit codes keep their meaning,
+  and `--yes` is still required when there is no terminal.
+- **`harden-files` writes only into a new or empty folder.** It refuses a folder that is not empty and a
+  symbolic link, never overwrites anything, and writes through a temporary folder so that a failure leaves
+  nothing half-written. It needs no administrator rights and touches no drive.
+
 ---
 
 ## Environment variables
