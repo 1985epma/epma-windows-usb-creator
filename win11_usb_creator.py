@@ -60,6 +60,11 @@ import traceback
 import urllib.parse
 import urllib.request
 import webbrowser
+import contextlib
+import http.client
+import logging.handlers
+import urllib.error
+import signal
 
 # Tkinter is needed by the GUI only. The engine and the command line interface work
 # without it, so a missing Tk is remembered here instead of ending the program at
@@ -148,6 +153,15 @@ ENV_ALLOW_ANY_HOST = "WIN11USB_ALLOW_ANY_DOWNLOAD_HOST"
 ENV_EXPECTED_SHA256 = "WIN11USB_EXPECTED_SHA256"
 
 DOWNLOAD_TIMEOUT_SECONDS = 60  # per network read; prevents an indefinite hang
+DOWNLOAD_MAX_ATTEMPTS = 3      # transient network errors are retried (resuming where possible)
+DOWNLOAD_BACKOFF_SECONDS = (2, 5)  # wait before retry 2 and 3
+QUERY_TIMEOUT = 30             # seconds allowed for quick query commands (diskutil list, lsblk, ...)
+SUDO_KEEPALIVE_SECONDS = 60    # how often the sudo timestamp is refreshed while an operation runs
+SUDO_KEEPALIVE_MAX_SECONDS = 6 * 3600  # the keep-alive never outlives this, whatever happens
+AUDIT_LOG_MAX_BYTES = 1_000_000
+AUDIT_LOG_BACKUPS = 5
+RAW_CANCELED_MARKER = "WRITE_CANCELED"  # printed by the root write scripts when they stop on request
+DIRECT_IO_ALIGNMENT = 4096     # oflag=direct on Linux only when the image size is a multiple of this
 PRIVATE_FILE_MODE = 0o600      # owner-only read/write for files we create
 
 # Device identifiers we are willing to pass to privileged commands. Anything
@@ -187,6 +201,23 @@ def audit_log_path():
     return os.path.join(base, "epma-win11-usb-creator", "audit.log")
 
 
+class PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Rotating log file that stays owner-only (0600), live file and rotated copies alike."""
+
+    def _open(self):
+        fd = os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, PRIVATE_FILE_MODE)
+        return os.fdopen(fd, self.mode, encoding=self.encoding, errors=self.errors)
+
+    def doRollover(self):
+        super().doRollover()
+        for i in range(0, self.backupCount + 1):
+            path = self.baseFilename if i == 0 else f"{self.baseFilename}.{i}"
+            try:
+                os.chmod(path, PRIVATE_FILE_MODE)
+            except OSError:
+                pass
+
+
 def get_audit_logger():
     """Lazily create the audit logger. Never raises: logging must not break the app."""
     global _audit_logger
@@ -207,7 +238,8 @@ def get_audit_logger():
             os.close(os.open(path, os.O_CREAT | os.O_WRONLY, PRIVATE_FILE_MODE))
         else:
             os.chmod(path, PRIVATE_FILE_MODE)
-        handler = logging.FileHandler(path, encoding="utf-8")
+        handler = PrivateRotatingFileHandler(
+            path, maxBytes=AUDIT_LOG_MAX_BYTES, backupCount=AUDIT_LOG_BACKUPS, encoding="utf-8")
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
         logger.addHandler(handler)
     except Exception:
@@ -314,12 +346,13 @@ def make_dd_log(log, total, progress):
     return wrapped
 
 
-def copy_file_with_progress(src, dst_dir, on_bytes):
+def copy_file_with_progress(src, dst_dir, on_bytes, cancel_event=None):
     """Copy `src` into `dst_dir` in chunks, reporting the bytes copied so far."""
     dst = os.path.join(dst_dir, os.path.basename(src))
     copied = 0
     with open(src, "rb") as fin, open(dst, "wb") as fout:
         while True:
+            check_canceled(cancel_event)
             chunk = fin.read(CHUNK_SIZE)
             if not chunk:
                 break
@@ -330,16 +363,17 @@ def copy_file_with_progress(src, dst_dir, on_bytes):
 
 
 # Reads the whole image back from the drive and compares it with the ISO, chunk by
-# chunk. It always exits 0 (run_script treats a failure as a wrong password and
-# retries); the result is the VERIFY_OK / VERIFY_FAIL marker line. Values arrive as
-# "$1".."$4", never pasted into the text.
+# chunk. It exits 0 and reports the result as a VERIFY_OK / VERIFY_FAIL marker line
+# (so a mismatch is told apart from a script error). Values arrive as "$1".."$5",
+# never pasted into the text; "$5" is the cancel flag file (VERIFY_CANCELED when it appears).
 VERIFY_RAW_SCRIPT = (
     'set -eu\n'
-    'ISO="$1"; DEV="$2"; SIZE="$3"; BS="$4"\n'
+    'ISO="$1"; DEV="$2"; SIZE="$3"; BS="$4"; STOP="$5"\n'
     # Linux: make sure we read the device, not the page cache (harmless elsewhere).
     '{ blockdev --flushbufs "$DEV"; echo 3 > /proc/sys/vm/drop_caches; } >/dev/null 2>&1 || true\n'
     'off=0; i=0\n'
     'while [ "$off" -lt "$SIZE" ]; do\n'
+    '  if [ -e "$STOP" ]; then echo "VERIFY_CANCELED"; exit 0; fi\n'
     '  len=$(( SIZE - off ))\n'
     '  if [ "$len" -gt "$BS" ]; then len=$BS; fi\n'
     '  if ! cmp -s <(dd if="$ISO" bs="$BS" skip="$i" count=1 2>/dev/null | head -c "$len") \\\n'
@@ -354,7 +388,7 @@ VERIFY_RAW_SCRIPT = (
 )
 
 
-def verify_raw_write(iso_path, device_path, log, priv, progress):
+def verify_raw_write(iso_path, device_path, log, priv, progress, cancel_event=None):
     """Read the drive back and compare it byte-for-byte with the ISO. Raises on any mismatch."""
     total = os.path.getsize(iso_path)
     log("Verifying the written image: reading the drive back and comparing it with the ISO...")
@@ -372,14 +406,20 @@ def verify_raw_write(iso_path, device_path, log, priv, progress):
             return
         if line == "VERIFY_OK":
             result["ok"] = True
+        elif line == "VERIFY_CANCELED":
+            result["canceled"] = True
         elif line.startswith("VERIFY_FAIL"):
             result["ok"] = False
             result["offset"] = line.split()[-1]
         else:
             log(line)
 
-    priv.run_script(VERIFY_RAW_SCRIPT, watch,
-                    args=[iso_path, device_path, str(total), str(VERIFY_CHUNK)])
+    check_canceled(cancel_event)
+    with cancel_flag(cancel_event) as flag:
+        priv.run_script(VERIFY_RAW_SCRIPT, watch,
+                        args=[iso_path, device_path, str(total), str(VERIFY_CHUNK), flag])
+    if result.get("canceled"):
+        raise OperationCanceled("Canceled by the user.")
     if result.get("ok") is None:
         raise RuntimeError("Could not complete the verification of the written drive. "
                            "Do not trust this drive; run the creation again.")
@@ -393,7 +433,7 @@ def verify_raw_write(iso_path, device_path, log, priv, progress):
     log("Verification passed: the drive content is identical to the ISO.")
 
 
-def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress):
+def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=None):
     """Compare what is on the drive with the ISO. Raises on any mismatch.
 
     Every file is compared by checksum (rsync dry run), and the install image is
@@ -409,7 +449,8 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress)
         if re.match(r"^(>f|cd|\*deleting)", line):
             bad.append(line.strip())
 
-    run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch)
+    run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
+            cancel_event=cancel_event)
     if bad:
         audit(f"VERIFICATION FAILED: {len(bad)} file(s) differ", logging.ERROR)
         raise RuntimeError(
@@ -423,12 +464,13 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress)
     swm = os.path.join(sources, os.path.splitext(name)[0] + ".swm")
     if os.path.exists(swm):
         try:
-            run_cmd(["wimlib-imagex", "verify", swm, f"--ref={sources}/{os.path.splitext(name)[0]}*.swm"], log)
+            run_cmd(["wimlib-imagex", "verify", swm, f"--ref={sources}/{os.path.splitext(name)[0]}*.swm"], log,
+                    cancel_event=cancel_event)
         except RuntimeError:
             raise RuntimeError(
                 "Verification FAILED: the split install image on the drive is damaged.\n\n"
                 "The drive was NOT ejected and should not be used.") from None
-    elif not filecmp.cmp(big_file, os.path.join(sources, name), shallow=False):
+    elif check_canceled(cancel_event) or not filecmp.cmp(big_file, os.path.join(sources, name), shallow=False):
         raise RuntimeError(
             f"Verification FAILED: {name} on the drive differs from the ISO.\n\n"
             "The drive was NOT ejected and should not be used.")
@@ -436,7 +478,7 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress)
     log("Verification passed: the files on the drive match the ISO.")
 
 
-def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=None):
+def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=None, cancel_event=None):
     """Copy the contents of a mounted Windows ISO to the drive, reporting progress.
 
     Everything except sources/install.wim|esd is copied with rsync; that file is
@@ -482,8 +524,10 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
 
     rel_big = os.path.relpath(big_file, src_root)
     log("Copying files from the ISO to the USB drive (this can take several minutes)...")
-    run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log)
+    run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log,
+            cancel_event=cancel_event)
     report(rest_total, "Copying files...")
+    check_canceled(cancel_event)
 
     target_sources = os.path.join(dst_root, "sources")
     os.makedirs(target_sources, exist_ok=True)
@@ -500,20 +544,22 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
             if m:
                 report(rest_total + size * min(int(m.group(1)), 100) // 100, "Splitting the install image...")
 
-        run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log)
+        run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log, cancel_event=cancel_event)
     else:
         log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
         copy_file_with_progress(
             big_file, target_sources,
-            lambda n: report(rest_total + n, "Copying the install image..."))
+            lambda n: report(rest_total + n, "Copying the install image..."),
+            cancel_event=cancel_event)
 
     report(total, "Flushing data to the drive...")
+    check_canceled(cancel_event)
     log("Syncing writes to disk...")
     run_cmd(["sync"], log, check=False)
     # Remount so the check reads from the device itself and not from the system cache.
     if reopen:
         dst_root = reopen()
-    verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress)
+    verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=cancel_event)
 
 
 def validate_download_url(raw_url):
@@ -545,15 +591,165 @@ def validate_download_url(raw_url):
     return url, host, not is_trusted
 
 
-def run_cmd(args, log, check=True):
+class OperationCanceled(RuntimeError):
+    """The user canceled the USB creation. A RuntimeError so older handlers still cope."""
+
+
+def check_canceled(cancel_event):
+    """Raise OperationCanceled if the user asked to stop. Cheap; call between steps."""
+    if cancel_event is not None and cancel_event.is_set():
+        raise OperationCanceled("Canceled by the user.")
+
+
+def sha256_file(path, cancel_event=None, chunk=4 * 1024 * 1024):
+    """SHA-256 of a file, read in chunks (constant memory). Cancel-aware."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            check_canceled(cancel_event)
+            block = fh.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _stop_process(proc, group=False):
+    """Ask a child (or, with group=True, its whole process group) to stop; kill it if it does not."""
+    def send(sig):
+        if group:
+            os.killpg(os.getpgid(proc.pid), sig)
+        elif sig == signal.SIGTERM:
+            proc.terminate()
+        else:
+            proc.kill()
+
+    try:
+        send(signal.SIGTERM)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            send(signal.SIGKILL)
+    except (OSError, ProcessLookupError):
+        pass
+
+
+def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
+    """Run a command as the current user, streaming its output to `log`.
+
+    `timeout` (seconds) kills a command that hangs. `cancel_event` makes it stop
+    promptly when the user cancels: the process is terminated and OperationCanceled
+    is raised. Passing neither keeps the original behaviour.
+    """
     log(f"$ {' '.join(args)}")
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in proc.stdout:
-        log(line.rstrip())
-    proc.wait()
+    state = {"timed_out": False, "canceled": False}
+    finished = threading.Event()
+
+    def watchdog():
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while not finished.wait(0.2):
+            if cancel_event is not None and cancel_event.is_set():
+                state["canceled"] = True
+            elif deadline is not None and time.monotonic() >= deadline:
+                state["timed_out"] = True
+            else:
+                continue
+            _stop_process(proc)
+            return
+
+    watcher = None
+    if timeout is not None or cancel_event is not None:
+        watcher = threading.Thread(target=watchdog, daemon=True)
+        watcher.start()
+    try:
+        for line in proc.stdout:
+            log(line.rstrip())
+        proc.wait()
+    finally:
+        finished.set()
+        if watcher is not None:
+            watcher.join(10)
+        if proc.stdout:
+            proc.stdout.close()
+    if state["canceled"]:
+        raise OperationCanceled("Canceled by the user.")
+    if state["timed_out"]:
+        log(f"Command timed out after {timeout}s and was stopped: {args[0]}")
+        if check:
+            raise RuntimeError(f"Command timed out after {timeout}s: {' '.join(args)}")
+        return proc.returncode if proc.returncode else -1
     if check and proc.returncode != 0:
         raise RuntimeError(f"Command failed (exit code {proc.returncode}): {' '.join(args)}")
     return proc.returncode
+
+
+@contextlib.contextmanager
+def cancel_flag(cancel_event):
+    """Yield the path of a private flag file that appears when `cancel_event` is set.
+
+    The privileged write script runs as root, so the app cannot signal it. Instead the
+    script polls for this file and stops dd itself. The file lives in a fresh 0700
+    directory owned by the user; the script only tests whether the path exists.
+    """
+    flag_dir = tempfile.mkdtemp(prefix="win11cancel_")
+    path = os.path.join(flag_dir, "cancel")
+    stop = threading.Event()
+
+    def watch():
+        while not stop.is_set():
+            if cancel_event is None:
+                return
+            if cancel_event.wait(0.25):
+                try:
+                    open(path, "w").close()
+                except OSError:
+                    pass
+                return
+
+    watcher = threading.Thread(target=watch, daemon=True)
+    watcher.start()
+    try:
+        yield path
+    finally:
+        stop.set()
+        watcher.join(2)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(flag_dir)
+        except OSError:
+            pass
+
+
+@contextlib.contextmanager
+def prevent_sleep(log=None):
+    """Keep the computer awake while a write runs. Best effort: failures are ignored."""
+    proc = None
+    try:
+        if IS_MAC and shutil.which("caffeinate"):
+            # -i: no idle sleep; -w: stop by itself when our process exits.
+            cmd = ["caffeinate", "-i", "-w", str(os.getpid())]
+        elif IS_LINUX and shutil.which("systemd-inhibit"):
+            cmd = ["systemd-inhibit", "--what=sleep:idle", f"--who={APP_NAME}",
+                   "--why=Writing a USB drive", "sleep", "infinity"]
+        else:
+            cmd = None
+        if cmd:
+            # Own process group, so stopping it also stops systemd-inhibit's `sleep infinity`.
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, start_new_session=True)
+            if log:
+                log("Sleep is blocked while the drive is being written.")
+    except (OSError, subprocess.SubprocessError):
+        proc = None
+    try:
+        yield
+    finally:
+        if proc is not None:
+            _stop_process(proc, group=True)
 
 
 def platform_display_name():
@@ -621,19 +817,33 @@ def ask_password(parent, title, prompt):
 # diskutil/hdiutil need no root, but writing /dev/rdiskN does)
 # ============================================================
 class PrivilegeHelper:
+    """Runs privileged scripts through sudo (or pkexec), asking for the password once.
+
+    After the password is validated, sudo's own timestamp carries the authorization:
+    scripts run with `sudo -n` (nothing on stdin) and a small keep-alive refreshes the
+    timestamp while an operation runs, so the password is not held in memory for the
+    whole write. If that does not work on this machine (for example `timestamp_timeout=0`
+    or per-process tickets), the helper falls back to keeping the validated password
+    and passing it on stdin. In every mode a script that fails is NEVER run again.
+    """
+
     def __init__(self, app):
         self.app = app
-        self.cached_password = None
+        self.cached_password = None   # only set in the stdin fallback mode
+        self._use_timestamp = False   # True: sudo's timestamp is armed, no password held
+        self._keepalive_stop = None
 
-    def _ask_password_on_main_thread(self):
+    def _ask_password_on_main_thread(self, retry=False):
         result = {}
         done = threading.Event()
+        prefix = "That password was not accepted. Try again.\n\n" if retry else ""
 
         def ask():
             try:
                 result["pw"] = ask_password(
                     self.app,
                     "Administrator password",
+                    prefix +
                     "Enter your sudo/administrator password to partition and format the drive.\n"
                     "It is used only to run local disk commands and is never stored or sent anywhere.",
                 )
@@ -665,12 +875,87 @@ class PrivilegeHelper:
         """Whether a sudo password must be collected before running privileged commands."""
         return os.geteuid() != 0 and bool(shutil.which("sudo"))
 
+    # ---------- sudo timestamp (no password kept in memory) ----------
+    def _sudo_probe(self):
+        """True if sudo currently accepts us without a password (and refreshes its timestamp)."""
+        try:
+            proc = subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
+                                  capture_output=True, timeout=QUERY_TIMEOUT)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0
+
+    def _arm_timestamp(self, password):
+        """Validate with `sudo -S -v`, then confirm a fresh `sudo -n` process is accepted.
+
+        The second step is what proves the timestamp is shared between our sudo calls on
+        this machine; if it is not, the caller falls back to the stdin mode.
+        """
+        try:
+            proc = subprocess.run(["sudo", "-S", "-v", "-p", ""], input=password + "\n",
+                                  capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return proc.returncode == 0 and self._sudo_probe()
+
+    def _start_keepalive(self):
+        self._stop_keepalive()
+        stop = threading.Event()
+        self._keepalive_stop = stop
+
+        def loop():
+            deadline = time.monotonic() + SUDO_KEEPALIVE_MAX_SECONDS
+            while not stop.wait(SUDO_KEEPALIVE_SECONDS) and time.monotonic() < deadline:
+                self._sudo_probe()
+
+        threading.Thread(target=loop, daemon=True).start()
+
+    def _stop_keepalive(self):
+        stop, self._keepalive_stop = self._keepalive_stop, None
+        if stop is not None:
+            stop.set()
+
+    def _adopt(self, secret):
+        """Take a validated password: arm sudo's timestamp and drop the string if that works."""
+        if self._arm_timestamp(secret):
+            self._use_timestamp = True
+            self.cached_password = None
+            self._start_keepalive()
+        else:
+            self._use_timestamp = False
+            self.cached_password = secret
+
+    def _ensure_auth(self, max_attempts=3):
+        """Make sure scripts can run. Returns "ts" (sudo timestamp) or "pw" (stdin fallback).
+
+        Passwords are validated here, BEFORE any script runs, so a wrong password is
+        never discovered by re-running a script. Asks at most `max_attempts` times.
+        """
+        if self._use_timestamp:
+            if self._sudo_probe():
+                return "ts"
+            self._use_timestamp = False  # expired or revoked: ask again
+            self._stop_keepalive()
+        if self.cached_password is not None:
+            return "pw"
+        for attempt in range(max_attempts):
+            entered = self._ask_password_on_main_thread(retry=attempt > 0)
+            if entered is None:
+                raise RuntimeError("Administrator password entry canceled.")
+            if self.check_password(entered):
+                self._adopt(entered)
+                entered = None
+                return "ts" if self._use_timestamp else "pw"
+        raise RuntimeError("The administrator password was not accepted after "
+                           f"{max_attempts} attempts. Nothing was changed.")
+
     def authenticate(self, reason, max_attempts=3):
         """Ask for the administrator password up front and verify it. GUI thread only.
 
         Doing this before anything touches the drive means a wrong or missing password
         is caught while the drive is still untouched, instead of mid-operation.
-        Returns True when privileges are available (password cached for this operation).
+        Returns True when privileges are available (sudo's timestamp is armed, or as a
+        fallback the password is kept in memory for this operation).
         """
         if not self.needs_password():
             return True  # already root, or pkexec will show its own prompt
@@ -684,7 +969,8 @@ class PrivilegeHelper:
             if pw is None:
                 return False  # canceled
             if self.check_password(pw):
-                self.cached_password = pw
+                self._adopt(pw)
+                pw = None  # the string is not needed any more
                 return True
             if attempt < max_attempts - 1:
                 messagebox.showerror("Wrong password", "That password was not accepted. Please try again.",
@@ -694,65 +980,80 @@ class PrivilegeHelper:
         return False
 
     def clear_cached_password(self):
-        """Drop the in-memory copy of the password as soon as it is no longer needed."""
+        """Forget the password and end the sudo session as soon as it is no longer needed."""
         self.cached_password = None
+        self._stop_keepalive()
+        if self._use_timestamp:
+            self._use_timestamp = False
+            try:
+                subprocess.run(["sudo", "-k"], stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
     def run_script(self, script, log, args=None, max_attempts=3):
-        """Run `script` with root privileges.
+        """Run `script` with root privileges, exactly once.
 
         Values are NEVER interpolated into the script text. They are passed as
         positional shell parameters ("$1", "$2", ...) via `args`, so a filename
         containing quotes, semicolons or $(...) is treated as data, not as code.
+
+        A script that exits non-zero raises RuntimeError and is never re-run: a failed
+        mkfs or dd must not be repeated behind the user's back. Password problems are
+        handled before the script starts (_ensure_auth). `max_attempts` is accepted for
+        backward compatibility and limits only the password prompts.
         """
         args = [str(a) for a in (args or [])]
         # bash -c SCRIPT NAME ARG1 ARG2 ... -> inside SCRIPT: $0=NAME, $1=ARG1, ...
         bash_argv = ["bash", "-c", script, "win11_usb_creator"] + args
 
-        if shutil.which("sudo"):
-            attempts = 0
-            while attempts < max_attempts:
-                password = self.cached_password
-                if password is None:
-                    password = self._ask_password_on_main_thread()
-                    if password is None:
-                        raise RuntimeError("Administrator password entry canceled.")
-                proc = subprocess.Popen(
-                    ["sudo", "-S", "-p", ""] + bash_argv,
-                    stdin=subprocess.PIPE,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                # The password goes only to stdin: it never appears in the process
-                # argument list (visible to other users via `ps`) nor in any log.
-                proc.stdin.write(password + "\n")
-                proc.stdin.flush()
-                proc.stdin.close()
-                log("$ sudo bash -c '<privileged script>' " + " ".join(repr(a) for a in args))
-                for line in proc.stdout:
-                    log(line.rstrip())
-                proc.wait()
-                if proc.returncode == 0:
-                    self.cached_password = password
-                    return
-                self.cached_password = None
-                attempts += 1
-                if attempts >= max_attempts:
-                    audit(f"Privileged script failed after {max_attempts} attempts (exit {proc.returncode})",
-                          logging.ERROR)
-                    raise RuntimeError(
-                        f"Privileged command failed (exit code {proc.returncode}). "
-                        "This may be a wrong password or a real command error — check the log above."
-                    )
-                log("Command failed — this may be a wrong password. Please try again.")
-            return
-        if shutil.which("pkexec"):
+        sudo_prefix, use_stdin = [], False   # already root: no sudo
+        if os.geteuid() == 0:
+            pass
+        elif shutil.which("sudo"):
+            use_stdin = self._ensure_auth(max_attempts) != "ts"
+            sudo_prefix = ["sudo", "-n"]   # used unless the stdin fallback is needed
+        elif shutil.which("pkexec"):
             return run_cmd(["pkexec"] + bash_argv, log)
+        else:
+            raise RuntimeError(
+                "Neither 'sudo' nor 'pkexec' was found. Install sudo (or run this app as root) "
+                "so it can partition and format drives."
+            )
+
+        if use_stdin and self.cached_password is None:
+            raise RuntimeError("The administrator session ended before the command started. "
+                               "Nothing was changed; start the operation again.")
+        popen_kw = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "bufsize": 1}
+        if use_stdin:
+            proc = subprocess.Popen(["sudo", "-S", "-p", ""] + bash_argv, stdin=subprocess.PIPE, **popen_kw)
+        else:
+            proc = subprocess.Popen(sudo_prefix + bash_argv, stdin=subprocess.DEVNULL, **popen_kw)
+        if use_stdin:
+            # The password goes only to stdin: it never appears in the process
+            # argument list (visible to other users via `ps`) nor in any log.
+            password = self.cached_password
+            proc.stdin.write(password + "\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+        log("$ sudo bash -c '<privileged script>' " + " ".join(repr(a) for a in args))
+        refused = False
+        for line in proc.stdout:
+            line = line.rstrip()
+            if "a password is required" in line and line.startswith("sudo:"):
+                refused = True
+            log(line)
+        proc.wait()
+        if proc.returncode == 0:
+            return None
+        audit(f"Privileged script failed (exit {proc.returncode}); not retried", logging.ERROR)
+        if refused:
+            self._use_timestamp = False
+            raise RuntimeError(
+                "The administrator session expired before the command started, so it did not "
+                "run and nothing was changed. Start the operation again.")
         raise RuntimeError(
-            "Neither 'sudo' nor 'pkexec' was found. Install sudo (or run this app as root) "
-            "so it can partition and format drives."
-        )
+            f"Privileged command failed (exit code {proc.returncode}). It was not run again; "
+            "check the log above for the reason.")
 
 
 # ============================================================
@@ -789,14 +1090,15 @@ def macos_get_external_disks():
 
 def macos_find_mountpoint_by_volname(dev, volname, retries=15):
     for _ in range(retries):
-        out = subprocess.check_output(["diskutil", "list", "-plist", f"/dev/{dev}"])
+        out = subprocess.check_output(["diskutil", "list", "-plist", f"/dev/{dev}"], timeout=QUERY_TIMEOUT)
         data = plistlib.loads(out)
         entries = data.get("AllDisksAndPartitions", [])
         parts = entries[0].get("Partitions", []) if entries else []
         for part in parts:
             if part.get("VolumeName", "").upper() == volname.upper():
                 pid = part.get("DeviceIdentifier")
-                info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", f"/dev/{pid}"]))
+                info = plistlib.loads(subprocess.check_output(
+                    ["diskutil", "info", "-plist", f"/dev/{pid}"], timeout=QUERY_TIMEOUT))
                 mp = info.get("MountPoint")
                 if mp:
                     return mp
@@ -804,32 +1106,46 @@ def macos_find_mountpoint_by_volname(dev, volname, retries=15):
     raise RuntimeError("Could not find the USB drive's mount point after formatting.")
 
 
-def macos_build_usb(iso_path, dev, log, priv=None, progress=None):
+def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=None):
+    check_canceled(cancel_event)
     log(f"Erasing and formatting /dev/{dev} as GPT + FAT32 ('{VOL_NAME}')...")
-    run_cmd(["diskutil", "eraseDisk", "FAT32", VOL_NAME, "GPT", f"/dev/{dev}"], log)
+    run_cmd(["diskutil", "eraseDisk", "FAT32", VOL_NAME, "GPT", f"/dev/{dev}"], log, timeout=600)
 
     target = macos_find_mountpoint_by_volname(dev, VOL_NAME)
     log(f"USB drive ready at: {target}")
+    check_canceled(cancel_event)
 
     mount_dir = tempfile.mkdtemp(prefix="win11iso_")
     log(f"Mounting the ISO at {mount_dir}...")
-    run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log)
+    try:
+        run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log,
+                timeout=300)
+    except Exception:
+        try:
+            os.rmdir(mount_dir)
+        except OSError:
+            pass
+        raise
 
     try:
         def reopen():
             log("Remounting the drive to read it back from the device...")
-            run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log)
-            run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log)
+            run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, timeout=120)
+            run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log, timeout=120)
             return macos_find_mountpoint_by_volname(dev, VOL_NAME)
 
         copy_windows_payload(
             mount_dir, target, log, progress,
             "wimlib-imagex not found. Install it with: brew install wimlib "
             "(or use the 'Install missing dependencies' button on tab 2).",
-            reopen=reopen)
+            reopen=reopen, cancel_event=cancel_event)
+    except OperationCanceled:
+        log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
+        run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, check=False, timeout=120)
+        raise
     finally:
         log("Unmounting the ISO...")
-        run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False)
+        run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False, timeout=120)
         try:
             os.rmdir(mount_dir)
         except OSError:
@@ -844,22 +1160,23 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None):
 def macos_eject(dev, log):
     """Eject the whole disk; if something holds it, force-unmount and retry. Returns True on success."""
     log("Ejecting the USB drive...")
-    if run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False) == 0:
+    if run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=120) == 0:
         return True
     log("The drive is busy — forcing the unmount and trying again...")
-    run_cmd(["diskutil", "unmountDisk", "force", f"/dev/{dev}"], log, check=False)
+    run_cmd(["diskutil", "unmountDisk", "force", f"/dev/{dev}"], log, check=False, timeout=120)
     time.sleep(1)
-    return run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False) == 0
+    return run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=120) == 0
 
 
 def linux_eject(dev_name, log, priv):
     """Flush, unmount and power the drive off. Best effort: returns True if it was ejected."""
     log("Ejecting the USB drive (administrator privileges required)...")
-    # Always exits 0 (run_script treats a failure as a wrong password and retries);
+    # Always exits 0 so a drive that cannot be powered off is not reported as a failure;
     # the outcome is reported through the EJECTED / NOT_EJECTED marker line.
     script = (
+        'set -eu\n'
         'sync\n'
-        'for p in "$1"*; do umount "$p" 2>/dev/null || true; done\n'
+        'for p in "$1"[0-9]* "$1"p[0-9]*; do umount "$p" 2>/dev/null || true; done\n'
         'if command -v eject >/dev/null 2>&1 && eject "$1" 2>/dev/null; then echo EJECTED; exit 0; fi\n'
         'if command -v udisksctl >/dev/null 2>&1 && udisksctl power-off -b "$1" 2>/dev/null; '
         'then echo EJECTED; exit 0; fi\n'
@@ -887,30 +1204,88 @@ def report_eject(ejected, log):
         log("Could not eject automatically. Eject the drive from the file manager before unplugging it.")
 
 
-def macos_write_raw(iso_path, dev, log, priv, progress=None):
-    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
-    validate_hybrid_iso(iso_path)
-    log(f"Unmounting /dev/{dev}...")
-    run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log)
-    log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
-        "This can take several minutes.")
-    # /dev/rdiskN (raw node) is several times faster than /dev/diskN.
+# Root scripts that write the image. Values arrive as "$1".."$n" (never pasted into the
+# text). "$4" is a flag file: the app creates it to ask for a cancel, and the loop below
+# (which polls it once a second) then stops dd and prints WRITE_CANCELED.
+MACOS_RAW_SCRIPT = (
+    'set -eu\n'
+    'dd if="$1" of="$2" bs="$3" &\n'
+    'pid=$!\n'
+    'canceled=0\n'
     # BSD dd has no status=progress: it prints the byte count when it receives
     # SIGINFO, so ask for it once a second until the copy ends.
-    script = (
-        'set -eu\n'
-        'dd if="$1" of="$2" bs="$3" &\n'
-        'pid=$!\n'
-        'while kill -0 "$pid" 2>/dev/null; do kill -INFO "$pid" 2>/dev/null || true; sleep 1; done\n'
-        'wait "$pid"\n'
-        'sync\n'
-    )
+    'while kill -0 "$pid" 2>/dev/null; do\n'
+    '  if [ -e "$4" ]; then kill "$pid" 2>/dev/null || true; canceled=1; break; fi\n'
+    '  kill -INFO "$pid" 2>/dev/null || true\n'
+    '  sleep 1\n'
+    'done\n'
+    'if [ "$canceled" = 1 ]; then wait "$pid" 2>/dev/null || true; echo WRITE_CANCELED; exit 0; fi\n'
+    'wait "$pid"\n'
+    'sync\n'
+)
+
+# "$5" is "direct" (add oflag=direct) or "buffered"; the caller decides, the text never changes.
+LINUX_RAW_SCRIPT = (
+    'set -eu\n'
+    'for p in "$2"[0-9]* "$2"p[0-9]*; do umount "$p" 2>/dev/null || true; done\n'
+    'if [ "$5" = direct ]; then\n'
+    '  dd if="$1" of="$2" bs="$3" conv=fsync status=progress oflag=direct &\n'
+    'else\n'
+    '  dd if="$1" of="$2" bs="$3" conv=fsync status=progress &\n'
+    'fi\n'
+    'pid=$!\n'
+    'canceled=0\n'
+    'while kill -0 "$pid" 2>/dev/null; do\n'
+    '  if [ -e "$4" ]; then kill "$pid" 2>/dev/null || true; canceled=1; break; fi\n'
+    '  sleep 1\n'
+    'done\n'
+    'if [ "$canceled" = 1 ]; then wait "$pid" 2>/dev/null || true; echo WRITE_CANCELED; exit 0; fi\n'
+    'wait "$pid"\n'
+    'sync\n'
+)
+
+
+def write_raw_image(priv, script, base_args, log, total, progress, cancel_event, extra_args=()):
+    """Run a root write script (MACOS_RAW_SCRIPT / LINUX_RAW_SCRIPT). True if it stopped on request.
+
+    The script runs as root, so the app cannot signal it; `cancel_flag` gives it a file to
+    watch instead. `base_args` are "$1".."$3", the flag path becomes "$4", then `extra_args`.
+    """
+    state = {"canceled": False}
+    dd_log = make_dd_log(log, total, progress)
+
+    def watch(line):
+        if line.strip() == RAW_CANCELED_MARKER:
+            state["canceled"] = True
+            log("The write was stopped at your request.")
+            return
+        dd_log(line)
+
+    with cancel_flag(cancel_event) as flag:
+        priv.run_script(script, watch, args=list(base_args) + [flag] + list(extra_args))
+    return state["canceled"]
+
+
+def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None):
+    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
+    validate_hybrid_iso(iso_path)
+    check_canceled(cancel_event)
+    log(f"Unmounting /dev/{dev}...")
+    run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, timeout=120)
+    log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
+        "This can take several minutes.")
     total = os.path.getsize(iso_path)
-    priv.run_script(script, make_dd_log(log, total, progress),
-                    args=[iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]])
+    # /dev/rdiskN (raw node) is several times faster than /dev/diskN.
+    canceled = write_raw_image(priv, MACOS_RAW_SCRIPT,
+                               [iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]],
+                               log, total, progress, cancel_event)
+    if canceled:
+        log("Canceled. The drive holds a partial image and is unusable until written again.")
+        run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, check=False, timeout=120)
+        raise OperationCanceled("Canceled by the user.")
     if progress:
         progress(total, total, "Written")
-    verify_raw_write(iso_path, f"/dev/r{dev}", log, priv, progress)
+    verify_raw_write(iso_path, f"/dev/r{dev}", log, priv, progress, cancel_event)
     log("Note: macOS cannot read Linux (ISO 9660/ext) images, so this drive will not show up in "
         "Finder, and macOS may say the disk is 'not readable' — click Ignore, never Initialize. "
         "That is normal; the content was just verified byte-for-byte.")
@@ -1058,31 +1433,47 @@ def linux_build_install_command(mgr, missing_tools):
     return LINUX_INSTALL_CMD_TEMPLATE[mgr].format(pkgs=" ".join(pkgs))
 
 
-def linux_write_raw(iso_path, dev_name, log, priv, progress=None):
-    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
-    validate_hybrid_iso(iso_path)
-    dev = f"/dev/{dev_name}"
-    log(f"Writing the ISO to {dev} (administrator privileges required)...")
-    # Values arrive as "$1".."$3"; the glob expands only after the quoted device prefix.
+def linux_unmount_partitions(dev, log, priv):
+    """Best effort: unmount every partition of `dev` (used after a cancel)."""
     script = (
         'set -eu\n'
-        'for p in "$2"*; do umount "$p" 2>/dev/null || true; done\n'
-        'dd if="$1" of="$2" bs="$3" conv=fsync status=progress\n'
-        'sync\n'
+        'for p in "$1"[0-9]* "$1"p[0-9]*; do umount "$p" 2>/dev/null || true; done\n'
     )
+    try:
+        priv.run_script(script, log, args=[dev])
+    except Exception as e:
+        log(f"Warning: could not unmount the drive: {e}")
+
+
+def linux_write_raw(iso_path, dev_name, log, priv, progress=None, cancel_event=None):
+    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
+    validate_hybrid_iso(iso_path)
+    check_canceled(cancel_event)
+    dev = f"/dev/{dev_name}"
     total = os.path.getsize(iso_path)
-    priv.run_script(script, make_dd_log(log, total, progress),
-                    args=[iso_path, dev, RAW_WRITE_BLOCK["linux"]])
+    # O_DIRECT bypasses the page cache (steadier speed, honest progress), but needs every
+    # write block aligned; only use it when the image size is a multiple of the alignment.
+    direct = "direct" if total % DIRECT_IO_ALIGNMENT == 0 else "buffered"
+    log(f"Writing the ISO to {dev} (administrator privileges required)...")
+    # Values arrive as "$1".."$5"; the glob expands only after the quoted device prefix.
+    canceled = write_raw_image(priv, LINUX_RAW_SCRIPT,
+                               [iso_path, dev, RAW_WRITE_BLOCK["linux"]],
+                               log, total, progress, cancel_event, extra_args=[direct])
+    if canceled:
+        log("Canceled. The drive holds a partial image and is unusable until written again.")
+        linux_unmount_partitions(dev, log, priv)
+        raise OperationCanceled("Canceled by the user.")
     if progress:
         progress(total, total, "Written")
-    verify_raw_write(iso_path, dev, log, priv, progress)
+    verify_raw_write(iso_path, dev, log, priv, progress, cancel_event)
     ejected = linux_eject(dev_name, log, priv)
     log("Done! The USB drive is ready to boot.")
     report_eject(ejected, log)
     return ejected
 
 
-def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
+def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=None):
+    check_canceled(cancel_event)
     dev = f"/dev/{dev_name}"
     part = linux_partition_path(dev_name, 1)
     uid, gid = os.getuid(), os.getgid()
@@ -1095,20 +1486,33 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
     prep_script = (
         'set -eu\n'
         'DEV="$1"; PART="$2"; ISO="$3"; ISO_MNT="$4"; USB_MNT="$5"; OWNER="$6"\n'
+        # A desktop session may auto-mount partitions of the drive (before and after
+        # we change them); unmount them so wipefs/mkfs/mount are not blocked.
+        'umount_parts() { for p in "$DEV"[0-9]* "$DEV"p[0-9]*; do umount "$p" 2>/dev/null || true; done; }\n'
+        'umount_parts\n'
         'wipefs -a "$DEV"\n'
         'parted -s "$DEV" mklabel gpt\n'
         'parted -s "$DEV" mkpart primary fat32 1MiB 100%\n'
         'parted -s "$DEV" set 1 esp on\n'
         'partprobe "$DEV"\n'
-        'sleep 2\n'
+        # Wait for udev to create the new partition node instead of sleeping blindly.
+        'udevadm settle --timeout=15 2>/dev/null || sleep 2\n'
+        'i=0\n'
+        'while [ ! -b "$PART" ] && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done\n'
+        '[ -b "$PART" ] || { echo "The new partition $PART did not appear." >&2; exit 1; }\n'
+        'umount_parts\n'
         f'mkfs.vfat -F 32 -n {VOL_NAME} "$PART"\n'
+        'udevadm settle --timeout=15 2>/dev/null || true\n'
+        'umount_parts\n'
         'mount -o loop,ro,uid="${OWNER%%:*}",gid="${OWNER##*:}" "$ISO" "$ISO_MNT"\n'
         'mount -o uid="${OWNER%%:*}",gid="${OWNER##*:}" "$PART" "$USB_MNT"\n'
     )
-    priv.run_script(prep_script, log,
-                    args=[dev, part, iso_path, iso_mount, usb_mount, f"{uid}:{gid}"])
 
     try:
+        priv.run_script(prep_script, log,
+                        args=[dev, part, iso_path, iso_mount, usb_mount, f"{uid}:{gid}"])
+        check_canceled(cancel_event)
+
         def reopen():
             log("Remounting the drive read-only to read it back from the device...")
             remount = (
@@ -1126,10 +1530,13 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
             "wimlib-imagex not found. Install it via your package manager "
             "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
             "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2.",
-            reopen=reopen)
+            reopen=reopen, cancel_event=cancel_event)
+    except OperationCanceled:
+        log("Canceled. The drive is left incomplete and unusable.")
+        raise
     finally:
         log("Unmounting...")
-        cleanup_script = 'umount "$1" || true\numount "$2" || true\n'
+        cleanup_script = 'set -eu\numount "$1" || true\numount "$2" || true\n'
         try:
             priv.run_script(cleanup_script, log, args=[usb_mount, iso_mount])
         except Exception as cleanup_err:
@@ -1182,25 +1589,47 @@ def reverify_target_disk(dev, expected_size, log):
         f"({human_size(actual_size)}).")
 
 
-def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None):
+def hash_iso_for_audit(iso_path, log, progress, cancel_event):
+    """SHA-256 of the ISO for the audit trail. Runs in the worker thread, before the drive is touched."""
+    log("Hashing the ISO (recorded in the audit log)...")
+    if progress:
+        progress(0, 0, "Hashing the ISO...")
+    try:
+        digest = sha256_file(iso_path, cancel_event)
+    except OSError as e:
+        raise RuntimeError(f"Could not read the ISO file: {e.strerror or type(e).__name__}. "
+                           "The drive was not modified.") from None
+    log(f"ISO SHA-256: {digest}")
+    return digest
+
+
+def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None,
+              cancel_event=None):
     if mode not in (MODE_WINDOWS, MODE_LINUX):
         raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
     validate_device_name(dev)
     if mode == MODE_LINUX:
         validate_hybrid_iso(iso_path)  # fail before anything is touched
+    iso_sha = hash_iso_for_audit(iso_path, log, progress, cancel_event)
     reverify_target_disk(dev, expected_size, log)
-    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image")
+    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image "
+          f"(iso sha256={iso_sha}, size={os.path.getsize(iso_path)})")
     try:
-        if mode == MODE_LINUX:
-            if IS_MAC:
-                ejected = macos_write_raw(iso_path, dev, log, priv, progress)
+        with prevent_sleep(log):
+            if mode == MODE_LINUX:
+                if IS_MAC:
+                    ejected = macos_write_raw(iso_path, dev, log, priv, progress, cancel_event)
+                else:
+                    ejected = linux_write_raw(iso_path, dev, log, priv, progress, cancel_event)
+            elif IS_MAC:
+                ejected = macos_build_usb(iso_path, dev, log, progress=progress, cancel_event=cancel_event)
             else:
-                ejected = linux_write_raw(iso_path, dev, log, priv, progress)
-        elif IS_MAC:
-            ejected = macos_build_usb(iso_path, dev, log, progress=progress)
-        else:
-            ejected = linux_build_usb(iso_path, dev, log, priv, progress)
+                ejected = linux_build_usb(iso_path, dev, log, priv, progress, cancel_event)
+    except OperationCanceled:
+        audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+              logging.WARNING)
+        raise
     except Exception as e:
         audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
         raise
@@ -1219,7 +1648,32 @@ def get_missing_dependencies(mode=MODE_WINDOWS):
 # ============================================================
 # Download
 # ============================================================
+class _DownloadCanceled(RuntimeError):
+    """The user canceled; the partial file is kept so the download can be resumed."""
+
+
+class _DownloadInterrupted(RuntimeError):
+    """The connection kept failing; the partial file is kept so the download can be resumed."""
+
+
+class _RestartDownload(Exception):  # noqa: N818 - internal control flow, not an error
+    """The server's answer cannot extend the partial file; it was discarded, start from zero."""
+
+
 class DownloadThread(threading.Thread):
+    """Downloads one file over HTTPS, resuming and retrying where that is safe.
+
+    * The data goes to `<dest>.part` (owner-only). On cancel or a network error the part
+      file is KEPT; the next run resumes it with a Range request. The SHA-256 always
+      covers the whole file (the bytes already on disk are hashed first).
+    * A resume is only attempted when the first response carried a strong ETag or a
+      Last-Modified date (saved beside the part file) and is sent with If-Range, so a file
+      that changed on the server is downloaded again from scratch instead of being
+      stitched together. A server that ignores Range also leads to a clean restart.
+    * Transient errors are retried (DOWNLOAD_MAX_ATTEMPTS, with backoff).
+    * A checksum mismatch or an unexpected failure deletes the part file.
+    """
+
     def __init__(self, url, dest_path, progress_cb, done_cb, error_cb, cancel_event,
                  expected_sha256=None):
         super().__init__(daemon=True)
@@ -1231,65 +1685,209 @@ class DownloadThread(threading.Thread):
         self.cancel_event = cancel_event
         self.expected_sha256 = expected_sha256
 
+    # ---------- partial-file bookkeeping ----------
+    def _meta_path(self):
+        return self.dest_path + ".part.meta"
+
+    def _read_validator(self):
+        try:
+            with open(self._meta_path(), encoding="utf-8") as fh:
+                value = json.load(fh).get("validator")
+        except (OSError, ValueError, AttributeError):
+            return None
+        return value if isinstance(value, str) and value else None
+
+    def _write_validator(self, validator):
+        try:
+            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump({"validator": validator}, fh)
+        except OSError:
+            pass  # without it the next run simply restarts instead of resuming
+
+    def _discard_partial(self, tmp_path):
+        for path in (tmp_path, self._meta_path()):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _strong_validator(headers):
+        etag = headers.get("ETag")
+        if etag and not etag.startswith("W/"):
+            return etag
+        return headers.get("Last-Modified") or None
+
+    def _check_cancel(self):
+        if self.cancel_event.is_set():
+            raise _DownloadCanceled(
+                "Download canceled by user. The partial file was kept, so downloading the same "
+                "file again to the same location resumes where it stopped.")
+
+    def _hash_part(self, tmp_path, digest, size):
+        remaining = size
+        with open(tmp_path, "rb") as fh:
+            while remaining > 0:
+                self._check_cancel()
+                chunk = fh.read(min(CHUNK_SIZE, remaining))
+                if not chunk:
+                    raise OSError("the partial file is shorter than expected")
+                digest.update(chunk)
+                remaining -= len(chunk)
+
+    def _open(self, offset, validator):
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+            headers["If-Range"] = validator
+        # noqa S310 below: the scheme is restricted to HTTPS by validate_download_url()
+        # and re-checked after redirects; file:// and friends cannot reach here.
+        req = urllib.request.Request(self.url, headers=headers)  # noqa: S310
+        return urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS)  # noqa: S310
+
+    # ---------- one connection ----------
+    def _attempt(self, tmp_path):
+        """Download (or resume) once. Returns (bytes, sha256, expected). Raises on any problem."""
+        offset = os.path.getsize(tmp_path) if os.path.isfile(tmp_path) else 0
+        validator = self._read_validator() if offset else None
+        if offset and not validator:
+            self._discard_partial(tmp_path)  # nothing proves it belongs to this file
+            offset = 0
+        digest = hashlib.sha256()
+        if offset:
+            self._hash_part(tmp_path, digest, offset)
+        try:
+            resp = self._open(offset, validator)
+        except urllib.error.HTTPError as e:
+            if e.code != 416 or not offset:
+                raise
+            # Range not satisfiable: the part file does not fit the file on the server.
+            self._discard_partial(tmp_path)
+            offset, digest = 0, hashlib.sha256()
+            resp = self._open(0, None)
+
+        with resp:
+            # urlopen follows redirects; make sure we were not downgraded to
+            # an unencrypted connection along the way.
+            final_url = resp.geturl()
+            if final_url != self.url:
+                validate_download_url(final_url)
+                audit(f"Download redirected to host: {urllib.parse.urlparse(final_url).hostname}")
+            status = getattr(resp, "status", None) or resp.getcode()
+            length = int(resp.headers.get("Content-Length", 0) or 0)
+            if offset and status == 206:
+                m = re.match(r"bytes (\d+)-\d+/(\d+|\*)", resp.headers.get("Content-Range", ""))
+                if not m or int(m.group(1)) != offset:
+                    self._discard_partial(tmp_path)
+                    raise _RestartDownload()
+                total = int(m.group(2)) if m.group(2).isdigit() else offset + length
+                audit(f"Download resumed at {human_size(offset)}")
+            else:
+                if offset:  # the server ignored Range (or the file changed): start over cleanly
+                    audit("Server did not honour the resume request; restarting the download")
+                    offset, digest = 0, hashlib.sha256()
+                    self._discard_partial(tmp_path)
+                total = length
+                fresh_validator = self._strong_validator(resp.headers)
+                if fresh_validator:
+                    self._write_validator(fresh_validator)
+                else:
+                    try:
+                        os.remove(self._meta_path())  # never leave a stale validator behind
+                    except OSError:
+                        pass
+
+            downloaded = offset
+            start = time.time()
+            # Create the partial file readable only by its owner.
+            flags = os.O_CREAT | os.O_WRONLY | (os.O_APPEND if offset else os.O_TRUNC)
+            fd = os.open(tmp_path, flags, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "ab" if offset else "wb") as f:
+                while True:
+                    self._check_cancel()
+                    chunk = resp.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    digest.update(chunk)
+                    downloaded += len(chunk)
+                    elapsed = max(time.time() - start, 0.001)
+                    self.progress_cb(downloaded, total, (downloaded - offset) / elapsed)
+        if total and downloaded < total:
+            raise _DownloadInterrupted(
+                f"Incomplete download: received {human_size(downloaded)} of {human_size(total)}.")
+        if total and downloaded > total:
+            self._discard_partial(tmp_path)
+            raise RuntimeError("The server sent more data than announced. The file was discarded.")
+        sha256 = digest.hexdigest()
+        expected = (self.expected_sha256 or "").strip().lower()
+        if expected and expected != sha256:
+            audit("Downloaded ISO FAILED SHA-256 verification", logging.ERROR)
+            self._discard_partial(tmp_path)
+            raise RuntimeError(
+                "SHA-256 verification FAILED — the downloaded file is NOT the one you "
+                "expected and was discarded.\n\n"
+                f"Expected: {expected}\nReceived: {sha256}\n\n"
+                "Do not use this file. Download it again from the official Microsoft page."
+            )
+        os.replace(tmp_path, self.dest_path)
+        try:
+            os.remove(self._meta_path())
+        except OSError:
+            pass
+        return downloaded, sha256, expected
+
+    # ---------- retry loop ----------
     def run(self):
         tmp_path = self.dest_path + ".part"
         try:
             # The URL was validated before this thread started; re-check here so
             # the guarantee holds even if this class is reused elsewhere.
             validate_download_url(self.url)
-            # noqa S310 below: the scheme is restricted to HTTPS by the call above
-            # and re-checked after redirects; file:// and friends cannot reach here.
-            req = urllib.request.Request(self.url, headers={"User-Agent": "Mozilla/5.0"})  # noqa: S310
-            digest = hashlib.sha256()
-            with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT_SECONDS) as resp:  # noqa: S310
-                # urlopen follows redirects; make sure we were not downgraded to
-                # an unencrypted connection along the way.
-                final_url = resp.geturl()
-                if final_url != self.url:
-                    validate_download_url(final_url)
-                    audit(f"Download redirected to host: {urllib.parse.urlparse(final_url).hostname}")
-                total = int(resp.headers.get("Content-Length", 0))
-                downloaded = 0
-                start = time.time()
-                # Create the partial file readable only by its owner.
-                fd = os.open(tmp_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, PRIVATE_FILE_MODE)
-                with os.fdopen(fd, "wb") as f:
-                    while True:
-                        if self.cancel_event.is_set():
-                            raise RuntimeError("Download canceled by user.")
-                        chunk = resp.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        elapsed = max(time.time() - start, 0.001)
-                        self.progress_cb(downloaded, total, downloaded / elapsed)
-                if total and downloaded != total:
-                    raise RuntimeError(
-                        f"Incomplete download: received {human_size(downloaded)} of "
-                        f"{human_size(total)}. The file was discarded."
-                    )
-                sha256 = digest.hexdigest()
-                expected = (self.expected_sha256 or "").strip().lower()
-                if expected and expected != sha256:
-                    audit("Downloaded ISO FAILED SHA-256 verification", logging.ERROR)
-                    raise RuntimeError(
-                        "SHA-256 verification FAILED — the downloaded file is NOT the one you "
-                        "expected and was discarded.\n\n"
-                        f"Expected: {expected}\nReceived: {sha256}\n\n"
-                        "Do not use this file. Download it again from the official Microsoft page."
-                    )
-                os.replace(tmp_path, self.dest_path)
+            attempt = 0
+            restarts = 0
+            while True:
+                attempt += 1
+                try:
+                    downloaded, sha256, expected = self._attempt(tmp_path)
+                    break
+                except _RestartDownload:
+                    restarts += 1
+                    if restarts > 2:
+                        raise RuntimeError("The server keeps answering the resume request with "
+                                           "unusable data. Try the download again.") from None
+                    attempt -= 1
+                    continue
+                except urllib.error.HTTPError as e:
+                    if e.code < 500 and e.code not in (408, 429):
+                        raise _DownloadInterrupted(
+                            f"The server refused the download (HTTP {e.code}). If the link has "
+                            "expired, copy a fresh one from the Microsoft page; the partial file "
+                            "is kept and will be resumed if it is the same file.") from None
+                    problem = f"HTTP {e.code}"
+                except (urllib.error.URLError, OSError, http.client.HTTPException,
+                        _DownloadInterrupted) as e:
+                    if isinstance(e, urllib.error.URLError) and e.reason is not None:
+                        problem = str(e.reason)
+                    else:
+                        problem = str(e) or type(e).__name__
+                if attempt >= DOWNLOAD_MAX_ATTEMPTS:
+                    raise _DownloadInterrupted(
+                        f"The download was interrupted ({problem}) and could not be continued after "
+                        f"{attempt} attempts. The partial file was kept; start the download again "
+                        "to resume it.")
+                delay = DOWNLOAD_BACKOFF_SECONDS[min(attempt - 1, len(DOWNLOAD_BACKOFF_SECONDS) - 1)]
+                audit(f"Download attempt {attempt} failed; retrying in {delay}s")
+                if self.cancel_event.wait(delay):
+                    self._check_cancel()
             audit(f"ISO downloaded ({human_size(downloaded)}) sha256={sha256}"
                   + (" [verified against expected value]" if expected else " [not verified]"))
             self.done_cb(self.dest_path, sha256, bool(expected))
+        except (_DownloadCanceled, _DownloadInterrupted) as e:
+            self.error_cb(str(e))  # the partial file stays on disk for a later resume
         except Exception as e:
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except OSError:
-                    pass
+            self._discard_partial(tmp_path)
             self.error_cb(str(e))
 
 
@@ -1348,6 +1946,7 @@ class App(_TkBase):
         self.geometry("760x700")
         self.iso_path = tk.StringVar(value="")
         self.cancel_event = threading.Event()
+        self.create_cancel_event = threading.Event()  # cancels the USB creation (not the download)
         self.disks = []
         self.priv = PrivilegeHelper(self)
         self._build_ui()
@@ -1454,10 +2053,16 @@ class App(_TkBase):
             warn_text += "\nLinux mode on macOS asks for your administrator password to write the drive."
         ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=720).pack(anchor="w", padx=10, pady=10)
 
+        create_row = ttk.Frame(f)
+        create_row.pack(anchor="w", padx=10, pady=10)
         self.create_btn = ttk.Button(
-            f, text="Create Bootable USB Drive", command=self.start_create_usb, state="disabled"
+            create_row, text="Create Bootable USB Drive", command=self.start_create_usb, state="disabled"
         )
-        self.create_btn.pack(anchor="w", padx=10, pady=10)
+        self.create_btn.pack(side="left")
+        self.cancel_create_btn = ttk.Button(
+            create_row, text="Cancel", command=self.cancel_create_usb, state="disabled"
+        )
+        self.cancel_create_btn.pack(side="left", padx=(8, 0))
 
         self.create_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.create_progress.pack(fill="x", padx=10, pady=(0, 2))
@@ -1506,7 +2111,7 @@ class App(_TkBase):
                     # Show exactly what will run as root before it runs.
                     self.after(0, self.log, f"About to run as administrator: {script}")
                     audit(f"Installing dependencies via {mgr}: {', '.join(missing)}")
-                    self.priv.run_script(script, lambda m: self.after(0, self.log, m))
+                    self.priv.run_script("set -eu\n" + script, lambda m: self.after(0, self.log, m))
             except (ValueError, RuntimeError) as e:
                 self.after(0, self._report_error, "Error", str(e))
             except Exception as e:
@@ -1681,6 +2286,8 @@ class App(_TkBase):
             self.log("Canceled: administrator password was not provided. The drive was not modified.")
             return
         self.create_btn.config(state="disabled")
+        self.create_cancel_event.clear()
+        self.cancel_create_btn.config(state="normal")
         self._reset_create_progress()
         iso = self.iso_path.get()
         dev = disk["id"]
@@ -1690,13 +2297,21 @@ class App(_TkBase):
             try:
                 ejected = build_usb(iso, dev, lambda m: self.after(0, self.log, m), self.priv,
                           expected_size=expected_size, mode=mode,
-                          progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s))
+                          progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s),
+                          cancel_event=self.create_cancel_event)
                 self.after(0, self._finish_create_progress, True)
                 note = ("It was verified against the ISO and ejected — you can unplug it now." if ejected else
                         "It was verified against the ISO, but could not be ejected automatically. "
                         "Eject it from the file manager before unplugging.")
                 self.after(0, lambda: messagebox.showinfo(
                     "Done", f"Bootable USB drive created successfully!\n\n{note}"))
+            except OperationCanceled:
+                # Not an error: the user asked for it. Say clearly what state the drive is in.
+                self.after(0, self._finish_create_progress, False, True)
+                self.after(0, self.log, "Canceled. The drive was left unusable; create it again before use.")
+                self.after(0, lambda: messagebox.showinfo(
+                    "Canceled", "The operation was canceled.\n\nThe USB drive was left incomplete and "
+                    "unusable. Create it again before using it."))
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
                 self.after(0, self._finish_create_progress, False)
@@ -1710,8 +2325,25 @@ class App(_TkBase):
                 # The administrator password is no longer needed once the operation ends.
                 self.priv.clear_cached_password()
                 self.after(0, lambda: self.create_btn.config(state="normal"))
+                self.after(0, lambda: self.cancel_create_btn.config(state="disabled"))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def cancel_create_usb(self):
+        """Ask the running USB creation to stop (after a warning). Safe to call at any time."""
+        if self.create_cancel_event.is_set() or str(self.cancel_create_btn.cget("state")) == "disabled":
+            return
+        if not messagebox.askyesno(
+            "Cancel the operation?",
+            "Canceling now will leave the USB drive incomplete and UNUSABLE until it is created "
+            "again.\n\nDo you really want to cancel?",
+            icon="warning",
+        ):
+            return
+        self.create_cancel_event.set()
+        self.cancel_create_btn.config(state="disabled")
+        self.log("Cancel requested: stopping safely...")
+        audit("User requested cancel of the USB creation")
 
     # ---------- USB creation progress ----------
     def _reset_create_progress(self):
@@ -1761,10 +2393,10 @@ class App(_TkBase):
         self.create_progress_label.config(
             text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
 
-    def _finish_create_progress(self, ok):
+    def _finish_create_progress(self, ok, canceled=False):
         self.create_progress.stop()
         self.create_progress.config(mode="determinate", value=100 if ok else 0)
-        self.create_progress_label.config(text="Done — 100%" if ok else "Failed.")
+        self.create_progress_label.config(text="Done — 100%" if ok else ("Canceled." if canceled else "Failed."))
 
     def report_callback_exception(self, exc, val, tb):
         """Tk swallows exceptions raised in button handlers (they only reach stderr).

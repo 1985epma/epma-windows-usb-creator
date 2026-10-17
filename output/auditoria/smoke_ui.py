@@ -42,13 +42,13 @@ WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn", "cancel_btn",
     "progress", "progress_label", "iso_label", "iso_label2",
     "dep_label", "install_deps_btn", "disk_combo",
-    "mode_var", "create_btn", "create_progress", "create_progress_label", "log_text",
+    "mode_var", "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
 ]
 
 METODOS_OBRIGATORIOS = [
     "start_download", "cancel_download", "pick_existing_iso", "set_iso",
     "refresh_disks", "selected_disk", "update_create_button_state",
-    "start_create_usb", "log", "_report_error", "_on_download_done",
+    "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
     "report_callback_exception", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
@@ -177,6 +177,7 @@ try:
         janela._on_create_progress(500, 1000, "Verifying the written image...")
         janela._finish_create_progress(True)
         janela._finish_create_progress(False)
+        janela._finish_create_progress(False, True)   # cancelado pelo usuário
         print("  [OK]    progresso da criação do pendrive (indeterminado, parcial, 100%, falha)")
     except Exception as e:
         print(f"  [FALHA] progresso da criação: {type(e).__name__}: {e}")
