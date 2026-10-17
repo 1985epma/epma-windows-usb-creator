@@ -453,6 +453,80 @@ if "hashlib.md5" not in FONTE and "hashlib.sha1" not in FONTE:
 
 
 # ============================================================
+# G14 — Cópia dos arquivos de "hardening" para o pendrive (script privilegiado)
+#
+# HARDENING_COPY_SCRIPT roda como administrador e copia uma pasta preparada
+# pelo programa (os arquivos extras do Windows) para o pendrive montado. Ele
+# precisa ser texto literal (nada colado dentro), parar na primeira falha,
+# validar as duas pastas recebidas, recusar links simbólicos, copiar SEM
+# seguir links e respeitar o arquivo de cancelamento.
+# ============================================================
+print("\n=== G14 — Script privilegiado de cópia dos arquivos de hardening ===")
+
+
+def _so_literais(no):
+    """True se o valor é só texto fixo: constantes de string ligadas por '+'."""
+    if isinstance(no, ast.Constant):
+        return isinstance(no.value, str)
+    if isinstance(no, ast.BinOp) and isinstance(no.op, ast.Add):
+        return _so_literais(no.left) and _so_literais(no.right)
+    return False
+
+
+_script_hard = None
+for no in ARVORE.body:
+    if isinstance(no, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "HARDENING_COPY_SCRIPT"
+                                          for t in no.targets):
+        _script_hard = no
+
+if _script_hard is None:
+    erro("G14", "HARDENING_COPY_SCRIPT presente",
+         "O script de cópia dos arquivos de hardening sumiu ou foi renomeado. "
+         "Se a cópia mudou de forma, revise esta regra.")
+elif not _so_literais(_script_hard.value):
+    erro("G14", "HARDENING_COPY_SCRIPT é texto literal",
+         "O script privilegiado deixou de ser texto literal (f-string, format, "
+         "concatenação com variável). Valores só podem chegar como \"$1\", \"$2\", \"$3\".",
+         _script_hard.lineno)
+else:
+    _texto_hard = texto_literal(_script_hard.value)
+    _exigencias = [
+        (_texto_hard.lstrip().startswith("set -eu"), "começar com 'set -eu'"),
+        ('[ ! -d "$STAGE" ]' in _texto_hard and '[ ! -d "$MNT" ]' in _texto_hard,
+         "validar que a pasta preparada e o ponto de montagem são diretórios"),
+        ('find "$STAGE" -type l' in _texto_hard, "recusar links simbólicos na pasta preparada"),
+        ("cp -RP -- " in _texto_hard, "copiar sem seguir links ('cp -RP --')"),
+        ('[ -e "$STOP" ]' in _texto_hard and "HARDENING_CANCELED" in _texto_hard,
+         "respeitar o arquivo de cancelamento"),
+    ]
+    _faltando = [descricao for presente, descricao in _exigencias if not presente]
+    if _faltando:
+        for descricao in _faltando:
+            erro("G14", f"HARDENING_COPY_SCRIPT deve {descricao}",
+                 f"O script privilegiado de cópia dos arquivos de hardening deixou de {descricao}.",
+                 _script_hard.lineno)
+    else:
+        ok("G14", "script de cópia: literal, 'set -eu', valida pastas, recusa links, sem seguir links, cancelável")
+
+_chamadas_hard = [no for no in ast.walk(ARVORE)
+                  if isinstance(no, ast.Call) and getattr(no.func, "attr", None) == "run_script"
+                  and no.args and isinstance(no.args[0], ast.Name) and no.args[0].id == "HARDENING_COPY_SCRIPT"]
+if not _chamadas_hard:
+    erro("G14", "HARDENING_COPY_SCRIPT é executado com argumentos posicionais",
+         "Nenhuma chamada run_script(HARDENING_COPY_SCRIPT, ...) encontrada.")
+else:
+    for chamada in _chamadas_hard:
+        argumentos = [kw for kw in chamada.keywords if kw.arg == "args"]
+        if argumentos and isinstance(argumentos[0].value, ast.List) and len(argumentos[0].value.elts) == 3:
+            ok("G14", "HARDENING_COPY_SCRIPT recebe a pasta, o ponto de montagem e o arquivo de cancelamento "
+                      "por args=[...]")
+        else:
+            erro("G14", "HARDENING_COPY_SCRIPT recebe 3 argumentos posicionais",
+                 "run_script(HARDENING_COPY_SCRIPT, ...) precisa passar args=[pasta, ponto, cancelamento].",
+                 chamada.lineno)
+
+
+# ============================================================
 # Resultado
 # ============================================================
 print("\n" + "=" * 66)

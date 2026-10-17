@@ -20,6 +20,11 @@ Scenarios (each with its own loop device, always detached in `finally`):
                 every file present and identical, install.wim copied whole.
   windows-split linux_build_usb with FAT32_MAX_FILE_SIZE patched tiny and a real WIM,
                 exercising `wimlib-imagex split` + `wimlib-imagex verify`.
+  windows-hardening
+                linux_build_usb with hardening files (the privileged HARDENING_COPY_SCRIPT, run for
+                real through sudo onto the FAT32 volume): every extra file is present with the exact
+                bytes, including the literal sources/$OEM$/$$/... path, next to the ISO's files; and
+                a byte flipped on the drive after the copy must fail the verification.
   verify-diff   verify_windows_payload (no loop device needed) must reject a missing
                 file, a changed file and a changed install image.
 
@@ -337,6 +342,64 @@ def scenario_windows_split(app, workdir, priv, rec):
         app.FAT32_MAX_FILE_SIZE = old_limit
 
 
+HARDENING_FILES = {
+    "autounattend.xml": b"<?xml version='1.0' encoding='utf-8'?><unattend/>\n",
+    "sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"@echo off\r\npowershell -File harden.ps1\r\n",
+    "sources/$OEM$/$$/Setup/Scripts/harden.ps1": random.Random(41).randbytes(5000),
+}
+
+
+def scenario_windows_hardening(app, workdir, priv, rec):
+    tree = os.path.join(workdir, "tree-hard")
+    small = build_windows_tree(tree)
+    install_digest = sha256(os.path.join(tree, "sources", "install.wim"))
+    iso = os.path.join(workdir, "win-hard.iso")
+    make_iso(tree, iso)
+
+    with loop_device(workdir, "winhard") as dev:
+        app.linux_build_usb(iso, os.path.basename(dev), rec.log, priv, rec.progress,
+                            hardening_files=HARDENING_FILES)
+        assert any(line == "Adding hardening files..." for line in rec.lines), "no 'Adding hardening files...' log line"
+        assert any("Hardening files verified" in line for line in rec.lines), "extra files were not verified"
+        assert any("Verification passed" in line for line in rec.lines), "verification did not pass"
+        check_windows_drive(app, dev, small, install_digest, split=False)
+
+        part = f"{dev}p1"
+        mnt = tempfile.mkdtemp(prefix="check_")
+        sudo("mount", "-o", "ro", part, mnt)
+        try:
+            for rel, data in HARDENING_FILES.items():
+                with open(os.path.join(mnt, *rel.split("/")), "rb") as fh:
+                    assert fh.read() == data, f"hardening file differs on the drive: {rel}"
+            assert os.path.isdir(os.path.join(mnt, "sources", "$OEM$", "$$")), "the $OEM$/$$ folders are missing"
+        finally:
+            sudo("umount", mnt, check=False)
+            with contextlib.suppress(OSError):
+                os.rmdir(mnt)
+
+    # A byte that changes on the drive after the copy must be caught by the read-back.
+    original = app.copy_hardening_stage
+
+    def copy_then_corrupt(priv_, stage, mount_point, log, cancel_event=None):
+        original(priv_, stage, mount_point, log, cancel_event)
+        victim = os.path.join(mount_point, "sources", "$OEM$", "$$", "Setup", "Scripts", "harden.ps1")
+        with open(victim, "r+b") as fh:
+            fh.seek(10)
+            first = fh.read(1)
+            fh.seek(10)
+            fh.write(bytes([first[0] ^ 0xFF]))
+
+    rec2 = Recorder()
+    app.copy_hardening_stage = copy_then_corrupt
+    try:
+        with loop_device(workdir, "winhard2") as dev:
+            expect_raises(RuntimeError, app.linux_build_usb, iso, os.path.basename(dev), rec2.log, priv,
+                          rec2.progress, hardening_files=HARDENING_FILES, contains="Verification FAILED")
+    finally:
+        app.copy_hardening_stage = original
+    rec.lines.extend(rec2.lines)
+
+
 def scenario_verify_diff(app, workdir, priv, rec):
     """verify_windows_payload on plain directories: no loop device, no root."""
     def fresh(name):
@@ -371,6 +434,7 @@ SCENARIOS = [
     ("raw-write", scenario_raw_write),
     ("windows-copy", scenario_windows_copy),
     ("windows-split", scenario_windows_split),
+    ("windows-hardening", scenario_windows_hardening),
     ("verify-diff", scenario_verify_diff),
 ]
 
