@@ -38,8 +38,10 @@ run disk commands and is never stored to disk or sent anywhere.
 """
 
 import argparse
+import atexit
 import collections
 import contextlib
+import errno
 import filecmp
 import hashlib
 import http.client
@@ -65,6 +67,7 @@ import urllib.parse
 import urllib.request
 import webbrowser
 import zipfile
+import zlib
 
 # Tkinter is needed by the GUI only. The engine and the command line interface work
 # without it, so a missing Tk is remembered here instead of ending the program at
@@ -192,6 +195,12 @@ AUDIT_LOG_BACKUPS = 5
 RAW_CANCELED_MARKER = "WRITE_CANCELED"  # printed by the root write scripts when they stop on request
 DIRECT_IO_ALIGNMENT = 4096     # oflag=direct on Linux only when the image size is a multiple of this
 PRIVATE_FILE_MODE = 0o600      # owner-only read/write for files we create
+O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)  # never follow a symlink planted at a temp/part file path
+SLEEP_INHIBIT_SECONDS = 12 * 3600  # the Linux sleep inhibitor is bounded, so it can never leak for good
+SLEEP_INHIBIT_CHECK_SECONDS = 0.3  # how long to wait to see that the inhibitor really started
+# A write error that retrying cannot fix (and that must not be mistaken for a network problem).
+DOWNLOAD_FATAL_ERRNOS = tuple(getattr(errno, n) for n in ("ENOSPC", "EDQUOT", "EROFS", "EACCES", "EPERM")
+                              if hasattr(errno, n))
 
 # Device identifiers we are willing to pass to privileged commands. Anything
 # outside this shape is rejected rather than escaped: there is no legitimate
@@ -783,7 +792,7 @@ def detect_iso_kind(path):
     """Classify an image by its content: 'windows', 'linux' (hybrid), 'chromeos' or 'unknown'.
 
     Never raises and reads at most a few MB, so it is safe to call on any file the user
-    picks. 'unknown' means "could not tell" and callers should fall back to the file name.
+    picks. 'unknown' means "could not tell"; callers must ask the user, not guess from the file name.
     """
     try:
         return _detect_iso_kind(path)
@@ -799,6 +808,9 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
     it never overwrites an existing file, it refuses implausible sizes and checks the free space
     first, and the data goes to a temporary file that is renamed only when the whole archive
     entry was read and its CRC verified. `progress(done, total)` is called while copying.
+    A damaged or unsupported archive always ends as a ValueError with a user-facing message
+    (never a raw zlib/zipfile exception). The temporary file is created without following
+    symlinks and never reuses an existing path.
     """
     try:
         archive = zipfile.ZipFile(zip_path)
@@ -826,8 +838,13 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
             dest, n = os.path.join(dest_dir, f"{stem}-{n}{ext}"), n + 1
         tmp = dest + ".part"
         done = 0
+        created = False
         try:
-            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, PRIVATE_FILE_MODE)
+            # A stale ".part" (or a symlink planted at that name) is removed, never written through.
+            if os.path.lexists(tmp):
+                os.remove(tmp)
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            created = True
             with os.fdopen(fd, "wb") as out, archive.open(info) as src:
                 while True:
                     check_canceled(cancel_event)
@@ -841,10 +858,18 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
             if done != info.file_size:
                 raise ValueError("The disk image in the ZIP is incomplete. Download the file again.")
             os.replace(tmp, dest)
-        except zipfile.BadZipFile:
-            raise ValueError("The ZIP file is damaged (checksum error). Download it again.") from None
+            created = False
+        except OperationCanceled:
+            raise
+        except (zipfile.BadZipFile, zlib.error, EOFError):
+            raise ValueError("The ZIP file is damaged (checksum or compression error). "
+                             "Download it again.") from None
+        except (NotImplementedError, RuntimeError):
+            # zipfile: unsupported compression method, or an encrypted entry.
+            raise ValueError("This ZIP file uses a compression method or encryption that is not "
+                             "supported. Download latest.bin.zip again from Google.") from None
         finally:
-            if os.path.exists(tmp):
+            if created and os.path.lexists(tmp):
                 try:
                     os.remove(tmp)
                 except OSError:
@@ -971,6 +996,9 @@ def copy_file_with_progress(src, dst_dir, on_bytes, cancel_event=None):
 # never pasted into the text; "$5" is the cancel flag file (VERIFY_CANCELED when it appears).
 VERIFY_RAW_SCRIPT = (
     'set -eu\n'
+    # A terminal Ctrl-C reaches this script too (same process group). Ignore it: the app turns
+    # it into the cancel flag file, which the loop below polls.
+    "trap '' INT\n"
     'ISO="$1"; DEV="$2"; SIZE="$3"; BS="$4"; STOP="$5"\n'
     # Linux: make sure we read the device, not the page cache (harmless elsewhere).
     '{ blockdev --flushbufs "$DEV"; echo 3 > /proc/sys/vm/drop_caches; } >/dev/null 2>&1 || true\n'
@@ -1017,12 +1045,14 @@ def verify_raw_write(iso_path, device_path, log, priv, progress, cancel_event=No
         else:
             log(line)
 
-    check_canceled(cancel_event)
+    check_canceled(cancel_event, written=True)
     with cancel_flag(cancel_event) as flag:
         priv.run_script(VERIFY_RAW_SCRIPT, watch,
                         args=[iso_path, device_path, str(total), str(VERIFY_CHUNK), flag])
     if result.get("canceled"):
-        raise OperationCanceled("Canceled by the user.")
+        log("Verification canceled. The image was written completely but NOT verified.")
+        raise OperationCanceled("Canceled by the user during verification. The image was written "
+                                "but not verified.", written=True)
     if result.get("ok") is None:
         raise RuntimeError("Could not complete the verification of the written drive. "
                            "Do not trust this drive; run the creation again.")
@@ -1061,7 +1091,7 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
             f"ISO (for example: {bad[0]}).\n\nThe drive was NOT ejected and should not be used.")
 
     name = os.path.basename(big_file)
-    sources = os.path.join(dst_root, "sources")
+    sources = os.path.join(dst_root, os.path.dirname(rel_big))
     if progress:
         progress(0, 0, "Verifying the install image...")
     swm = os.path.join(sources, os.path.splitext(name)[0] + ".swm")
@@ -1081,18 +1111,37 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
     log("Verification passed: the files on the drive match the ISO.")
 
 
+def find_case_insensitive(directory, name):
+    """Return the real path of the entry in `directory` named `name` ignoring case, or None.
+
+    ISO detection upper-cases names, so a custom image with "Sources/Install.wim" counts as
+    Windows; the copy must therefore find it on a case-sensitive mount too.
+    """
+    try:
+        entries = sorted(os.listdir(directory))
+    except OSError:
+        return None
+    if name in entries:
+        return os.path.join(directory, name)
+    for entry in entries:
+        if entry.lower() == name.lower():
+            return os.path.join(directory, entry)  # the spelling on disk, even on a case-insensitive volume
+    return None
+
+
 def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=None, cancel_event=None):
     """Copy the contents of a mounted Windows ISO to the drive, reporting progress.
 
     Everything except sources/install.wim|esd is copied with rsync; that file is
     copied directly, or split into <4 GB parts when it exceeds the FAT32 limit.
-    Progress is counted in bytes over the whole payload.
+    Progress is counted in bytes over the whole payload. The "sources" folder and the
+    install image are looked up ignoring case.
     """
-    sources_dir = os.path.join(src_root, "sources")
+    sources_dir = find_case_insensitive(src_root, "sources")
     big_file = None
     for name in ("install.wim", "install.esd"):
-        p = os.path.join(sources_dir, name)
-        if os.path.exists(p):
+        p = find_case_insensitive(sources_dir, name) if sources_dir else None
+        if p and os.path.isfile(p):
             big_file = p
             break
     if not big_file:
@@ -1132,7 +1181,8 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     report(rest_total, "Copying files...")
     check_canceled(cancel_event)
 
-    target_sources = os.path.join(dst_root, "sources")
+    # Same folder name as on the ISO (rsync created it); the drive's FAT32 ignores case anyway.
+    target_sources = os.path.join(dst_root, os.path.dirname(rel_big))
     os.makedirs(target_sources, exist_ok=True)
 
     if size > FAT32_MAX_FILE_SIZE:
@@ -1162,7 +1212,11 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     # Remount so the check reads from the device itself and not from the system cache.
     if reopen:
         dst_root = reopen()
-    verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=cancel_event)
+    try:
+        verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=cancel_event)
+    except OperationCanceled as e:
+        e.written = True  # everything was copied; only the final check was interrupted
+        raise
 
 
 def validate_download_url(raw_url):
@@ -1197,13 +1251,32 @@ def validate_download_url(raw_url):
 
 
 class OperationCanceled(RuntimeError):
-    """The user canceled the USB creation. A RuntimeError so older handlers still cope."""
+    """The user canceled the USB creation. A RuntimeError so older handlers still cope.
+
+    Contract for callers (the GUI reads these with getattr(e, "...", default)):
+
+    * `drive_touched` (default True): False when the cancel happened before anything on the
+      drive was changed (while hashing the ISO, or before the erase/write began). The drive
+      is then exactly as it was and still usable; do NOT tell the user it is unusable.
+    * `written` (default False): True when the whole image/payload had been written and the
+      cancel came during the final verification. The drive holds the complete image but it
+      was not verified.
+    * With neither set, the operation stopped midway and the drive is left incomplete.
+    """
+
+    def __init__(self, message="Canceled by the user.", drive_touched=True, written=False):
+        super().__init__(message)
+        self.drive_touched = drive_touched
+        self.written = written
 
 
-def check_canceled(cancel_event):
-    """Raise OperationCanceled if the user asked to stop. Cheap; call between steps."""
+def check_canceled(cancel_event, drive_touched=True, written=False):
+    """Raise OperationCanceled if the user asked to stop. Cheap; call between steps.
+
+    `drive_touched` / `written` describe the state of the drive at this point (see OperationCanceled).
+    """
     if cancel_event is not None and cancel_event.is_set():
-        raise OperationCanceled("Canceled by the user.")
+        raise OperationCanceled("Canceled by the user.", drive_touched=drive_touched, written=written)
 
 
 def sha256_file(path, cancel_event=None, chunk=4 * 1024 * 1024):
@@ -1247,7 +1320,9 @@ def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
     is raised. Passing neither keeps the original behaviour.
     """
     log(f"$ {' '.join(args)}")
-    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    # errors="replace": a file name that is not valid UTF-8 (rsync -v lists them) must not abort the copy.
+    proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            errors="replace", bufsize=1)
     state = {"timed_out": False, "canceled": False}
     finished = threading.Event()
 
@@ -1333,26 +1408,42 @@ def cancel_flag(cancel_event):
 def prevent_sleep(log=None):
     """Keep the computer awake while a write runs. Best effort: failures are ignored."""
     proc = None
+    stopper = None
     try:
         if IS_MAC and shutil.which("caffeinate"):
             # -i: no idle sleep; -w: stop by itself when our process exits.
             cmd = ["caffeinate", "-i", "-w", str(os.getpid())]
         elif IS_LINUX and shutil.which("systemd-inhibit"):
+            # A bounded sleep (not "infinity"): if the app is killed without cleanup, the
+            # inhibitor still ends by itself instead of keeping the machine awake forever.
             cmd = ["systemd-inhibit", "--what=sleep:idle", f"--who={APP_NAME}",
-                   "--why=Writing a USB drive", "sleep", "infinity"]
+                   "--why=Writing a USB drive", "sleep", str(SLEEP_INHIBIT_SECONDS)]
         else:
             cmd = None
         if cmd:
-            # Own process group, so stopping it also stops systemd-inhibit's `sleep infinity`.
+            # Own process group, so stopping it also stops systemd-inhibit's `sleep`.
             proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                     stderr=subprocess.DEVNULL, start_new_session=True)
-            if log:
-                log("Sleep is blocked while the drive is being written.")
+            try:
+                proc.wait(timeout=SLEEP_INHIBIT_CHECK_SECONDS)
+            except subprocess.TimeoutExpired:
+                # Still running after the check: the inhibitor is really holding. Make sure it
+                # is also stopped if the app exits without leaving this block.
+                def stopper(p=proc):
+                    _stop_process(p, group=True)
+
+                atexit.register(stopper)
+                if log:
+                    log("Sleep is blocked while the drive is being written.")
+            else:
+                proc = None  # it exited at once (no session bus, unsupported, ...): nothing is held
     except (OSError, subprocess.SubprocessError):
         proc = None
     try:
         yield
     finally:
+        if stopper is not None:
+            atexit.unregister(stopper)
         if proc is not None:
             _stop_process(proc, group=True)
 
@@ -1696,7 +1787,8 @@ class PrivilegeHelper:
         if use_stdin and self.cached_password is None:
             raise RuntimeError("The administrator session ended before the command started. "
                                "Nothing was changed; start the operation again.")
-        popen_kw = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "bufsize": 1}
+        popen_kw = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True,
+                    "errors": "replace", "bufsize": 1}
         if use_stdin:
             proc = subprocess.Popen(["sudo", "-S", "-p", ""] + bash_argv, stdin=subprocess.PIPE, **popen_kw)
         else:
@@ -1716,6 +1808,7 @@ class PrivilegeHelper:
                 refused = True
             log(line)
         proc.wait()
+        proc.stdout.close()
         if proc.returncode == 0:
             return None
         audit(f"Privileged script failed (exit {proc.returncode}); not retried", logging.ERROR)
@@ -2050,7 +2143,7 @@ def macos_find_mountpoint_by_volname(dev, volname, retries=15):
 
 
 def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=None, eject=True):
-    check_canceled(cancel_event)
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
     log(f"Erasing and formatting /dev/{dev} as GPT + FAT32 ('{VOL_NAME}')...")
     run_cmd(["diskutil", "eraseDisk", "FAT32", VOL_NAME, "GPT", f"/dev/{dev}"], log, timeout=600)
 
@@ -2082,8 +2175,12 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
             "wimlib-imagex not found. Install it with: brew install wimlib "
             "(or use the 'Install missing dependencies' button).",
             reopen=reopen, cancel_event=cancel_event)
-    except OperationCanceled:
-        log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. Unmounting the drive; the files were copied completely "
+                "but NOT verified.")
+        else:
+            log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
         run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, check=False, timeout=120)
         raise
     finally:
@@ -2154,6 +2251,9 @@ def report_eject(ejected, log, skipped=False):
 # (which polls it once a second) then stops dd and prints WRITE_CANCELED.
 MACOS_RAW_SCRIPT = (
     'set -eu\n'
+    # A terminal Ctrl-C also reaches this script (same process group). Ignoring it keeps the
+    # script alive to stop dd itself through the flag file; otherwise dd would be orphaned.
+    "trap '' INT\n"
     'dd if="$1" of="$2" bs="$3" &\n'
     'pid=$!\n'
     'canceled=0\n'
@@ -2172,6 +2272,7 @@ MACOS_RAW_SCRIPT = (
 # "$5" is "direct" (add oflag=direct) or "buffered"; the caller decides, the text never changes.
 LINUX_RAW_SCRIPT = (
     'set -eu\n'
+    "trap '' INT\n"
     'for p in "$2"[0-9]* "$2"p[0-9]*; do umount "$p" 2>/dev/null || true; done\n'
     'if [ "$5" = direct ]; then\n'
     '  dd if="$1" of="$2" bs="$3" conv=fsync status=progress oflag=direct &\n'
@@ -2214,9 +2315,10 @@ def write_raw_image(priv, script, base_args, log, total, progress, cancel_event,
 def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None, eject=True):
     """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
     validate_hybrid_iso(iso_path)
-    check_canceled(cancel_event)
+    check_canceled(cancel_event, drive_touched=False)
     log(f"Unmounting /dev/{dev}...")
     run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, timeout=120)
+    check_canceled(cancel_event, drive_touched=False)  # unmounting changes no data
     log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
         "This can take several minutes.")
     total = os.path.getsize(iso_path)
@@ -2469,7 +2571,7 @@ def linux_unmount_partitions(dev, log, priv):
 def linux_write_raw(iso_path, dev_name, log, priv, progress=None, cancel_event=None, eject=True):
     """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
     validate_hybrid_iso(iso_path)
-    check_canceled(cancel_event)
+    check_canceled(cancel_event, drive_touched=False)
     dev = f"/dev/{dev_name}"
     total = os.path.getsize(iso_path)
     # O_DIRECT bypasses the page cache (steadier speed, honest progress), but needs every
@@ -2494,7 +2596,7 @@ def linux_write_raw(iso_path, dev_name, log, priv, progress=None, cancel_event=N
 
 
 def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=None, eject=True):
-    check_canceled(cancel_event)
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
     dev = f"/dev/{dev_name}"
     part = linux_partition_path(dev_name, 1)
     uid, gid = os.getuid(), os.getgid()
@@ -2525,7 +2627,13 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
         f'mkfs.vfat -F 32 -n {VOL_NAME} "$PART"\n'
         'udevadm settle --timeout=15 2>/dev/null || true\n'
         'umount_parts\n'
+        # Microsoft's ISOs are UDF-bridge images: with the filesystem left to autodetection the
+        # kernel may pick iso9660, which shows only a stub without sources/install.wim. Ask for
+        # UDF first (iso9660 for plain images); autodetection stays as the last resort.
+        'if ! mount -t udf,iso9660 -o loop,ro,uid="${OWNER%%:*}",gid="${OWNER##*:}" "$ISO" "$ISO_MNT"; then\n'
+        'echo "Mounting the ISO as UDF/ISO 9660 failed; letting mount detect the type." >&2\n'
         'mount -o loop,ro,uid="${OWNER%%:*}",gid="${OWNER##*:}" "$ISO" "$ISO_MNT"\n'
+        'fi\n'
         'mount -o uid="${OWNER%%:*}",gid="${OWNER##*:}" "$PART" "$USB_MNT"\n'
     )
 
@@ -2552,8 +2660,11 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
             "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
             "Arch/openSUSE) or use the 'Install missing dependencies' button.",
             reopen=reopen, cancel_event=cancel_event)
-    except OperationCanceled:
-        log("Canceled. The drive is left incomplete and unusable.")
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. The files were copied completely but NOT verified.")
+        else:
+            log("Canceled. The drive is left incomplete and unusable.")
         raise
     finally:
         log("Unmounting...")
@@ -2635,8 +2746,26 @@ def hash_iso_for_audit(iso_path, log, progress, cancel_event):
     return digest
 
 
+def missing_dependencies_hint(missing):
+    """One sentence telling the user how to get the missing tools on this system."""
+    button = "or use the 'Install missing dependencies' button"
+    if IS_MAC:
+        if "wimlib-imagex" in missing:
+            return f"Install wimlib with: brew install wimlib ({button})."
+        return "They are part of macOS; the system looks incomplete."
+    try:
+        cmd = linux_build_install_command(linux_detect_pkg_manager(), missing)
+    except ValueError:
+        return f"Install them with your package manager ({button})."
+    return f"Install them with: sudo {cmd} ({button})."
+
+
 def validate_image_for_mode(iso_path, mode, expected_size=None):
-    """Check, before anything is touched, that the image suits the chosen type and fits the drive."""
+    """Check, before anything is touched, that the image suits the chosen type and fits the drive.
+
+    Also refuses, with a message that says how to fix it, when a tool the chosen type needs is
+    missing: otherwise that would only be discovered after the drive had been erased.
+    """
     if mode != MODE_WINDOWS and mode not in RAW_MODES:
         raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
@@ -2644,18 +2773,34 @@ def validate_image_for_mode(iso_path, mode, expected_size=None):
         validate_hybrid_iso(iso_path)
     elif mode == MODE_CHROMEOS:
         validate_disk_image(iso_path)
-    if mode in RAW_MODES and expected_size and os.path.getsize(iso_path) > expected_size:
+    # Raw modes write the image as it is; Windows mode copies its contents. Either way it must
+    # fit (the copy of a Windows ISO needs at least the ISO's size).
+    if expected_size and os.path.getsize(iso_path) > expected_size:
         raise ValueError(f"The image ({human_size(os.path.getsize(iso_path))}) is larger than the "
                          f"drive ({human_size(expected_size)}). Nothing was changed.")
+    missing = get_missing_dependencies(mode)
+    if missing:
+        raise ValueError(f"Cannot continue: required tool(s) not found: {', '.join(missing)}. "
+                         f"{missing_dependencies_hint(missing)} Nothing was changed.")
     return iso_path
 
 
 def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None,
               cancel_event=None, eject=True):
+    """Create the bootable drive. Raises OperationCanceled on a cancel (see its docstring:
+    `drive_touched` is False when nothing on the drive was changed)."""
     iso_path = validate_image_for_mode(iso_path, mode, expected_size)
     validate_device_name(dev)
-    iso_sha = hash_iso_for_audit(iso_path, log, progress, cancel_event)
-    reverify_target_disk(dev, expected_size, log)
+    try:
+        iso_sha = hash_iso_for_audit(iso_path, log, progress, cancel_event)
+        reverify_target_disk(dev, expected_size, log)
+        check_canceled(cancel_event, drive_touched=False)
+    except OperationCanceled:
+        # Hashing and the safety re-check change nothing: the drive is exactly as it was.
+        audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+              logging.WARNING)
+        raise OperationCanceled("Canceled by the user before the drive was touched.",
+                                drive_touched=False) from None
     audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image "
           f"(iso sha256={iso_sha}, size={os.path.getsize(iso_path)})")
     try:
@@ -2670,9 +2815,16 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
                                          eject=eject)
             else:
                 ejected = linux_build_usb(iso_path, dev, log, priv, progress, cancel_event, eject)
-    except OperationCanceled:
-        audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
-              logging.WARNING)
+    except OperationCanceled as e:
+        if not e.drive_touched:
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+                  "nothing was changed", logging.WARNING)
+        elif e.written:
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+                  "the image was written but NOT verified", logging.WARNING)
+        else:
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+                  logging.WARNING)
         raise
     except Exception as e:
         audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
@@ -2736,7 +2888,8 @@ class DownloadThread(threading.Thread):
 
     def _read_validator(self):
         try:
-            with open(self._meta_path(), encoding="utf-8") as fh:
+            fd = os.open(self._meta_path(), os.O_RDONLY | O_NOFOLLOW)  # never through a symlink
+            with os.fdopen(fd, encoding="utf-8") as fh:
                 value = json.load(fh).get("validator")
         except (OSError, ValueError, AttributeError):
             return None
@@ -2744,7 +2897,8 @@ class DownloadThread(threading.Thread):
 
     def _write_validator(self, validator):
         try:
-            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC, PRIVATE_FILE_MODE)
+            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | O_NOFOLLOW,
+                         PRIVATE_FILE_MODE)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"validator": validator}, fh)
         except OSError:
@@ -2753,7 +2907,7 @@ class DownloadThread(threading.Thread):
     def _discard_partial(self, tmp_path):
         for path in (tmp_path, self._meta_path()):
             try:
-                os.remove(path)
+                os.remove(path)  # removes a symlink itself, never what it points to
             except OSError:
                 pass
 
@@ -2772,7 +2926,7 @@ class DownloadThread(threading.Thread):
 
     def _hash_part(self, tmp_path, digest, size):
         remaining = size
-        with open(tmp_path, "rb") as fh:
+        with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW), "rb") as fh:
             while remaining > 0:
                 self._check_cancel()
                 chunk = fh.read(min(CHUNK_SIZE, remaining))
@@ -2794,6 +2948,11 @@ class DownloadThread(threading.Thread):
     # ---------- one connection ----------
     def _attempt(self, tmp_path):
         """Download (or resume) once. Returns (bytes, sha256, expected). Raises on any problem."""
+        # A symlink where the part/meta file should be is never followed: it is simply dropped.
+        if os.path.islink(tmp_path) or os.path.islink(self._meta_path()):
+            audit("A symlink was found in place of a partial download file; it was discarded", logging.WARNING)
+            self._discard_partial(tmp_path)
+        original_untrusted = validate_download_url(self.url)[2]
         offset = os.path.getsize(tmp_path) if os.path.isfile(tmp_path) else 0
         validator = self._read_validator() if offset else None
         if offset and not validator:
@@ -2816,9 +2975,21 @@ class DownloadThread(threading.Thread):
             # urlopen follows redirects; make sure we were not downgraded to
             # an unencrypted connection along the way.
             final_url = resp.geturl()
+            final_untrusted = False
             if final_url != self.url:
-                validate_download_url(final_url)
+                final_untrusted = validate_download_url(final_url)[2]
                 audit(f"Download redirected to host: {urllib.parse.urlparse(final_url).hostname}")
+            if self.allowed_hosts is None and final_untrusted and not original_untrusted:
+                # The link was on a trusted host, but the server sent us somewhere that is not:
+                # that is exactly what the trusted-host list exists to prevent.
+                final_host = (urllib.parse.urlparse(final_url).hostname or "").lower()
+                audit(f"Download REFUSED: redirected from a trusted host to an untrusted one ({final_host})",
+                      logging.WARNING)
+                self._discard_partial(tmp_path)
+                raise RuntimeError(
+                    f"The server redirected the download to an address that is not trusted ({final_host}), "
+                    "so it was stopped and what had arrived was discarded.\n\nIf you do trust that server, "
+                    "copy the final link and download it directly (you will be asked to confirm the host).")
             if self.allowed_hosts is not None:
                 final_host = (urllib.parse.urlparse(final_url).hostname or "").lower()
                 if final_host not in self.allowed_hosts:
@@ -2853,7 +3024,7 @@ class DownloadThread(threading.Thread):
             downloaded = offset
             start = time.time()
             # Create the partial file readable only by its owner.
-            flags = os.O_CREAT | os.O_WRONLY | (os.O_APPEND if offset else os.O_TRUNC)
+            flags = os.O_CREAT | os.O_WRONLY | O_NOFOLLOW | (os.O_APPEND if offset else os.O_TRUNC)
             fd = os.open(tmp_path, flags, PRIVATE_FILE_MODE)
             with os.fdopen(fd, "ab" if offset else "wb") as f:
                 while True:
@@ -2890,6 +3061,19 @@ class DownloadThread(threading.Thread):
             pass
         return downloaded, sha256, expected
 
+    def _local_write_message(self, err):
+        """User-facing text for a local write error that must not be retried."""
+        folder = os.path.dirname(os.path.abspath(self.dest_path))
+        if err.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", None)):
+            return (f"There is not enough free space in {folder}. The download was stopped and the "
+                    "partial file was deleted to free the space. Free up space or choose another "
+                    "folder or drive, then download again.")
+        if err.errno == errno.EROFS:
+            return (f"{folder} is read-only, so the file cannot be saved there. The download was "
+                    "stopped; choose another folder.")
+        return (f"The program is not allowed to write in {folder}. The download was stopped; "
+                "choose a folder you can write to.")
+
     # ---------- retry loop ----------
     def run(self):
         tmp_path = self.dest_path + ".part"
@@ -2920,6 +3104,9 @@ class DownloadThread(threading.Thread):
                     problem = f"HTTP {e.code}"
                 except (urllib.error.URLError, OSError, http.client.HTTPException,
                         _DownloadInterrupted) as e:
+                    if not isinstance(e, urllib.error.URLError) and getattr(e, "errno", None) in DOWNLOAD_FATAL_ERRNOS:
+                        # A problem with the destination, not the network: retrying cannot help.
+                        raise RuntimeError(self._local_write_message(e)) from None
                     if isinstance(e, urllib.error.URLError) and e.reason is not None:
                         problem = str(e.reason)
                     else:
@@ -4634,7 +4821,7 @@ class CliPrivilege:
         log(("$ sudo " if not self.is_root() else "$ ") + "bash -c '<privileged script>' "
             + " ".join(repr(a) for a in args))
         with subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, bufsize=1) as proc:
+                              text=True, errors="replace", bufsize=1) as proc:
             try:
                 for line in proc.stdout:
                     log(line.rstrip())
@@ -4666,10 +4853,12 @@ def cli_sha256_file(path, progress=None, chunk=4 * CHUNK_SIZE):
 
 
 def cli_detect_kind(iso_path):
-    """Return (kind, method): kind is windows, linux or unknown.
+    """Return (kind, method): kind is windows, linux, chromeos or unknown.
 
-    Uses detect_iso_kind() when the engine provides it (reads the ISO); otherwise a
-    filename heuristic (the same one the GUI uses) backed by the hybrid-image signature.
+    Uses detect_iso_kind() when the engine provides it (reads the ISO), then the hybrid-image
+    boot signature. The FILE NAME is never used: a guess from the name could select the
+    destructive Windows mode for an unrelated image ("darwin-linux.img" contains "win"), so
+    content that cannot be recognised stays "unknown" and the user must pass --mode.
     """
     detector = globals().get("detect_iso_kind")
     if callable(detector):
@@ -4679,8 +4868,6 @@ def cli_detect_kind(iso_path):
             kind = None
         if isinstance(kind, str) and kind.lower() in (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS):
             return kind.lower(), "content"
-    if "win" in os.path.basename(iso_path).lower():
-        return MODE_WINDOWS, "filename"
     try:
         validate_hybrid_iso(iso_path)
         return MODE_LINUX, "boot-signature"
@@ -4845,9 +5032,9 @@ def cmd_fetch_chromeos(args):
     if not os.path.isdir(dest_dir):
         raise CliError(f"Not a folder: {dest_dir}")
     zip_path = os.path.join(dest_dir, "chromeos_flex_latest.bin.zip")
-    if os.path.exists(zip_path) and not os.path.exists(zip_path + ".part"):
-        raise CliError(f"{zip_path} already exists. Remove it, or use '{CLI_PROG} write' with the extracted "
-                       ".bin file.")
+    # A complete ZIP from an earlier run (the download finished, the extraction did not) is
+    # extracted again instead of being downloaded again; an unfinished ".part" is resumed.
+    reuse_zip = os.path.exists(zip_path) and not os.path.exists(zip_path + ".part")
     _err("ChromeOS Flex is provided by Google under Google's own terms: "
          f"{CHROMEOS_FLEX_GUIDE_URL}")
     free = shutil.disk_usage(dest_dir).free
@@ -4856,19 +5043,31 @@ def cmd_fetch_chromeos(args):
               f"{human_size(free)} is available in {dest_dir}.")
     progress = CliProgress()
     try:
-        sha256 = download_file_blocking(CHROMEOS_FLEX_URL, zip_path, progress)
+        if reuse_zip:
+            _err(f"{zip_path} is already there: extracting it again instead of downloading it. "
+                 "(Remove that file to download a fresh copy.)")
+            sha256 = cli_sha256_file(zip_path, progress)
+        else:
+            sha256 = download_file_blocking(CHROMEOS_FLEX_URL, zip_path, progress)
         image = extract_disk_image(zip_path, dest_dir, progress=lambda d, t: progress(d, t, "Extracting"))
     except (RuntimeError, ValueError, OSError) as e:
         progress.finish()
-        raise CliError(str(e)) from None
+        message = str(e)
+        if os.path.exists(zip_path) and not os.path.exists(zip_path + ".part"):
+            message += (f"\n\nThe downloaded file was kept: {zip_path}\nFix the problem (for example free up "
+                        f"space) and run '{CLI_PROG} fetch-chromeos' again to extract it, or remove the file "
+                        "to download it afresh.")
+        raise CliError(message) from None
     progress.finish()
-    if not args.keep_zip:
+    # A ZIP that was already there is the user's to keep; only one downloaded now is removed.
+    keep_zip = bool(args.keep_zip) or reuse_zip
+    if not keep_zip:
         try:
             os.remove(zip_path)
         except OSError:
             pass
     if args.json:
-        _out(json.dumps({"image": image, "zip_sha256": sha256, "kept_zip": bool(args.keep_zip)}, indent=2))
+        _out(json.dumps({"image": image, "zip_sha256": sha256, "kept_zip": keep_zip}, indent=2))
     else:
         _out(image)
     _err(f"Done. Write it with: {CLI_PROG} write --iso {image} --disk <DISKID> --mode chromeos")
@@ -4911,14 +5110,17 @@ def _prepare_write(args):
                   f"{human_size(size)}.")
         if size and iso_size > size:
             raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
-    elif size and iso_size > size:
-        _warn(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}); "
-              "the copy may not fit.")
+    if mode == MODE_WINDOWS and size and iso_size > size:
+        # The copy of a Windows ISO holds at least the ISO's contents: it cannot fit.
+        raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
     missing = get_missing_dependencies(mode)
     if missing:
-        raise CliError("Missing required tools: " + ", ".join(missing) + ". Install them and try again.")
+        raise CliError("Missing required tools: " + ", ".join(missing) + ". " + missing_dependencies_hint(missing))
     eject = not args.no_eject
+    # The identity (serial, WWN, ...) is a tuple of pairs, so _disk_summary leaves it out; keep it here
+    # so the safety re-check can compare the drive that is erased with the one that was listed.
     return {"iso": iso, "iso_size": iso_size, "mode": mode, "disk": _disk_summary(disk),
+            "identity": tuple(disk.get("identity") or ()),
             "steps": _write_steps(mode, disk_id, eject), "eject": eject, "dry_run": bool(args.dry_run)}
 
 
@@ -4934,7 +5136,7 @@ def _confirm_write(args, plan):
     _emit(sys.stderr, f"Type the disk id ({disk_id}) to confirm: ", end="")
     answer = sys.stdin.readline().strip()
     if answer != disk_id:
-        raise CliError("The confirmation did not match. Nothing was changed.")
+        raise CliError("The confirmation did not match. Nothing was changed.", EXIT_USAGE)
 
 
 def _run_write(args, plan, result):
@@ -4963,6 +5165,8 @@ def _run_write(args, plan, result):
     try:
         if needs_priv:
             priv.authenticate()
+        # Bind the safety re-check (right before erasing) to exactly the drive that was planned.
+        pin_target_identity(plan["disk"]["id"], plan.get("identity"))
         ejected = build_usb(plan["iso"], plan["disk"]["id"], log, priv,
                             expected_size=plan["disk"].get("size"), mode=plan["mode"],
                             progress=progress, eject=plan["eject"], **kwargs)
@@ -4977,6 +5181,7 @@ def _run_write(args, plan, result):
     finally:
         progress.finish()
         priv.clear_cached_password()
+        pin_target_identity(plan["disk"]["id"], None)  # never leave a pin behind (build_usb normally consumes it)
         if previous is not None:
             signal.signal(signal.SIGINT, previous)
     result["elapsed_seconds"] = round(time.time() - started, 1)
@@ -5018,7 +5223,8 @@ def cmd_write(args):
         result.update(mode=plan["mode"], iso=plan["iso"], disk=plan["disk"]["id"])
         if args.dry_run:
             if args.json:
-                _out(json.dumps(plan, indent=2, default=str))
+                # The identity is a tuple of (key, value) pairs: show it as an object.
+                _out(json.dumps({**plan, "identity": dict(plan["identity"])}, indent=2, default=str))
             else:
                 _print_plan(plan, to_stdout=True)
                 _err("Dry run: nothing was changed.")

@@ -351,7 +351,9 @@ class BuildUsbTests(ChromeTestCase):
             self.addCleanup(patch.stop)
 
     def run_build(self, mode=app.MODE_CHROMEOS, expected_size=None, image=None, is_mac=True):
-        with mock.patch.object(app, "IS_MAC", is_mac):
+        # No tool is "missing" on a CI machine: the dependency check itself is tested in test_fixes_engine.
+        with mock.patch.object(app, "IS_MAC", is_mac), \
+                mock.patch.object(app, "get_missing_dependencies", return_value=[]):
             return app.build_usb(image or self.image, "disk9", Collector(), None, expected_size=expected_size,
                                  mode=mode)
 
@@ -521,9 +523,13 @@ class CliTests(ChromeTestCase):
         out_dir = self.path("dl")
         os.makedirs(out_dir)
         self.write_file("dl/chromeos_flex_latest.bin.zip", b"old")
+        # An existing ZIP is no longer refused: it is extracted again (here it is not a ZIP at all,
+        # so the reason is shown together with how to continue).
         code, _out, err = run_main(["fetch-chromeos", "--dest", out_dir])
         self.assertEqual(code, 1)
-        self.assertIn("already exists", err)
+        self.assertIn("not a valid ZIP", err)
+        self.assertIn("remove the file", err)
+        self.assertTrue(os.path.exists(os.path.join(out_dir, "chromeos_flex_latest.bin.zip")))
 
 
 class DownloadBlockingTests(unittest.TestCase):

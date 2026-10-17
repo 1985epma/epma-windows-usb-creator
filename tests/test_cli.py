@@ -150,13 +150,14 @@ class ListTests(CliTestCase):
 
 
 class DetectTests(CliTestCase):
-    def test_filename_and_signature_heuristics(self):
-        win = self.make_iso("Win11_English_x64.iso", hybrid=False)
+    def test_signature_heuristic_and_no_filename_guess(self):
+        win_named = self.make_iso("Win11_English_x64.iso", hybrid=False)
         ubuntu = self.make_iso("ubuntu-24.04.iso", hybrid=True)
         other = self.make_iso("mystery.iso", hybrid=False)
-        self.assertEqual(run_main(["detect", win])[1], "windows\n")
         self.assertEqual(run_main(["detect", ubuntu])[1], "linux\n")
         self.assertEqual(run_main(["detect", other])[1], "unknown\n")
+        # The name alone never selects the destructive Windows mode (see test_fixes_engine).
+        self.assertEqual(run_main(["detect", win_named])[1], "unknown\n")
 
     def test_json(self):
         data = json.loads(run_main(["detect", self.make_iso("ubuntu.iso"), "--json"])[1])
@@ -172,13 +173,15 @@ class DetectTests(CliTestCase):
         self.assertEqual(json.loads(out)["kind"], "linux")
         self.assertEqual(json.loads(out)["method"], "content")
 
-    def test_engine_detector_failure_falls_back(self):
-        win = self.make_iso("windows.iso", hybrid=False)
+    def test_engine_detector_failure_falls_back_to_the_boot_signature(self):
+        hybrid = self.make_iso("ubuntu.iso", hybrid=True)
+        plain = self.make_iso("windows.iso", hybrid=False)
         for result in (RuntimeError("boom"), "unknown", None):
             with self.subTest(result=result):
                 kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
                 with mock.patch.object(app, "detect_iso_kind", create=True, **kwargs):
-                    self.assertEqual(run_main(["detect", win])[1], "windows\n")
+                    self.assertEqual(run_main(["detect", hybrid])[1], "linux\n")
+                    self.assertEqual(run_main(["detect", plain])[1], "unknown\n")
 
     def test_missing_file(self):
         code, out, err = run_main(["detect", self.path("nope.iso")])
@@ -271,7 +274,8 @@ class WriteValidationTests(CliTestCase):
 
     def test_explicit_mode_overrides_detection_with_a_warning(self):
         win = self.make_iso("win11.iso", hybrid=True)
-        code, out, err = run_main(self.write_args(win, "--dry-run", "--mode", "linux"))
+        with mock.patch.object(app, "detect_iso_kind", create=True, return_value="windows"):
+            code, out, err = run_main(self.write_args(win, "--dry-run", "--mode", "linux"))
         self.assertEqual(code, 0)
         self.assertIn("looks like a windows image", err)
         self.assertIn("Mode : linux", out)
@@ -285,7 +289,8 @@ class WriteValidationTests(CliTestCase):
 
     def test_missing_tools_are_reported(self):
         app.get_missing_dependencies.return_value = ["wimlib-imagex"]
-        code, _out, err = run_main(self.write_args(self.make_iso("win11.iso", hybrid=False), "--yes"))
+        code, _out, err = run_main(self.write_args(self.make_iso("win11.iso", hybrid=False), "--yes",
+                                                   "--mode", "windows"))
         self.assertEqual(code, 1)
         self.assertIn("wimlib-imagex", err)
         self.build_usb.assert_not_called()
@@ -304,7 +309,7 @@ class WriteDryRunTests(CliTestCase):
 
     def test_windows_plan(self):
         iso = self.make_iso("Win11.iso", hybrid=False)
-        code, out, _err = run_main(self.write_args(iso, "--dry-run"))
+        code, out, _err = run_main(self.write_args(iso, "--dry-run", "--mode", "windows"))
         self.assertEqual(code, 0)
         self.assertIn("GPT + FAT32", out)
         self.assertIn("Mode : windows", out)
@@ -358,7 +363,7 @@ class WriteConfirmationTests(CliTestCase):
                 self.build_usb.reset_mock()
                 with mock.patch.object(app, "_is_interactive", return_value=True):
                     code, _out, err = run_main(self.write_args(self.iso), stdin_text=answer)
-                self.assertEqual(code, 1)
+                self.assertEqual(code, app.EXIT_USAGE)  # the documented code for a wrong confirmation
                 self.assertIn("Nothing was changed", err)
                 self.build_usb.assert_not_called()
 
@@ -402,7 +407,7 @@ class WriteRunTests(CliTestCase):
     def test_windows_mode_on_macos_needs_no_privileges(self):
         win = self.make_iso("Win11.iso", hybrid=False)
         with mock.patch.object(app, "IS_LINUX", False):
-            code, _out, _err = run_main(self.write_args(win, "--yes"))
+            code, _out, _err = run_main(self.write_args(win, "--yes", "--mode", "windows"))
         self.assertEqual(code, 0)
         self.authenticate.assert_not_called()
         self.assertEqual(self.build_usb.call_args[1]["mode"], app.MODE_WINDOWS)
