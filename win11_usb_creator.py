@@ -218,6 +218,7 @@ DOWNLOAD_TIMEOUT_SECONDS = 60  # per network read; prevents an indefinite hang
 DOWNLOAD_MAX_ATTEMPTS = 3      # transient network errors are retried (resuming where possible)
 DOWNLOAD_BACKOFF_SECONDS = (2, 5)  # wait before retry 2 and 3
 QUERY_TIMEOUT = 30             # seconds allowed for quick query commands (diskutil list, lsblk, ...)
+DISKUTIL_TIMEOUT = 120         # seconds allowed for macOS unmount, mount, eject and detach commands
 IOREG_TIMEOUT = 10             # seconds for `ioreg`: it only adds the USB serial number, so it must not stall the list
 SUDO_KEEPALIVE_SECONDS = 60    # how often the sudo timestamp is refreshed while an operation runs
 SUDO_TIMEOUT = QUERY_TIMEOUT   # seconds allowed for the sudo password check and the timestamp refresh
@@ -2070,6 +2071,20 @@ def pin_target_identity(dev, identity):
 # ============================================================
 # macOS backend
 # ============================================================
+def _diskutil_plist(*args, timeout=QUERY_TIMEOUT):
+    """Run `diskutil <args>` (an -plist query) and return the parsed property list.
+
+    Raises whatever subprocess or plistlib raise; the callers decide what a failure means (the drive
+    listing fails closed: a disk that cannot be queried is hidden, never offered).
+    """
+    return plistlib.loads(subprocess.check_output(["diskutil", *args], timeout=timeout))
+
+
+def _diskutil_info(node):
+    """`diskutil info -plist /dev/<node>` for a disk or partition identifier such as 'disk4' or 'disk4s1'."""
+    return _diskutil_plist("info", "-plist", f"/dev/{node}")
+
+
 def macos_usb_device_map():
     """Map BSD names ('disk4', 'disk4s1', ...) to the USB device that carries them.
 
@@ -2108,7 +2123,7 @@ def macos_usb_device_map():
 def macos_apfs_volumes_by_store():
     """Map the partition holding an APFS container ('disk4s2') to that container's volumes."""
     try:
-        data = plistlib.loads(subprocess.check_output(["diskutil", "list", "-plist"], timeout=QUERY_TIMEOUT))
+        data = _diskutil_plist("list", "-plist")
     except Exception:
         return {}
     by_store = {}
@@ -2156,8 +2171,7 @@ def macos_describe_disk(entry, info, usb_map, apfs_map):
             if str(part.get("Content", "")).startswith("Apple_APFS") and apfs_map.get(pid):
                 volumes.extend(apfs_map[pid])
                 continue
-            pinfo = plistlib.loads(subprocess.check_output(
-                ["diskutil", "info", "-plist", f"/dev/{pid}"], timeout=QUERY_TIMEOUT))
+            pinfo = _diskutil_info(pid)
             mountpoint = pinfo.get("MountPoint") or part.get("MountPoint") or None
             volumes.append({
                 "name": part.get("VolumeName") or pinfo.get("VolumeName") or "",
@@ -2175,8 +2189,7 @@ def macos_describe_disk(entry, info, usb_map, apfs_map):
 
 def macos_get_external_disks():
     """List only EXTERNAL physical disks attached over USB (never the Mac's internal disk)."""
-    out = subprocess.check_output(["diskutil", "list", "-plist", "external", "physical"], timeout=QUERY_TIMEOUT)
-    data = plistlib.loads(out)
+    data = _diskutil_plist("list", "-plist", "external", "physical")
     usb_map = None  # looked up lazily: only needed when at least one disk qualifies
     apfs_map = None
     disks = []
@@ -2190,8 +2203,7 @@ def macos_get_external_disks():
             audit(f"Hiding {dev}: its size is zero or unreadable", logging.WARNING)
             continue
         try:
-            info = plistlib.loads(subprocess.check_output(
-                ["diskutil", "info", "-plist", f"/dev/{dev}"], timeout=QUERY_TIMEOUT))
+            info = _diskutil_info(dev)
         except Exception as e:
             # Fail closed: if we cannot confirm the disk is external, do not offer
             # it for erasure. Previously this fell back to {} and the Internal
@@ -2216,20 +2228,27 @@ def macos_get_external_disks():
 
 def macos_find_mountpoint_by_volname(dev, volname, retries=15):
     for _ in range(retries):
-        out = subprocess.check_output(["diskutil", "list", "-plist", f"/dev/{dev}"], timeout=QUERY_TIMEOUT)
-        data = plistlib.loads(out)
+        data = _diskutil_plist("list", "-plist", f"/dev/{dev}")
         entries = data.get("AllDisksAndPartitions", [])
         parts = entries[0].get("Partitions", []) if entries else []
         for part in parts:
             if part.get("VolumeName", "").upper() == volname.upper():
                 pid = part.get("DeviceIdentifier")
-                info = plistlib.loads(subprocess.check_output(
-                    ["diskutil", "info", "-plist", f"/dev/{pid}"], timeout=QUERY_TIMEOUT))
+                info = _diskutil_info(pid)
                 mp = info.get("MountPoint")
                 if mp:
                     return mp
         time.sleep(1)
     raise RuntimeError("Could not find the USB drive's mount point after formatting.")
+
+
+def macos_unmount(dev, log, check=True, force=False):
+    """Unmount every volume of the whole disk (`diskutil unmountDisk`); `force` also takes busy ones.
+
+    Returns run_cmd's exit code; with check=True a failure raises, with check=False it is only returned.
+    """
+    cmd = ["diskutil", "unmountDisk"] + (["force"] if force else []) + [f"/dev/{dev}"]
+    return run_cmd(cmd, log, check=check, timeout=DISKUTIL_TIMEOUT)
 
 
 def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=None, eject=True):
@@ -2253,8 +2272,8 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
     try:
         def reopen():
             log("Remounting the drive to read it back from the device...")
-            run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, timeout=120)
-            run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log, timeout=120)
+            macos_unmount(dev, log)
+            run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log, timeout=DISKUTIL_TIMEOUT)
             return macos_find_mountpoint_by_volname(dev, VOL_NAME)
 
         copy_windows_payload(
@@ -2268,11 +2287,11 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
                 "but NOT verified.")
         else:
             log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
-        run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, check=False, timeout=120)
+        macos_unmount(dev, log, check=False)
         raise
     finally:
         log("Unmounting the ISO...")
-        run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False, timeout=120)
+        run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False, timeout=DISKUTIL_TIMEOUT)
         _silent_rmdir(mount_dir)
 
     ejected = macos_eject(dev, log) if eject else None
@@ -2284,12 +2303,12 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
 def macos_eject(dev, log):
     """Eject the whole disk; if something holds it, force-unmount and retry. Returns True on success."""
     log("Ejecting the USB drive...")
-    if run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=120) == 0:
+    if run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=DISKUTIL_TIMEOUT) == 0:
         return True
     log("The drive is busy — forcing the unmount and trying again...")
-    run_cmd(["diskutil", "unmountDisk", "force", f"/dev/{dev}"], log, check=False, timeout=120)
+    macos_unmount(dev, log, check=False, force=True)
     time.sleep(1)
-    return run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=120) == 0
+    return run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False, timeout=DISKUTIL_TIMEOUT) == 0
 
 
 def linux_eject(dev_name, log, priv):
@@ -2401,7 +2420,7 @@ def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None, 
     validate_hybrid_iso(iso_path)
     check_canceled(cancel_event, drive_touched=False)
     log(f"Unmounting /dev/{dev}...")
-    run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, timeout=120)
+    macos_unmount(dev, log)
     check_canceled(cancel_event, drive_touched=False)  # unmounting changes no data
     log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
         "This can take several minutes.")
@@ -2412,7 +2431,7 @@ def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None, 
                                log, total, progress, cancel_event)
     if canceled:
         log("Canceled. The drive holds a partial image and is unusable until written again.")
-        run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log, check=False, timeout=120)
+        macos_unmount(dev, log, check=False)
         raise OperationCanceled("Canceled by the user.")
     if progress:
         progress(total, total, "Written")

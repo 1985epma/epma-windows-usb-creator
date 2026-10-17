@@ -5,6 +5,7 @@ Like the rest of the suite nothing here touches a real device, uses sudo or the 
 import hashlib
 import io
 import os
+import plistlib
 import threading
 import unittest
 from unittest import mock
@@ -295,6 +296,63 @@ class EtaTextTests(unittest.TestCase):
         self.assertEqual(line, "Writing   33.3%  1.0 MB / 3.0 MB  512.0 KB/s  ~0m04s left")
         with mock.patch.object(app, "ACTIVE_LANGUAGE", app.LANG_PT):
             self.assertTrue(progress._format(1024 ** 2, 3 * 1024 ** 2, "Writing", 2.0).endswith("~0m04s left"))
+
+
+class DiskutilHelperTests(unittest.TestCase):
+    def test_plist_runs_diskutil_with_the_default_query_timeout(self):
+        seen = {}
+
+        def fake(args, **kw):
+            seen["args"], seen["kw"] = list(args), kw
+            return plistlib.dumps({"Internal": False})
+
+        with mock.patch.object(app.subprocess, "check_output", fake):
+            self.assertEqual(app._diskutil_plist("list", "-plist", "external", "physical"), {"Internal": False})
+            self.assertEqual(seen["args"], ["diskutil", "list", "-plist", "external", "physical"])
+            self.assertEqual(seen["kw"], {"timeout": app.QUERY_TIMEOUT})
+            app._diskutil_plist("list", "-plist", timeout=7)
+            self.assertEqual(seen["kw"], {"timeout": 7})
+            app._diskutil_info("disk4s1")
+            self.assertEqual(seen["args"], ["diskutil", "info", "-plist", "/dev/disk4s1"])
+
+    def test_plist_failures_reach_the_caller_untouched(self):
+        with mock.patch.object(app.subprocess, "check_output", side_effect=OSError("no diskutil")):
+            with self.assertRaises(OSError):
+                app._diskutil_plist("list", "-plist")
+        with mock.patch.object(app.subprocess, "check_output", return_value=b"not a plist"):
+            with self.assertRaises(plistlib.InvalidFileException):
+                app._diskutil_plist("list", "-plist")
+
+    def test_a_disk_whose_info_cannot_be_read_is_still_hidden(self):
+        listing = plistlib.dumps({"AllDisksAndPartitions": [
+            {"DeviceIdentifier": "disk4", "Size": 8 * 1024 ** 3, "Partitions": []}]})
+
+        def fake(args, **kw):
+            if args[:3] == ["diskutil", "list", "-plist"]:
+                return listing
+            raise OSError("diskutil info hung")
+
+        with mock.patch.object(app.subprocess, "check_output", fake):
+            self.assertEqual(app.macos_get_external_disks(), [])  # fail closed
+
+    def test_unmount_builds_the_expected_commands(self):
+        calls = []
+
+        def fake_run_cmd(args, log, check=True, timeout=None, **_kw):
+            calls.append((list(args), check, timeout))
+            return 0
+
+        with mock.patch.object(app, "run_cmd", fake_run_cmd):
+            app.macos_unmount("disk4", print)
+            app.macos_unmount("disk4", print, check=False)
+            app.macos_unmount("disk4", print, check=False, force=True)
+        timeout = app.DISKUTIL_TIMEOUT
+        self.assertEqual(calls, [
+            (["diskutil", "unmountDisk", "/dev/disk4"], True, timeout),
+            (["diskutil", "unmountDisk", "/dev/disk4"], False, timeout),
+            (["diskutil", "unmountDisk", "force", "/dev/disk4"], False, timeout),
+        ])
+        self.assertEqual(app.DISKUTIL_TIMEOUT, 120)
 
 
 if __name__ == "__main__":
