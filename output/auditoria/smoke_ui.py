@@ -302,9 +302,19 @@ try:
         janela.iso_path.set("")
         janela.update_create_button_state()
         janela.update_idletasks()
-        y = {n: w.winfo_rooty() for n, w in (("botão", janela.create_btn), ("dica", janela.create_hint),
-                                              ("barra", janela.create_progress), ("log", janela.log_text))}
-        assert y["botão"] < y["dica"] < y["barra"] < y["log"], f"ordem vertical errada: {y}"
+        # A ordem é conferida pela ordem de EMPACOTAMENTO, que não depende de a janela ser desenhada: num
+        # servidor de CI a janela nunca aparece e todas as coordenadas na tela ficam iguais.
+        pagina = janela.create_hint.master
+        filhos = pagina.pack_slaves()
+        pos = {n: filhos.index(w) for n, w in (("linha do botão", janela.create_btn.master),
+                                                ("dica", janela.create_hint),
+                                                ("barra", janela.create_progress), ("log", janela.log_text))}
+        assert pos["linha do botão"] < pos["dica"] < pos["barra"] < pos["log"], f"ordem errada: {pos}"
+        # Quando a janela está mesmo na tela, as coordenadas têm de concordar com essa ordem.
+        if janela.create_btn.winfo_ismapped() and janela.log_text.winfo_ismapped():
+            y = {n: w.winfo_rooty() for n, w in (("botão", janela.create_btn), ("dica", janela.create_hint),
+                                                  ("barra", janela.create_progress), ("log", janela.log_text))}
+            assert y["botão"] < y["dica"] < y["barra"] < y["log"], f"ordem vertical errada: {y}"
         print("  [OK]    a dica do botão Criar aparece entre o botão e a barra de progresso")
     except Exception as e:
         print(f"  [FALHA] posição da dica: {type(e).__name__}: {e}")

@@ -12,6 +12,11 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 
+<p align="center">
+  <img src="docs/images/interface.png" alt="EPMA USB CREATOR window: four image-type cards (Google Chrome, Windows 11, Linux, Other ISO), the USB drive list, the image file with its SHA-256 check, and the Create Bootable USB Drive button" width="620">
+  <br><em>The whole program in one window: choose the image type, the drive and the file, then create it.</em>
+</p>
+
 ---
 
 ## Table of contents
@@ -64,10 +69,10 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 ### macOS
 
 ```bash
-brew install python-tk@3.13 wimlib
+brew install python-tk@3.15 wimlib
 ```
 
-> Python **3.10 or newer** is required. Use the `python-tk` formula that matches your Python version (for example `python-tk@3.13` for Python 3.13). In Windows mode macOS needs no `sudo` (disk operations go through `diskutil` and `hdiutil`); Linux mode, which writes the raw device, asks for your administrator password.
+> Python **3.10 or newer** is required. Use the `python-tk` formula that matches your Python version (for example `python-tk@3.15` for Python 3.15). In Windows mode macOS needs no `sudo` (disk operations go through `diskutil` and `hdiutil`); Linux mode, which writes the raw device, asks for your administrator password.
 
 ### Linux
 
@@ -251,7 +256,7 @@ Every change is automatically checked by GitHub Actions (all actions are pinned 
 
 | Workflow | Purpose |
 |---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Linting, unit tests (Python 3.10–3.14, Linux and macOS), ShellCheck of the embedded scripts, end-to-end tests on loop devices, Linux distribution probes |
+| [`ci.yml`](.github/workflows/ci.yml) | Linting, unit tests (Python 3.10–3.15, Linux and macOS), ShellCheck of the embedded scripts, end-to-end tests on loop devices, Linux distribution probes |
 | [`security.yml`](.github/workflows/security.yml) | Security regression guard, Bandit, Semgrep, CodeQL, secret scanning |
 | [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums, build provenance and an SBOM; updates the Homebrew tap |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | OpenSSF Scorecard supply-chain assessment |

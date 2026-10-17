@@ -558,3 +558,27 @@ class ChromeOSFactsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScreenshotTests(unittest.TestCase):
+    """Both READMEs show a picture of the window; the file must exist so the link never breaks."""
+
+    def test_the_readmes_point_to_an_existing_screenshot(self):
+        import os
+        import re
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for name in ("README.md", "README.pt-BR.md"):
+            with self.subTest(readme=name):
+                with open(os.path.join(root, name), encoding="utf-8") as fh:
+                    text = fh.read()
+                links = re.findall(r'<img[^>]+src="([^"]+)"', text)
+                self.assertIn("docs/images/interface.png", links)
+                for link in links:
+                    path = os.path.join(root, link)
+                    self.assertTrue(os.path.isfile(path), link)
+                    with open(path, "rb") as image:
+                        self.assertEqual(image.read(8), b"\x89PNG\r\n\x1a\n", f"{link} is not a PNG")
+                    self.assertLess(os.path.getsize(path), 1_500_000, f"{link} is too big for a README")
+                    # the screenshot must not carry a personal home folder
+                self.assertNotIn("alt=\"\"", text)
+

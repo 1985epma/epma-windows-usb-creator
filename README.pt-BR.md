@@ -15,6 +15,11 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 ![Plataformas](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 
+<p align="center">
+  <img src="docs/images/interface.png" alt="Janela do EPMA USB CREATOR: quatro cartões de tipo de imagem (Google Chrome, Windows 11, Linux, Other ISO), a lista de pendrives, o arquivo da imagem com a conferência SHA-256 e o botão Create Bootable USB Drive" width="620">
+  <br><em>O programa inteiro em uma janela: escolha o tipo de imagem, o pendrive e o arquivo, e crie.</em>
+</p>
+
 ---
 
 ## Índice
@@ -67,10 +72,10 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 ### macOS
 
 ```bash
-brew install python-tk@3.13 wimlib
+brew install python-tk@3.15 wimlib
 ```
 
-> É necessário Python **3.10 ou mais novo**. Use a fórmula `python-tk` que corresponde à versão do seu Python (por exemplo `python-tk@3.13` para o Python 3.13). No modo Windows o macOS não precisa de `sudo` (as operações de disco passam por `diskutil` e `hdiutil`); o modo Linux, que grava o dispositivo bruto, pede a sua senha de administrador.
+> É necessário Python **3.10 ou mais novo**. Use a fórmula `python-tk` que corresponde à versão do seu Python (por exemplo `python-tk@3.15` para o Python 3.15). No modo Windows o macOS não precisa de `sudo` (as operações de disco passam por `diskutil` e `hdiutil`); o modo Linux, que grava o dispositivo bruto, pede a sua senha de administrador.
 
 ### Linux
 
@@ -254,7 +259,7 @@ Cada alteração é verificada automaticamente pelo GitHub Actions (todas as act
 
 | Workflow | Finalidade |
 |---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Lint, testes unitários (Python 3.10–3.14, Linux e macOS), ShellCheck dos scripts embutidos, testes de ponta a ponta em loop devices, sondas de distribuições Linux |
+| [`ci.yml`](.github/workflows/ci.yml) | Lint, testes unitários (Python 3.10–3.15, Linux e macOS), ShellCheck dos scripts embutidos, testes de ponta a ponta em loop devices, sondas de distribuições Linux |
 | [`security.yml`](.github/workflows/security.yml) | Guarda de regressão de segurança, Bandit, Semgrep, CodeQL, busca de segredos |
 | [`release.yml`](.github/workflows/release.yml) | Publica releases com checksums SHA-256, procedência da build e SBOM; atualiza o tap do Homebrew |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | Avaliação de cadeia de suprimentos do OpenSSF Scorecard |
