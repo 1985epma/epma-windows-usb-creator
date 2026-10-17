@@ -76,6 +76,8 @@ except ImportError:
 IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
 
+APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as the Linux window class
+
 MS_DOWNLOAD_PAGE = "https://www.microsoft.com/en-us/software-download/windows11"
 FAT32_MAX_FILE_SIZE = 4_294_967_295  # 4GB - 1 byte
 CHUNK_SIZE = 1024 * 1024
@@ -1281,9 +1283,49 @@ class DownloadThread(threading.Thread):
 # ============================================================
 # GUI
 # ============================================================
+def set_macos_app_name(name):
+    """Make the macOS menu bar and Dock say `name` instead of "Python".
+
+    The name comes from the running bundle's Info.plist (CFBundleName), which for a
+    script is Python.app's. Overriding it in memory before the first window is created
+    needs no extra packages (plain ctypes into the Objective-C runtime) and changes
+    nothing on disk. Purely cosmetic, so any failure is ignored.
+    """
+    if not IS_MAC:
+        return
+    try:
+        import ctypes
+        import ctypes.util
+
+        objc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("objc"))
+        objc.objc_getClass.restype = ctypes.c_void_p
+        objc.objc_getClass.argtypes = [ctypes.c_char_p]
+        objc.sel_registerName.restype = ctypes.c_void_p
+        objc.sel_registerName.argtypes = [ctypes.c_char_p]
+
+        def send(obj, selector, *args):
+            fn = objc.objc_msgSend
+            fn.restype = ctypes.c_void_p
+            fn.argtypes = [ctypes.c_void_p, ctypes.c_void_p] + [ctypes.c_void_p] * len(args)
+            return fn(obj, objc.sel_registerName(selector.encode()), *args)
+
+        def nsstring(text):
+            return send(objc.objc_getClass(b"NSString"), "stringWithUTF8String:", text.encode())
+
+        bundle = send(objc.objc_getClass(b"NSBundle"), "mainBundle")
+        info = send(bundle, "infoDictionary")
+        if info:
+            for key in ("CFBundleName", "CFBundleDisplayName"):
+                send(info, "setObject:forKey:", nsstring(name), nsstring(key))
+        send(send(objc.objc_getClass(b"NSProcessInfo"), "processInfo"), "setProcessName:", nsstring(name))
+    except Exception:  # noqa: S110 - cosmetic only; never block the app over a label
+        pass
+
+
 class App(tk.Tk):
     def __init__(self):
-        super().__init__()
+        set_macos_app_name(APP_NAME)  # must run before the first window exists
+        super().__init__(className=APP_NAME)
         self.title("EPMA Windows 11 Creator USB")
         self.geometry("760x700")
         self.iso_path = tk.StringVar(value="")
