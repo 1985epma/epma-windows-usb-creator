@@ -22,7 +22,7 @@
 #       brew audit --strict --online 1985epma/tap/epma-windows-usb-creator
 
 class EpmaWindowsUsbCreator < Formula
-  desc "Create a bootable Windows 11 USB drive from macOS or Linux"
+  desc "Create verified bootable USB drives from Windows 11, Linux and ChromeOS Flex"
   homepage "https://github.com/1985epma/epma-windows-usb-creator"
   url "https://github.com/1985epma/epma-windows-usb-creator/archive/refs/tags/v1.0.0.tar.gz"
   sha256 "d836915b03fb2a617e6f27a5c0e18f7b4c158a6a1139f14989f22436660b234a"
@@ -68,7 +68,8 @@ class EpmaWindowsUsbCreator < Formula
       Please still double-check the selected disk before confirming.
 
       The administrator password is asked for once, up front, before the drive
-      is touched. It is used only to run local disk commands and is never stored.
+      is touched. It is used only to run local disk commands and is never logged,
+      written to disk or sent anywhere.
 
       Always download the Windows image from Microsoft's official website. The
       application accepts HTTPS links only and warns about unrecognised servers,

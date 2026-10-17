@@ -95,7 +95,7 @@ def build_bom(version, repo, source, artifact, commit, now):
         "bom-ref": main_ref,
         "name": "epma-usb-creator",
         "version": clean,
-        "description": "Create bootable USB drives (Windows 11 or hybrid Linux ISOs) from macOS or Linux",
+        "description": "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex, on macOS or Linux",
         "licenses": [{"license": {"id": LICENSE_ID}}],
         "purl": main_ref,
         "externalReferences": [

@@ -9,7 +9,7 @@ Aplicação multiplataforma (**macOS** e **qualquer distribuição Linux**) para
 
 Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
-Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python externas.
+Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python externas**.
 
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPLv3-blue)
 ![Plataformas](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux-lightgrey)
@@ -25,6 +25,7 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 - [Instalação](#instalação)
 - [Uso](#uso)
 - [Segurança](#segurança)
+- [Desenvolvimento](#desenvolvimento)
 - [Solução de problemas](#solução-de-problemas)
 - [Limitações](#limitações)
 - [Licença](#licença)
@@ -37,17 +38,18 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 - **Uso de ISO já existente**, caso você já tenha baixado o arquivo pelo navegador.
 - **Formatação automática** do pendrive como GPT + FAT32 com rótulo `WIN11USB` (compatível com boot UEFI, sem precisar desativar o Secure Boot).
 - **Divisão automática do `install.wim` / `install.esd`**: esses arquivos costumam passar de 4 GB, o limite do FAT32. A aplicação detecta o caso e divide o arquivo em `.swm` usando `wimlib-imagex`.
-- **Instalação automática de dependências**: detecta o gerenciador de pacotes (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) ou o Homebrew no macOS e instala o que estiver faltando.
-- **Três tipos de imagem**: *Windows 11* (GPT + FAT32, arquivos copiados), *Linux / outra ISO híbrida* e *ChromeOS Flex* (os dois últimos gravados byte a byte, como o `dd`). O tipo é detectado pelo **conteúdo** da imagem, não pelo nome do arquivo, e você sempre pode trocá-lo.
+- **Instalação automática de dependências**: detecta o gerenciador de pacotes (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) ou o Homebrew no macOS e instala o que estiver faltando. Ferramentas ausentes são detectadas **antes** de apagar qualquer coisa: o botão Create fica desativado, com uma dica do que instalar.
+- **Quatro cartões de imagem**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* e *Other ISO*. O *Windows 11* é formatado como GPT + FAT32 e tem os arquivos copiados; os outros três são gravados byte a byte, como o `dd` (*Linux* e *Other ISO* gravam do mesmo jeito). O cartão é escolhido pelo **conteúdo** da imagem, não pelo nome do arquivo, e você sempre pode trocá-lo.
 - **ChromeOS Flex**: o cartão *Google Chrome* baixa a imagem oficial do Google (`dl.google.com`, HTTPS, com retomada), extrai do ZIP com segurança e a prepara para o pendrive. O ChromeOS comum não é distribuído para PCs em geral; por isso o Flex — o ChromeOS gratuito do Google para PCs e Macs — é a opção oficial.
-- **Gravação verificada**: depois de gravar, o pendrive é relido e comparado com a ISO (byte a byte nas imagens Linux; checksum e `wimlib-imagex verify` no Windows). Se algo for diferente, o pendrive **não** é ejetado e você é avisado para não usá-lo.
+- **Gravação verificada**: depois de gravar, o pendrive é relido e comparado com a ISO (byte a byte nas imagens Linux; comparação de checksum e `wimlib-imagex verify` no Windows). Se algo for diferente, o pendrive **não** é ejetado e você é avisado para não usá-lo.
 - **Eject confiável** depois da verificação, com mensagem clara se o sistema recusar.
-- **Barra de progresso** com porcentagem, velocidade e tempo restante na gravação e na verificação; botão **Cancelar** para a operação inteira.
-- **Proteção contra apagar o disco errado**: só discos USB são listados, com modelo e volumes; o disco do sistema nunca aparece; discos de risco (grandes, com dados ou parecidos com disco de backup) exigem que você **digite o identificador**; e há sempre uma confirmação final.
+- **Barra de progresso** com porcentagem, velocidade e tempo restante na gravação e na verificação; botão **Cancel** para a operação inteira.
+- **Proteção contra apagar o disco errado**: só discos USB são listados, com modelo e volumes; o disco do sistema nunca aparece; discos de risco (grandes, com dados ou parecidos com disco de backup) exigem que você **digite o identificador**; e há sempre uma confirmação final. Fechar a janela durante a gravação pede confirmação antes, e uma ISO do Windows maior que o pendrive é recusada logo de início.
 - **Conferência SHA-256 de uma ISO que você já tem** (cole o valor esperado ou uma linha de `SHA256SUMS`).
 - **Download com retomada** e novas tentativas automáticas.
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
-- **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, referência das duas abas, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
+- **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos quatro cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
+- **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela.
 
 ## Como funciona
@@ -55,7 +57,7 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 1. A ISO é montada em modo somente leitura (`hdiutil` no macOS, `mount -o loop,ro` no Linux).
 2. O pendrive é apagado e reparticionado como GPT com uma partição FAT32 marcada como ESP.
 3. Todos os arquivos da ISO são copiados com `rsync`, **exceto** o `install.wim`/`install.esd`.
-4. Esse arquivo grande é copiado à parte: se couber no FAT32, é copiado direto; se passar de 4 GB, é dividido em partes de ~3,8 GB com `wimlib-imagex split`.
+4. Esse arquivo grande é tratado à parte: se couber no limite do FAT32, é copiado direto; se passar de 4 GB, é dividido em partes de ~3,8 GB com `wimlib-imagex split`.
 5. As escritas são sincronizadas em disco, o pendrive é remontado e **relido para verificar** que cada arquivo confere com a ISO (no modo Linux a ISO é gravada direto e todo o conteúdo do pendrive é comparado com ela).
 6. Só então o pendrive é desmontado e ejetado com segurança.
 
@@ -64,16 +66,16 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 ### macOS
 
 ```bash
-brew install python-tk@3.14 wimlib
+brew install python-tk@3.13 wimlib
 ```
 
-> Ajuste `python-tk@<versão>` para a versão do Python que você usa. No macOS não é necessário `sudo`: as operações de disco em unidades externas são feitas via `diskutil` e `hdiutil`.
+> É necessário Python **3.10 ou mais novo**. Use a fórmula `python-tk` que corresponde à versão do seu Python (por exemplo `python-tk@3.13` para o Python 3.13). No modo Windows o macOS não precisa de `sudo` (as operações de disco passam por `diskutil` e `hdiutil`); o modo Linux, que grava o dispositivo bruto, pede a sua senha de administrador.
 
 ### Linux
 
 Os nomes dos pacotes variam por distribuição. Ferramentas necessárias:
 
-| Ferramenta | Pacote (Debian/Ubuntu) | Fedora/RHEL | Arch | openSUSE |
+| Ferramenta | Debian/Ubuntu | Fedora/RHEL | Arch | openSUSE |
 |---|---|---|---|---|
 | `parted`, `partprobe` | `parted` | `parted` | `parted` | `parted` |
 | `mkfs.vfat` | `dosfstools` | `dosfstools` | `dosfstools` | `dosfstools` |
@@ -94,10 +96,39 @@ No Linux, particionar/formatar/montar um dispositivo de bloco exige privilégios
 
 ## Instalação
 
+### Homebrew (macOS — recomendado)
+
+```bash
+brew tap 1985epma/tap
+brew trust 1985epma/tap
+brew install epma-windows-usb-creator
+```
+
+Depois execute com `epma-windows-usb-creator`.
+
+O Homebrew instala sozinho o `wimlib` e um Python com Tkinter, então não há
+mais nada para instalar. O `brew trust` é exigido pelo Homebrew para qualquer
+tap de terceiros — é uma confirmação única de que você aceita código deste
+tap.
+
+### A partir do código-fonte
+
 ```bash
 git clone https://github.com/1985epma/epma-windows-usb-creator.git
 cd epma-windows-usb-creator
 chmod +x win11_usb_creator.py
+```
+
+**Verifique o arquivo antes de executá-lo.** Esta aplicação pede a sua senha de administrador, o que faz de uma cópia adulterada um alvo valioso para um atacante:
+
+```bash
+shasum -a 256 win11_usb_creator.py
+```
+
+Para arquivos baixados de uma [release](https://github.com/1985epma/epma-windows-usb-creator/releases), compare o resultado com o `SHA256SUMS.txt` publicado, ou verifique a atestação de procedência da build emitida pelo GitHub:
+
+```bash
+gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator
 ```
 
 ## Uso
@@ -108,7 +139,7 @@ python3 win11_usb_creator.py
 
 ### A janela
 
-Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arquivo da imagem** e o botão **Criar**.
+Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arquivo da imagem** e o botão **Create**.
 
 1. **Escolha um cartão** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* ou *Other ISO*. O painel sob os cartões mostra onde obter esse tipo de imagem. Ao selecionar um arquivo de imagem, o cartão certo é escolhido para você, pelo **conteúdo** do arquivo.
 2. **Obtenha a imagem** (pule se já tiver):
@@ -116,7 +147,7 @@ Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arq
    - **Google Chrome (ChromeOS Flex)** — clique em **"Download ChromeOS Flex from Google"**; o ZIP é baixado (com retomada), extraído e selecionado para você. Detalhes abaixo.
    - **Linux / Other ISO** — baixe a ISO no site da sua distribuição.
 3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o painel **"Verify the selected ISO (SHA-256)"**: cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
-4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex), clique em **"Refresh USB drives list"** e selecione-o.
+4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou maior** para o ChromeOS Flex), clique em **"Refresh USB drives list"** e selecione-o.
 5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo.
 
 O que cada cartão faz:
@@ -173,29 +204,65 @@ Dados vão para o stdout; mensagens, progresso e erros vão para o stderr. `NO_C
 
 ## Segurança
 
-Esta aplicação **apaga completamente** o disco selecionado. As proteções implementadas são:
+Esta aplicação **apaga completamente** o disco selecionado e executa comandos privilegiados. As proteções implementadas são:
+
+### Como se evita apagar o disco errado
 
 - Apenas discos **USB** são listados. No macOS o disco interno é filtrado duas vezes (`diskutil list external physical` + verificação da flag `Internal`) e o protocolo do barramento precisa ser `USB`; no Linux o disco que contém a raiz `/` é excluído e apenas dispositivos com transporte USB são exibidos (cartões SD e discos internos não aparecem).
+- **Falha fechada:** se o programa não conseguir *confirmar* que um disco é externo, ele o esconde em vez de exibi-lo. No Linux, discos que contêm `/`, `/boot` (ou qualquer coisa sob ele), `/boot/efi`, `/home`, `/usr`, `/var` ou `/etc` nunca são listados, mesmo que o sistema os marque como removíveis — isso protege máquinas que inicializam por cartão SD ou USB, como um Raspberry Pi.
 - **Você vê o que vai apagar:** a lista e o diálogo final mostram modelo, tamanho e volumes (com espaço usado). Discos grandes, com muitos dados ou parecidos com disco de backup exigem a digitação do identificador.
+- **Reconferência antes de apagar:** imediatamente antes da gravação, o programa reconsulta a lista de discos e confirma que o identificador escolhido ainda aponta para o mesmo dispositivo, com o mesmo tamanho **e o mesmo serial/modelo**. Nomes como `/dev/sdb` são reciclados pelo sistema — se um pendrive for trocado nesse intervalo, a operação é abortada.
 - Há sempre um diálogo de confirmação final antes de qualquer escrita.
+- **Conferido antes de apagar:** ferramentas ausentes são detectadas de início (Create fica desativado com uma dica), uma ISO do Windows maior que o pendrive é recusada, e fechar a janela durante a gravação pede confirmação antes.
 - **Nada é repetido às cegas:** um script privilegiado que falha nunca é executado uma segunda vez.
 - **Verificado antes do eject:** uma diferença aborta sem ejetar e o pendrive é declarado inutilizável.
-- **Reconferência antes de apagar:** imediatamente antes da gravação, o programa reconsulta a lista de discos e confirma que o identificador escolhido ainda aponta para o mesmo dispositivo, com o mesmo tamanho **e o mesmo serial/modelo**. Nomes como `/dev/sdb` são reciclados pelo sistema — se um pendrive for trocado nesse intervalo, a operação é abortada.
-- **Falha fechada:** se o programa não conseguir *confirmar* que um disco é externo, ele o esconde em vez de exibi-lo. Discos que contêm `/`, `/boot`, `/home`, `/usr`, `/var` ou `/etc` nunca são listados, mesmo que o sistema os marque como removíveis (protege máquinas que inicializam por cartão SD ou USB, como um Raspberry Pi).
 
-Sobre a senha de administrador: ela é usada apenas para executar comandos de disco locais via `sudo`. É conferida uma vez, só por `stdin` (nunca na linha de comando, onde outros usuários poderiam vê-la com `ps`), e então descartada da memória: a operação continua com o carimbo de credencial do próprio sudo, renovado durante a execução e invalidado (`sudo -k`) no fim. Se o sistema não mantiver esse carimbo, o programa pergunta de novo em vez de guardar a senha. **Nunca é gravada em disco nem enviada para lugar nenhum.** Cada execução fica num registro de auditoria só do dono, incluindo o SHA-256 da ISO gravada.
+> Mesmo assim: **confira duas vezes o disco selecionado antes de confirmar.**
 
-Mesmo assim: **confira duas vezes o disco selecionado antes de confirmar.**
+### Tratamento da senha de administrador
+
+A senha é usada apenas para executar comandos de disco locais via `sudo`. É conferida uma vez, só por **`stdin`** (nunca na linha de comando, onde outros usuários poderiam vê-la com `ps`), e então normalmente descartada da memória: a operação continua com o carimbo de credencial do próprio sudo, renovado durante a execução e invalidado (`sudo -k`) no fim. Se esta máquina não mantiver esse carimbo, a senha fica na memória **somente até o fim da operação** e é passada ao `sudo` por `stdin` a cada comando privilegiado. **Nunca é registrada em log, gravada em disco nem enviada para lugar nenhum.** Cada execução fica num registro de auditoria só do dono, incluindo o SHA-256 da ISO gravada.
 
 ### Integridade da imagem baixada
 
-O programa aceita **apenas links HTTPS** e avisa se o servidor não for um endereço conhecido da Microsoft. Ao final do download, ele exibe a **impressão digital SHA-256** do arquivo. Se você informar o valor esperado no campo opcional, o arquivo será descartado caso não confira.
+O programa aceita **apenas links HTTPS** e avisa se o servidor não for um endereço conhecido de download da Microsoft; um redirecionamento de um servidor confiável para um não confiável é recusado. Ao final do download, ele exibe o **checksum SHA-256** do arquivo. Se você informar o valor esperado, o arquivo será descartado caso não confira.
 
 > **Baixe sempre pelo site oficial da Microsoft.** Nunca use um link de "espelho mais rápido" indicado em fórum ou vídeo — uma imagem adulterada instalaria um Windows comprometido sem que você percebesse.
 
 ### Documentação de segurança
 
-O modelo de ameaças, os controles implementados e as variáveis de ambiente opcionais estão em [SECURITY.md](SECURITY.md). Os relatórios completos da auditoria (SCA, SAST, STRIDE, OWASP Top 10 e DAST) estão em [output/](output/).
+O modelo de ameaças, os controles implementados e as variáveis de ambiente opcionais estão em [SECURITY.md](SECURITY.md).
+
+Os relatórios completos da auditoria (SCA, SAST, STRIDE, OWASP Top 10 e DAST) estão em [output/](output/). Comece pelo [relatório consolidado](output/relatorio-consolidado-seguranca.md). *Observação: os relatórios da auditoria são escritos em português.*
+
+## Desenvolvimento
+
+### Rodando as verificações localmente
+
+Antes de enviar uma alteração, rode as mesmas verificações que a esteira de CI roda:
+
+```bash
+python3 verificar.py
+```
+
+É seguro: nada toca em disco, formata ou exige privilégios de administrador. Os testes unitários rodam sozinhos com `python3 -m unittest discover -s tests -t .` (não precisa de Tkinter).
+
+### Integração contínua
+
+Cada alteração é verificada automaticamente pelo GitHub Actions (todas as actions são fixadas pelo SHA do commit):
+
+| Workflow | Finalidade |
+|---|---|
+| [`ci.yml`](.github/workflows/ci.yml) | Lint, testes unitários (Python 3.10–3.14, Linux e macOS), ShellCheck dos scripts embutidos, testes de ponta a ponta em loop devices, sondas de distribuições Linux |
+| [`security.yml`](.github/workflows/security.yml) | Guarda de regressão de segurança, Bandit, Semgrep, CodeQL, busca de segredos |
+| [`release.yml`](.github/workflows/release.yml) | Publica releases com checksums SHA-256, procedência da build e SBOM; atualiza o tap do Homebrew |
+| [`scorecard.yml`](.github/workflows/scorecard.yml) | Avaliação de cadeia de suprimentos do OpenSSF Scorecard |
+
+A esteira de segurança tem duas camadas: um guarda de regressão sem dependências, que verifica que cada correção da auditoria continua no lugar, e analisadores externos como segunda opinião. Cada arquivo de workflow é amplamente comentado, explicando o que cada passo faz e por quê.
+
+### Contribuindo
+
+Dependências de terceiros são evitadas de propósito — isso elimina a superfície de ataque de cadeia de suprimentos mais comum do software moderno, e a CI faz cumprir essa regra. Se uma dependência se tornar realmente necessária, a verificação que falhar explica o processo a seguir.
 
 ## Solução de problemas
 
@@ -208,8 +275,14 @@ Instale o `wimlib` (macOS: `brew install wimlib`; Linux: veja a tabela acima) ou
 **"Could not find sources/install.wim or sources/install.esd on the ISO"**
 A imagem selecionada não é uma ISO de instalação do Windows. Baixe a ISO *multi-edition* oficial da Microsoft.
 
+**"Only HTTPS links are accepted"**
+O link de download precisa começar com `https://`. Um link sem criptografia pode ser alterado no caminho, o que permitiria trocar a imagem do Windows por uma adulterada.
+
 **"Neither 'sudo' nor 'pkexec' was found"**
 Instale o `sudo` ou execute a aplicação como root.
+
+**"Aborted for safety: /dev/sdX is no longer listed as an external drive"**
+O dispositivo mudou entre a seleção e a gravação. Clique em *Refresh USB drives list* e selecione o pendrive de novo — essa verificação existe justamente para impedir que o disco errado seja apagado.
 
 **Nenhum disco aparece na lista**
 Só aparecem discos ligados por **USB** (cartões SD, discos internos e o disco do sistema nunca aparecem). Confira se o pendrive está conectado e clique em *Refresh*.
@@ -220,7 +293,7 @@ Só aparecem discos ligados por **USB** (cartões SD, discos internos e o disco 
 **"Verification FAILED"**
 Os dados no pendrive diferem da ISO. O pendrive não foi ejetado e não deve ser usado. Grave de novo; se continuar falhando, tente outra porta USB ou outro pendrive.
 
-**O pendrive não aparece no boot**
+**O pendrive não aparece no menu de boot**
 Certifique-se de que a máquina está em modo **UEFI** (não Legacy/CSM). O pendrive gerado é UEFI + GPT e não inicializa em BIOS legado.
 
 ## Limitações
@@ -229,6 +302,7 @@ Certifique-se de que a máquina está em modo **UEFI** (não Legacy/CSM). O pend
 - Gera apenas mídia **UEFI/GPT** — sem suporte a boot BIOS legado.
 - Não faz bypass dos requisitos do Windows 11 (TPM 2.0 / Secure Boot).
 - Um download cancelado ou interrompido mantém o arquivo parcial e retoma quando o servidor permite; uma falha de integridade o descarta.
+- A formatação não sobrescreve o conteúdo anterior do pendrive. Se ele guardava dados sensíveis, apague-o antes com `shred` (Linux) ou "Apagar com segurança" no Utilitário de Disco (macOS).
 
 ## Licença
 

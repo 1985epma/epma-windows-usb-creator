@@ -52,7 +52,7 @@ command.**
 |---|---|
 | Disk identifier | `^disk[0-9]+$` (macOS) / `^[a-zA-Z0-9_+-]{1,32}$` (Linux), matched with `fullmatch` so a trailing newline is rejected too. Anything else is rejected. |
 | ISO path | Must exist, be a regular file, be readable, and be at least 1 MB. For direct (Linux/hybrid) writes it must also carry a boot signature. |
-| Download URL | `https://` only. A host outside Microsoft's known download servers triggers an explicit warning. |
+| Download URL | `https://` only. A host outside Microsoft's known download servers triggers an explicit warning, and a redirect from a trusted host to an untrusted one is refused. |
 | SHA-256 checksum | Exactly 64 hexadecimal characters. |
 | Package names to install | Only those in the fixed `LINUX_REQUIRED_TOOLS` list. |
 
@@ -71,8 +71,8 @@ Only drives attached over **USB** are ever offered (macOS `BusProtocol == USB`, 
 
 This includes a specific safeguard for machines that boot from removable media
 (for example, a Raspberry Pi booting from its SD card, or a USB-booted system):
-any disk holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` is hidden, even
-when the operating system reports it as removable.
+on Linux, any disk holding `/`, `/boot` (or anything under it), `/boot/efi`, `/home`,
+`/usr`, `/var` or `/etc` is hidden, even when the operating system reports it as removable.
 
 ### 4. Re-verification before destruction
 
@@ -95,11 +95,13 @@ causes the file to be **discarded**. Incomplete downloads are discarded as well.
   canceled password changes nothing.
 - Passed over `stdin` only — **never** on the command line, which is visible to
   other users on the machine through the `ps` command.
-- After the single check it is **dropped from memory**; the operation continues on
-  sudo's own credential timestamp (refreshed while it runs, invalidated with
-  `sudo -k` at the end). If the system does not keep that timestamp, the password
-  is asked again — it is not held.
-- Never written to any log, including the audit log.
+- After the single check it is normally **dropped from memory**; the operation continues
+  on sudo's own credential timestamp (refreshed while it runs, invalidated with
+  `sudo -k` at the end).
+- If the machine does not keep that timestamp (for example `timestamp_timeout=0`),
+  the password **stays in memory only until the operation ends** and is passed to
+  `sudo` on `stdin` for each privileged command. It is then discarded.
+- Never written to disk and never written to any log, including the audit log.
 - A privileged script that fails is **never re-run**: a failed `mkfs`/`dd` is
   reported, not repeated.
 
@@ -113,8 +115,8 @@ Default location: `~/.local/state/epma-win11-usb-creator/audit.log`
 Recorded events include: start/completion/failure/cancellation of destructive
 operations (with the **SHA-256 of the ISO that was written**), disks hidden for
 safety reasons, rejected identifiers, download origin, and the result of integrity
-verification and of the post-write verification. The log rotates (1 MB × 5) and
-every file keeps `0600` permissions.
+verification and of the post-write verification. The log rotates at 1 MB, keeping
+5 older files, and every file keeps `0600` permissions.
 
 If the home directory is not writable, logging is silently disabled — **failing
 to write a log must never stop a user from creating their USB drive.**
@@ -152,6 +154,17 @@ The drive list and the final dialog show the model, size and volumes. A drive th
 is large (> 256 GB), holds a lot of data or looks like a backup disk additionally
 requires typing its identifier. Drives whose contents cannot be read are treated
 as high risk.
+
+### 12. Checks before anything is erased, and interruption
+
+- Missing system tools (`parted`, `wimlib-imagex`, …) are detected **before** the drive is
+  touched: the *Create* button stays disabled with a hint, instead of failing after the
+  erase.
+- A Windows ISO that is larger than the drive is refused up front.
+- Closing the window while a drive is being written asks for confirmation, because stopping
+  halfway leaves the drive unusable. Canceling before the drive is touched says so.
+- In the command line, Ctrl-C does not leave a root `dd` running, and the drive identity
+  (serial/model/UUID) is pinned the same way as in the window.
 
 ---
 

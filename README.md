@@ -35,17 +35,17 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Use an existing ISO** if you already downloaded the file in your browser.
 - **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
-- **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
-- **Three image types**: *Windows 11* (GPT + FAT32, files copied), *Linux / other hybrid ISO* and *ChromeOS Flex* (both written byte-for-byte, like `dd`). The type is detected from the image's **contents**, not its file name, and you can always change it.
+- **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing. Missing tools are detected **before** anything is erased: the Create button stays disabled, with a hint saying what to install.
+- **Four image cards**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* and *Other ISO*. *Windows 11* is formatted as GPT + FAT32 and its files are copied; the other three are written byte-for-byte, like `dd` (*Linux* and *Other ISO* write the same way). The card is picked from the image's **contents**, not its file name, and you can always change it.
 - **ChromeOS Flex**: the *Google Chrome* card downloads Google's official image (`dl.google.com`, HTTPS, resumable), extracts it safely from the ZIP and prepares it for the USB drive. Regular ChromeOS is not distributed for ordinary PCs, so Flex — Google's free ChromeOS for PCs and Macs — is the official option.
 - **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
 - **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
 - **Progress bar** with percentage, speed and time remaining for writing and verifying; a **Cancel** button for the whole operation.
-- **Protection against erasing the wrong disk**: only USB drives are listed with their model and volumes, the system disk is never shown, risky drives (large, holding data, looking like a backup disk) require you to **type the disk identifier**, and a final confirmation is always required.
+- **Protection against erasing the wrong disk**: only USB drives are listed with their model and volumes, the system disk is never shown, risky drives (large, holding data, looking like a backup disk) require you to **type the disk identifier**, and a final confirmation is always required. Closing the window while a drive is being written asks first, and a Windows ISO larger than the drive is refused up front.
 - **SHA-256 check for an ISO you already have** (paste the expected value or a `SHA256SUMS` line).
 - **Resumable downloads** with automatic retries.
 - **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
-- **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for both tabs, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
+- **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its four cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
 - **Real-time log** of every command executed, inside the application window.
 
@@ -63,10 +63,10 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 ### macOS
 
 ```bash
-brew install python-tk@3.14 wimlib
+brew install python-tk@3.13 wimlib
 ```
 
-> Python **3.10 or newer** is required. Adjust `python-tk@<version>` to match your Python version. In Windows mode macOS needs no `sudo` (disk operations go through `diskutil` and `hdiutil`); Linux mode, which writes the raw device, asks for your administrator password.
+> Python **3.10 or newer** is required. Use the `python-tk` formula that matches your Python version (for example `python-tk@3.13` for Python 3.13). In Windows mode macOS needs no `sudo` (disk operations go through `diskutil` and `hdiutil`); Linux mode, which writes the raw device, asks for your administrator password.
 
 ### Linux
 
@@ -206,10 +206,11 @@ This application **completely erases** the selected disk and executes privileged
 ### Preventing the wrong disk from being erased
 
 - Only **USB** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check) and the bus protocol must be `USB`; on Linux the disk holding the root filesystem is excluded and only devices with USB transport are shown (SD cards and internal disks are not).
-- **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. Disks holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
+- **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. On Linux, disks holding `/`, `/boot` (or anything under it), `/boot/efi`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
 - **You see what you are erasing:** the list and the final dialog show the model, size and volumes (with used space). Drives that are large, hold a lot of data or look like a backup disk require typing the disk identifier.
 - **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size **and the same serial/model**. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
 - A final confirmation dialog appears before any write occurs.
+- **Checked before anything is erased:** missing tools are detected up front (Create stays disabled with a hint), a Windows ISO larger than the drive is refused, and closing the window during a write asks for confirmation first.
 - **Nothing is retried blindly:** a privileged script that fails is never run a second time.
 - **Verified before eject:** a mismatch aborts without ejecting and the drive is reported as unusable.
 
@@ -217,11 +218,11 @@ This application **completely erases** the selected disk and executes privileged
 
 ### Handling of the administrator password
 
-The password is used solely to run local disk commands via `sudo`. It is checked once, over **`stdin` only** — never on the command line, where other users on the machine could see it with `ps` — and then dropped from memory: the operation continues on sudo's own credential timestamp, which is refreshed while it runs and invalidated (`sudo -k`) at the end. If the system does not keep that timestamp, the application asks again instead of keeping the password. It is **never written to disk or transmitted anywhere**. Every run is recorded in an owner-only audit log, including the SHA-256 of the ISO that was written.
+The password is used solely to run local disk commands via `sudo`. It is checked once, over **`stdin` only** — never on the command line, where other users on the machine could see it with `ps` — and then normally dropped from memory: the operation continues on sudo's own credential timestamp, which is refreshed while it runs and invalidated (`sudo -k`) at the end. If this machine does not keep that timestamp, the password stays in memory **only until the operation ends** and is passed to `sudo` on `stdin` for each privileged command. It is **never logged, never written to disk and never transmitted anywhere**. Every run is recorded in an owner-only audit log, including the SHA-256 of the ISO that was written.
 
 ### Integrity of the downloaded image
 
-The application accepts **HTTPS links only** and warns you if the server is not a recognised Microsoft download host. After the download completes it displays the **SHA-256 checksum** of the file. If you supply an expected value, a mismatch causes the file to be discarded.
+The application accepts **HTTPS links only** and warns you if the server is not a recognised Microsoft download host; a redirect from a trusted host to an untrusted one is refused. After the download completes it displays the **SHA-256 checksum** of the file. If you supply an expected value, a mismatch causes the file to be discarded.
 
 > **Always download from Microsoft's official website.** Never use a "faster mirror" link suggested in a forum or video — a tampered image would install a compromised Windows without you noticing.
 
@@ -254,7 +255,7 @@ Every change is automatically checked by GitHub Actions (all actions are pinned 
 | [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums, build provenance and an SBOM; updates the Homebrew tap |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | OpenSSF Scorecard supply-chain assessment |
 
-The security pipeline is built in two layers: a dependency-free regression guard that verifies all 27 audit fixes remain in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
+The security pipeline is built in two layers: a dependency-free regression guard that verifies that every audit fix remains in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
 
 ### Contributing
 

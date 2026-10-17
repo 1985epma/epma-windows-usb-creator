@@ -44,11 +44,11 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 - The interface is always US English. A Portuguese (pt-BR) translation is available only when `EPMA_LANG=pt` is set explicitly; the system locale is never consulted.
 - **Resumable downloads** with `Range`/`If-Range` and automatic retries; the partial file is
   kept when the network drops.
-- **Audit log:** rotation (1 MB × 5, files stay `0600`) and the SHA-256 of the ISO that was
+- **Audit log:** rotation (1 MB, 5 older files kept, files stay `0600`) and the SHA-256 of the ISO that was
   written.
 - **ChromeOS Flex** (Google's free ChromeOS for PCs and Macs): the *Google Chrome* card downloads the official image from `dl.google.com` (HTTPS, resumable) and extracts it from the ZIP with a hardened routine. It is then written byte for byte to the USB drive, like a Linux ISO, with the same read-back verification and eject (a real 9.5 GB write was verified end to end). The image is recognised by its GPT partition names. `fetch-chromeos` and `write --mode chromeos` on the command line. Google asks for a USB drive of 16 GB or larger, which is checked and warned about.
 - **One-page window:** four cards (*Google Chrome*, *Windows 11*, *Linux*, *Other ISO*) replace the three tabs; below them the source panel of the chosen card, the USB drive list, the image file (with the SHA-256 check), and a large Create button with progress and log. The card is picked from the image contents, a mismatching file is questioned before anything is erased, and the window keeps one height whichever card is chosen.
-- **Help menu** with built-in documentation (F1): quick starts for Windows and Linux ISOs, both tabs, safety, verification and eject, command line, troubleshooting, files and settings, plus About, the audit log folder and the project page. Tests check it against the code (commands, exit codes, thresholds, messages).
+- **Help menu** with built-in documentation (F1): quick starts for Windows and Linux ISOs, the window and its four cards, safety, verification and eject, command line, troubleshooting, files and settings, plus About, the audit log folder and the project page. Tests check it against the code (commands, exit codes, thresholds, messages).
 - Unit test suite (`tests/`, standard library only) and a per-distribution package probe.
 - Release engineering: end-to-end tests against loop devices (Linux CI), ShellCheck over the
   embedded privileged scripts, a per-distribution package-manager probe, a CycloneDX SBOM and
@@ -64,8 +64,10 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   its size and volumes) is the single confirmation.
 - **A failing privileged script is never run again.** Previously any failure was treated as a
   wrong password and the whole script, including `mkfs`/`dd`, could be re-run.
-- The sudo password is checked once and then dropped from memory; the operation continues on
-  sudo's credential timestamp (with an automatic fallback that asks again).
+- The sudo password is checked once and normally dropped from memory; the operation continues
+  on sudo's own credential timestamp. If the machine does not keep that timestamp, the password
+  stays in memory only until the operation ends and is passed to sudo on stdin. It is never
+  logged or written to disk.
 - Linux partitioning waits for `udevadm settle` instead of a fixed `sleep 2`, unmounts
   partitions the desktop auto-mounted, and uses `oflag=direct` when the image size allows it.
 - The product and window title is now **EPMA USB CREATOR** (it was "EPMA Windows 11 Creator USB"; the tool also writes Linux images).
@@ -85,6 +87,35 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 - The password dialog no longer fails on Tk 9 / macOS. `tkinter.simpledialog` raised a
   `TclError` there, which made the *Create* button appear to do nothing. Errors raised in
   button callbacks are now shown in a dialog instead of disappearing.
+- The *Create* button was re-enabled while a write was running; it stays disabled until the
+  operation ends.
+- Missing dependencies (`parted`, `wimlib-imagex`, …) were detected only after the drive had
+  been erased. They are now checked before anything is touched, and *Create* is disabled with
+  a hint saying what to install.
+- The command line now pins the drive identity (serial/model/UUID) and re-checks it right
+  before writing, as the window does.
+- Ctrl-C in the command line no longer leaves a root `dd` running.
+- A wrong typed confirmation in the command line now exits with code 2 (usage error).
+- On Linux, Windows mode mounts the ISO as `udf,iso9660`.
+- A corrupt ZIP (ChromeOS Flex) gives a friendly error instead of a traceback.
+- Canceling before the drive has been touched now says so (nothing was changed).
+- The sleep inhibitor (`systemd-inhibit`) can no longer outlive the application on Linux.
+- A Windows ISO larger than the drive is refused up front, before the drive is touched.
+- `Sources/Install.wim` is found whatever its letter case.
+- A redirect from a trusted download host to an untrusted one is refused.
+- A full disk is not retried.
+- File names that are not valid UTF-8 no longer break the parsing of the `rsync` output.
+- The `.part` download file no longer follows symbolic links.
+- The file name no longer selects Windows mode.
+- Closing the window during a write now asks for confirmation first, because stopping halfway
+  leaves the drive unusable.
+- The drive list no longer blocks the window while it is read, and ignores card readers that
+  report 0 bytes.
+- A focus error in the image-type cards was fixed.
+- The position of the hint was corrected.
+- `WIN11_23H2` and similar Windows volume ids are recognised.
+- Pasting the disk identifier into the typed confirmation works.
+- The estimated time remaining is formatted correctly.
 
 ## [1.0.0] - 2026-07-27
 

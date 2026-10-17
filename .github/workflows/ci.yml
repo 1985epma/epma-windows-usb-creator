@@ -128,8 +128,8 @@ jobs:
         run: python -c "import tkinter; print('Tkinter OK -', tkinter.TkVersion)"
 
       - name: Rodar os testes de validação de segurança
-        # Conferem, uma a uma, as correções da auditoria (44 verificações na
-        # versão 1.1.0). Nenhuma delas toca em disco, formata nada ou usa
+        # Conferem, uma a uma, as correções da auditoria (todas as verificações
+        # de testes_validacao.py). Nenhuma delas toca em disco, formata nada ou usa
         # privilégio de administrador.
         run: python output/auditoria/testes_validacao.py
 

@@ -16,25 +16,30 @@
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
-Cross-platform (macOS + any Linux distro) GUI to download the official
-Windows 11 ISO and write a bootable USB drive (UEFI, GPT + FAT32).
+EPMA USB CREATOR: creates verified bootable USB drives from Windows 11, Linux and
+other ISOs, and Google's ChromeOS Flex, on macOS and any Linux distro (GUI and
+command line). Windows 11 gets a UEFI GPT + FAT32 drive; Linux, other hybrid ISOs
+and ChromeOS Flex are written byte for byte. Every write is read back and verified.
 
 macOS requirements:
-  brew install python-tk@3.14 wimlib
+  brew install python-tk@<version matching your Python, e.g. 3.13> wimlib
 
 Linux requirements (package names vary by distro; the app can install them
 for you via apt/dnf/yum/pacman/zypper/apk):
   parted, dosfstools (mkfs.vfat), util-linux (wipefs/mount/umount/lsblk),
   rsync, wimlib (wimlib-imagex) and python3-tk for the GUI itself.
 
-wimlib-imagex is required because the Windows 11 install.wim/install.esd
+wimlib-imagex is required for Windows 11 because install.wim/install.esd
 usually exceeds 4 GB, the FAT32 file size limit — the script splits the
 file automatically when that happens.
 
-On Linux, partitioning/formatting/mounting a raw block device requires
-root, so the app will ask for your sudo password (or use pkexec if sudo
-isn't available) once per operation. The password is only used locally to
-run disk commands and is never stored to disk or sent anywhere.
+Writing a drive needs root on Linux (and on macOS for the byte-for-byte
+modes), so the app asks for your sudo password (or uses pkexec if sudo isn't
+available) once per operation, before the drive is touched. The password is
+checked once and normally dropped: sudo's own credential timestamp carries the
+operation. If the machine does not keep that timestamp, the password stays in
+memory only until the operation ends and is passed to sudo on stdin. It is
+never logged, written to disk or sent anywhere.
 """
 
 import argparse
@@ -96,6 +101,10 @@ IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
 
 APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as the Linux window class
+# The one-sentence description of the product: README, the Help > About text and the command
+# line --help all use it (the module docstring, the Homebrew formula and the SBOM repeat it;
+# tests/test_docs_consistency.py keeps them in step).
+APP_TAGLINE = "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex"
 
 MS_DOWNLOAD_PAGE = "https://www.microsoft.com/en-us/software-download/windows11"
 PROJECT_URL = "https://github.com/1985epma/epma-windows-usb-creator"
@@ -215,7 +224,7 @@ _audit_logger = None
 # scripts and anything code or tests match by substring stay in English on purpose.
 # Placeholders use str.format syntax and must be identical in both languages:
 # translate first, then format:  _("Hello {name}").format(name=name)
-# Force a language with EPMA_LANG=pt (or en); otherwise LC_ALL / LC_MESSAGES / LANG decide.
+# Portuguese is used only when EPMA_LANG=pt is set; the system locale (LC_ALL / LANG) is never consulted.
 # ============================================================
 ENV_LANG = "EPMA_LANG"
 LANG_EN = "en"
@@ -237,35 +246,14 @@ def detect_language(env=None):
 ACTIVE_LANGUAGE = detect_language()  # decided once, at import
 
 PT_BR = {
-    # ----- tabs and tab 1 (download) -----
-    "Microsoft only releases the direct ISO link after you pick the edition and "
-    "language on the official site. Steps:\n\n"
-    "1. Click 'Open Microsoft's official page' below.\n"
-    "2. Under 'Download Windows 11 Disk Image (ISO)', pick the\n"
-    "   'Windows 11 (multi-edition ISO)' edition and click Download.\n"
-    "3. Choose the language and confirm.\n"
-    "4. Right-click the blue 64-bit download button and choose\n"
-    "   'Copy Link Address' (do NOT click it to download directly in the browser).\n"
-    "5. Paste the link below and click 'Download ISO'.":
-        "A Microsoft só libera o link direto da ISO depois que você escolhe a edição e "
-        "o idioma no site oficial. Passo a passo:\n\n"
-        "1. Clique em 'Abrir a página oficial da Microsoft' abaixo.\n"
-        "2. Em 'Baixar a imagem de disco do Windows 11 (ISO)', escolha a\n"
-        "   edição 'Windows 11 (ISO de várias edições)' e clique em Baixar.\n"
-        "3. Escolha o idioma e confirme.\n"
-        "4. Clique com o botão direito no botão azul de download de 64 bits e escolha\n"
-        "   'Copiar endereço do link' (NÃO clique nele para baixar direto pelo navegador).\n"
-        "5. Cole o link abaixo e clique em 'Baixar a ISO'.",
+    # ----- image sources and download -----
     "Open Microsoft's official page": "Abrir a página oficial da Microsoft",
     "Direct ISO link (HTTPS only):": "Link direto da ISO (somente HTTPS):",
-    "Expected SHA-256 checksum (optional — leave empty to skip verification):":
-        "Checksum SHA-256 esperado (opcional — deixe vazio para não verificar):",
     "Download ISO": "Baixar a ISO",
     "Cancel": "Cancelar",
     "OK": "OK",
     "Select existing ISO file...": "Selecionar um arquivo ISO existente...",
     "No ISO selected yet.": "Nenhuma ISO selecionada ainda.",
-    "Select the Windows 11 ISO file": "Selecione o arquivo ISO do Windows 11",
     "ISO image": "Imagem ISO",
     "Save ISO as": "Salvar a ISO como",
     "Selected ISO: {path}": "ISO selecionada: {path}",
@@ -312,9 +300,6 @@ PT_BR = {
     "Linux / other hybrid ISO": "Linux / outra ISO híbrida",
 
     # ----- ISO SHA-256 panel -----
-    "Verify the selected ISO (SHA-256)": "Verificar a ISO selecionada (SHA-256)",
-    "Expected checksum (optional) — paste the hash or the whole line from SHA256SUMS:":
-        "Checksum esperado (opcional) — cole o hash ou a linha inteira do SHA256SUMS:",
     "Calculate SHA-256": "Calcular o SHA-256",
     "Select an ISO file first.": "Selecione um arquivo ISO primeiro.",
     "Calculating...": "Calculando...",
@@ -335,22 +320,12 @@ PT_BR = {
     "MISMATCH": "NÃO CONFERE",
     "Could not read the file ({reason}).": "Não foi possível ler o arquivo ({reason}).",
 
-    # ----- tab 2 (create the drive) -----
+    # ----- the drive and the Create button -----
     "All dependencies OK": "Todas as dependências estão OK",
     "Missing: {tools}": "Faltando: {tools}",
     "Install missing dependencies": "Instalar as dependências que faltam",
     "Refresh USB drives list": "Atualizar a lista de pendrives",
     "Could not list disks: {error}": "Não foi possível listar os discos: {error}",
-    "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
-    "Double-check that this is really your USB drive before continuing. Only USB "
-    "drives are listed — the system's internal disk is never shown.":
-        "ATENÇÃO: TODOS OS DADOS da unidade selecionada serão apagados PERMANENTEMENTE.\n"
-        "Confira bem se este é mesmo o seu pendrive antes de continuar. Só unidades USB "
-        "são listadas — o disco interno do sistema nunca aparece.",
-    "You'll be asked for your administrator (sudo) password to format the drive.":
-        "Será pedida a sua senha de administrador (sudo) para formatar a unidade.",
-    "Linux mode on macOS asks for your administrator password to write the drive.":
-        "O modo Linux no macOS pede a sua senha de administrador para gravar a unidade.",
     "Create Bootable USB Drive": "Criar o pendrive bootável",
 
     # ----- confirmations and creation -----
@@ -3002,13 +2977,16 @@ def help_sections():
     large_gb = LARGE_DISK_BYTES // 1024 ** 3
     used_gb = SUBSTANTIAL_USED_BYTES // 1024 ** 3
     hosts = ", ".join(DEFAULT_TRUSTED_ISO_HOSTS)
+    critical_mounts = ", ".join(CRITICAL_MOUNTPOINTS)
+    retries = DOWNLOAD_MAX_ATTEMPTS - 1
+    audit_mb = f"{AUDIT_LOG_MAX_BYTES / 1_000_000:g}"
     return [
         ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
 
-## Three image types
+## Four image types (the four cards)
+• Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
-• Linux / other hybrid ISO — writes the ISO byte for byte to the whole drive (like dd). Use it for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images. An ISO that cannot boot from a USB drive is refused before anything is erased.
-• ChromeOS Flex — Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
+• Linux and Other ISO — both write the ISO byte for byte to the whole drive (like dd). Use Linux for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images, and Other ISO for any other bootable image. An ISO that cannot boot from a USB drive is refused before anything is erased.
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
@@ -3091,7 +3069,7 @@ def help_sections():
 
 ## Download controls
 • The bar shows percentage, speed and time left.
-• "Cancel" keeps the partial file. Downloading to the same file again resumes where it stopped when the server supports it, and temporary network errors are retried up to 3 times.
+• "Cancel" keeps the partial file. Downloading to the same file again resumes where it stopped when the server supports it, and temporary network errors are retried automatically (up to @RETRIES@ retries, @ATTEMPTS@ attempts in all).
 • A file that fails the checksum is deleted.
 
 ## Select existing ISO file...
@@ -3101,7 +3079,8 @@ def help_sections():
 ## Verify the selected ISO (SHA-256)
 • Appears under the file name after an image is selected. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
 • MATCH (green): the file is identical to the published one. MISMATCH (red): do not use it.
-• With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts)),
+• With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts).replace(
+            "@RETRIES@", str(retries)).replace("@ATTEMPTS@", str(DOWNLOAD_MAX_ATTEMPTS))),
 
         ("The drive and the Create button", f"""## The cards
 • Google Chrome (ChromeOS Flex, disk image written directly), Windows 11 (GPT + FAT32, files copied), Linux and Other ISO (the ISO is written directly). The card is chosen from the image contents when you select a file; you can change it.
@@ -3109,6 +3088,7 @@ def help_sections():
 ## Dependencies
 • Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
 • The Google Chrome, Linux and Other ISO cards need nothing extra.
+• The dependencies are checked before anything is erased. When one is missing, the Create button stays disabled and a hint says what to install.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
 ## The drive list
@@ -3120,20 +3100,23 @@ def help_sections():
 
 ## Administrator password
 • Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
-• It is used only to run local disk commands. It is not stored, logged or sent anywhere.
+• It is checked once. Normally it is then dropped and sudo's own credential timestamp carries the operation; only if this computer does not keep that timestamp does the password stay in memory, until the operation ends. It is used only to run local disk commands and is never logged, written to disk or sent anywhere.
 
 ## Progress, Cancel and the log
 • The bar shows the percentage, speed and time left while writing and while verifying. Some steps (comparing files) show a moving bar without a percentage.
-• "Cancel" stops the operation. The drive is then left unusable until it is written again.
+• "Cancel" stops the operation. If it is pressed before the drive is touched, the log says so and nothing changed; otherwise the drive is left unusable until it is written again.
+• Closing the window while a drive is being written asks you first, because stopping halfway leaves the drive unusable.
 • The black box shows every command that runs. Keep it if you need to report a problem."""),
 
-        ("Safety", """## What protects you
-• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. Disks that hold the system (/, /boot, /home, /usr, /var, /etc) are never listed.
+        ("Safety", f"""## What protects you
+• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed.
 • You see the model, size and contents before erasing. Large or data-filled drives need the identifier typed.
 • Right before erasing, the drive is looked up again and must still be the same device (size, serial number, model). If it was swapped, the operation stops.
 • A privileged command that fails is never run a second time on its own.
 • The result is verified before the drive is ejected.
-• The administrator password is checked up front and is not kept in memory for the whole operation.
+• The administrator password is checked up front, before the drive is touched. Normally it is then dropped and sudo's own credential timestamp is used; only if this computer does not keep that timestamp does the password stay in memory, until the operation ends. It is never logged or written to disk.
+• Missing dependencies are detected before anything is erased, and a Windows ISO that is larger than the drive is refused up front.
+• Closing the window during a write asks for confirmation first.
 
 ## What it cannot do for you
 • It cannot tell which of your USB drives you meant. Read the model, size and volumes in the confirmation every time.
@@ -3213,7 +3196,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • Install sudo, or run the program as root.
 
 ## "Tkinter is not available for this Python installation"
-• Install Tk for your Python (macOS: brew install python-tk@3.13; Debian/Ubuntu: sudo apt install python3-tk).
+• Install Tk for your Python (macOS: brew install python-tk@<version matching your Python>, for example python-tk@3.13; Debian/Ubuntu: sudo apt install python3-tk).
 
 ## The computer does not boot from the drive
 • Windows drives are UEFI + GPT only: choose the UEFI entry in the boot menu and make sure Legacy/CSM is off.
@@ -3224,7 +3207,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
         ("Files, logs and settings", f"""## Audit log
 • Every destructive operation is recorded with its start, result and the SHA-256 of the ISO, together with security events such as hidden disks and rejected identifiers. Passwords are never logged.
 • Location: {audit_path}
-• It rotates at 1 MB (5 files are kept) and is readable only by you. "Help > Open the audit log folder" opens it.
+• It rotates at {audit_mb} MB ({AUDIT_LOG_BACKUPS} older files are kept) and is readable only by you. "Help > Open the audit log folder" opens it.
 
 ## Environment variables (all optional)
 • {ENV_AUDIT_LOG} — another path for the audit log.
@@ -3238,7 +3221,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO or ChromeOS Flex download you ask for."""),
 
         ("About", f"""EPMA USB CREATOR {__version__}
-Writes verified bootable USB drives from Windows 11, Linux and ChromeOS Flex images on macOS and Linux.
+{APP_TAGLINE}, on macOS and Linux.
 
 Platform: {platform_display_name()}
 License: GNU General Public License v3 or later
@@ -5041,27 +5024,46 @@ COMMANDS = {"list": cmd_list, "detect": cmd_detect, "sha256": cmd_sha256, "write
             "fetch-chromeos": cmd_fetch_chromeos}
 
 
+# What `--help` says about exit codes and environment variables. Both lists are written out here,
+# next to the constants, and tests/test_docs_consistency.py fails when an EXIT_* or ENV_*
+# constant is missing from them, so --help cannot fall behind the code.
+CLI_EXIT_CODE_HELP = (
+    (EXIT_OK, "success"),
+    (EXIT_ERROR, "error"),
+    (EXIT_USAGE, "usage error (also: confirmation missing, ISO kind unknown)"),
+    (EXIT_VERIFY_FAILED, "verification failed / checksum mismatch"),
+    (EXIT_EJECT_FAILED, "written and verified, but the drive could not be ejected"),
+    (EXIT_INTERRUPTED, "interrupted (Ctrl-C)"),
+)
+CLI_ENV_HELP = (
+    (ENV_AUDIT_LOG, "path of the audit log"),
+    (ENV_DISABLE_AUDIT_LOG, "1 = do not write the audit log"),
+    (ENV_TRUSTED_HOSTS, "comma-separated trusted download hosts (replaces the Microsoft list)"),
+    (ENV_ALLOW_ANY_HOST, "1 = no warning for unrecognised download servers (lowers security)"),
+    (ENV_EXPECTED_SHA256, "expected SHA-256 pre-filled in the window (window only)"),
+    (ENV_LANG, "pt = Portuguese window (the command line is always English)"),
+    ("NO_COLOR", "disable colored messages"),
+)
+
+
+def cli_epilog():
+    """The text under `--help`: exit codes and environment variables, built from the constants."""
+    codes = "\n".join(f"  {code:<4} {meaning}" for code, meaning in CLI_EXIT_CODE_HELP)
+    env = "\n".join(f"  {name:<34} {meaning}" for name, meaning in CLI_ENV_HELP)
+    return (f"exit codes:\n{codes}\n\n"
+            f"environment (all optional):\n{env}\n\n"
+            "Data is written to stdout; messages, errors and progress to stderr.\n"
+            "The written drive is always read back and compared with the ISO.")
+
+
 def build_cli_parser():
     common = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     common.add_argument("--debug", action="store_true", default=argparse.SUPPRESS,
                         help="show Python tracebacks for unexpected errors")
     parser = argparse.ArgumentParser(
         prog=CLI_PROG, allow_abbrev=False,
-        description="Create bootable USB drives from Windows 11, hybrid Linux ISOs or ChromeOS Flex. "
-                    "Run without arguments to open the graphical interface.",
-        epilog=(
-            "exit codes:\n"
-            "  0    success\n"
-            "  1    error\n"
-            "  2    usage error (also: confirmation missing, ISO kind unknown)\n"
-            "  3    verification failed / checksum mismatch\n"
-            "  4    written and verified, but the drive could not be ejected\n"
-            "  130  interrupted (Ctrl-C)\n\n"
-            "environment:\n"
-            "  NO_COLOR                       disable colored messages\n"
-            "  WIN11USB_DISABLE_AUDIT_LOG=1   do not write the audit log\n\n"
-            "Data is written to stdout; messages, errors and progress to stderr.\n"
-            "The written drive is always read back and compared with the ISO."),
+        description=f"{APP_TAGLINE}.\nRun without arguments to open the graphical interface.",
+        epilog=cli_epilog(),
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--version", action="version", version=f"{CLI_PROG} {__version__}")
     parser.add_argument("--debug", action="store_true", help="show Python tracebacks for unexpected errors")

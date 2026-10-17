@@ -65,7 +65,7 @@ jobs:
         # Roda ANTES do guarda de propósito: confirma que o guarda realmente
         # detecta regressões. Um verificador que aprova tudo é pior que nenhum.
         # Ele quebra o código de propósito numa cópia temporária e confere que
-        # o guarda reclama de cada uma das regressões simuladas (13 na versão 1.1.0).
+        # o guarda reclama de cada uma das regressões simuladas.
         run: python output/auditoria/teste_do_guarda.py
 
       - name: Guarda de segurança (proteções da auditoria)

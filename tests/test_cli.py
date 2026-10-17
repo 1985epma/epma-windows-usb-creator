@@ -38,14 +38,29 @@ class CliTestCase(TempDirTestCase):
 class VersionAndHelpTests(CliTestCase):
     def test_version(self):
         code, out, err = run_main(["--version"])
-        self.assertEqual((code, out, err), (0, "epma-usb-creator 1.1.0\n", ""))
-        self.assertEqual(app.__version__, "1.1.0")
+        # The version itself is pinned in tests/test_docs_consistency.py (one place to touch on a bump).
+        self.assertEqual((code, out, err), (0, f"epma-usb-creator {app.__version__}\n", ""))
 
     def test_help_documents_commands_and_exit_codes(self):
         code, out, _err = run_main(["--help"])
         self.assertEqual(code, 0)
         for word in ("list", "detect", "sha256", "write", "gui", "exit codes", "130", "NO_COLOR"):
             self.assertIn(word, out)
+
+    def test_help_lists_every_exit_code_and_environment_variable(self):
+        # --help is generated from CLI_EXIT_CODE_HELP / CLI_ENV_HELP; this fails when a new
+        # EXIT_* or ENV_* constant is added to the program but not to those lists.
+        _code, out, _err = run_main(["--help"])
+        for name in sorted(n for n in dir(app) if n.startswith("EXIT_")):
+            with self.subTest(constant=name):
+                self.assertRegex(out, r"(?m)^  " + str(getattr(app, name)) + r" ")
+        for name in sorted(n for n in dir(app) if n.startswith("ENV_")):
+            value = getattr(app, name)
+            if not isinstance(value, str):
+                continue
+            with self.subTest(constant=name):
+                self.assertRegex(out, r"(?m)^  " + value + r" ")
+        self.assertRegex(out, r"(?m)^  NO_COLOR ")
 
     def test_write_help_documents_flags(self):
         code, out, _err = run_main(["write", "--help"])
@@ -789,7 +804,7 @@ class ModuleEntryPointTests(unittest.TestCase):
             [os.sys.executable, "win11_usb_creator.py", "--version"], cwd=root, capture_output=True,
             text=True, timeout=60, check=False, env=dict(os.environ, WIN11USB_DISABLE_AUDIT_LOG="1"))
         self.assertEqual(proc.returncode, 0)
-        self.assertEqual(proc.stdout, "epma-usb-creator 1.1.0\n")
+        self.assertEqual(proc.stdout, f"epma-usb-creator {app.__version__}\n")
 
 
 if __name__ == "__main__":
