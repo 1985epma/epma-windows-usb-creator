@@ -322,6 +322,8 @@ USAGE_CALL_NAMES = {"_", "tr", "progress", "report", "_report_error", "after"}
 
 def used_translation_keys():
     used = set(DYNAMICALLY_TRANSLATED)
+    # The GUI passes every line of describe_hardening_windows() to _() as a variable.
+    used.update(app.describe_hardening_windows(app.HARDENING_BASELINE))
     for node in ast.walk(TREE):
         if not isinstance(node, ast.Call):
             continue

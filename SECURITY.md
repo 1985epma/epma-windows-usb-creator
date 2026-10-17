@@ -169,8 +169,8 @@ as high risk.
 ### 13. Hardening files and the seed drive
 
 The optional *Hardened (recommended settings)* setup adds files that make a fresh installation start from
-safer settings: for Windows 11 an `autounattend.xml` and a post-setup script on the same installer USB
-drive (`write --hardened`), and for Linux a **separate** small "seed" USB drive (`harden-seed`) that holds a
+safer settings: for Windows 11 a post-setup script (`SetupComplete.cmd` plus a PowerShell script, no answer file) on the same
+installer USB drive (`write --hardened`), and for Linux a **separate** small "seed" USB drive (`harden-seed`) that holds a
 cloud-init (Ubuntu), kickstart (Fedora / RHEL) or preseed and script (Debian) file set. `harden-files`
 writes the same files into a folder, without a drive.
 
