@@ -13,6 +13,9 @@ import tempfile
 import unittest
 
 os.environ["WIN11USB_DISABLE_AUDIT_LOG"] = "1"
+# The GUI language is decided when the module is imported: force English so the tests do not
+# depend on the machine's locale (test_i18n.py exercises Portuguese by patching ACTIVE_LANGUAGE).
+os.environ["EPMA_LANG"] = "en"
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 if ROOT not in sys.path:
