@@ -357,6 +357,14 @@ PT_BR = {
     "Missing: {tools}": "Faltando: {tools}",
     "Install missing dependencies": "Instalar as dependências que faltam",
     "Refresh USB drives list": "Atualizar a lista de pendrives",
+    "USB drive": "Pendrive USB",
+    "USB": "USB",
+    "No USB drive found": "Nenhum pendrive USB encontrado",
+    "Plug in a USB drive (8 GB or more) and it will appear here.": "Conecte um pendrive USB (de 8 GB ou mais) e ele aparecerá aqui.",
+    "contents unknown": "conteúdo desconhecido",
+    "no volumes": "sem volumes",
+    "1 volume ({names})": "1 volume ({names})",
+    "{count} volumes ({names})": "{count} volumes ({names})",
     "Could not list disks: {error}": "Não foi possível listar os discos: {error}",
     "Create Bootable USB Drive": "Criar o pendrive bootável",
 
@@ -3425,7 +3433,7 @@ def help_sections():
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
 ## The drive list
-• Each entry shows the device, its model, size and volumes, for example "/dev/disk4 — SanDisk Ultra — 58.6 GB — 2 volumes ('Untitled', 'EFI')". The list is read when the program starts and whenever you return to the window; click "Refresh USB drives list" if a drive you just plugged in is missing. While "Create Bootable USB Drive" is disabled, a line under it says what is missing.
+• Each drive is a row with a USB badge, its model, size, device and volumes, for example "SanDisk Ultra — 58.6 GB — /dev/disk4 · 2 volumes (Untitled, EFI)". The chosen row is highlighted; click a row, or use the Up and Down arrow keys, to choose another. While the drives are being read, two grey rows stand in; when there are none, the list says "No USB drive found". The list is read when the program starts and whenever you return to the window; click "Refresh USB drives list" if a drive you just plugged in is missing. While "Create Bootable USB Drive" is disabled, a line under it says what is missing.
 
 ## The confirmation
 • The dialog shows model, size and every volume with its used space, so you can recognise the drive.
@@ -3827,6 +3835,273 @@ class _Disclosure(_LabelBase):
         self.set_open(not self.is_open)
 
 
+def drive_row_texts(disk):
+    """The three texts of one row of the drive list: (name, size, detail).
+
+    The name is the model (or the device path when the model is unknown), the size is human readable
+    and the detail is the device path plus a summary of the volumes on the drive. A record without
+    "model", "size" or "volumes" (an older one) still gives sensible text.
+    """
+    dev = "/dev/" + str(disk.get("id", ""))
+    model = str(disk.get("model") or "").strip()
+    size = human_size(disk["size"]) if isinstance(disk.get("size"), (int, float)) else ""
+    volumes = disk.get("volumes")
+    if "volumes" not in disk:
+        summary = ""
+    elif volumes is None:
+        summary = _("contents unknown")
+    elif not volumes:
+        summary = _("no volumes")
+    else:
+        names = [str(v.get("name") or v.get("filesystem") or _("(unnamed)")) for v in volumes[:3]]
+        if len(volumes) > 3:
+            names.append("…")
+        template = _("1 volume ({names})") if len(volumes) == 1 else _("{count} volumes ({names})")
+        summary = template.format(count=len(volumes), names=", ".join(names))
+    detail = " · ".join(part for part in ((dev if model else ""), summary) if part)
+    return (model or dev), size, detail
+
+
+class _DriveRow(_CanvasBase):
+    """One row of the drive list: a radio-like marker, the name, a `USB` badge, the size and the volumes.
+    With `item=None` it is a grey placeholder ("skeleton") shown while the drives are being listed.
+    Drawn on a canvas (like OptionCard) so it follows the light/dark theme."""
+
+    HEIGHT = 58
+    _rounded = OptionCard._rounded
+
+    def __init__(self, parent, owner):
+        super().__init__(parent, width=200, height=self.HEIGHT, bg=owner.bg, highlightthickness=0, takefocus=False)
+        self.owner, self.item = owner, None
+        self.selected = False
+        self._hover = False
+        self.bind("<Button-1>", lambda _e: self.owner._row_pressed(self))
+        self.bind("<Return>", lambda _e: self.owner._row_pressed(self))
+        self.bind("<space>", lambda _e: self.owner._row_pressed(self))
+        self.bind("<Up>", lambda _e: self.owner._row_arrow(self, -1))
+        self.bind("<Down>", lambda _e: self.owner._row_arrow(self, 1))
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<FocusIn>", lambda _e: self.draw())
+        self.bind("<FocusOut>", lambda _e: self.draw())
+        self.bind("<Configure>", lambda _e: self.draw())
+        self.refresh()
+
+    def refresh(self):
+        """Apply what the owner says about the state (enabled or not) and redraw."""
+        usable = self.item is not None and self.owner._enabled
+        self.configure(cursor="hand2" if usable else "arrow", takefocus=usable and self.selected)
+        self.draw()
+
+    def _set_hover(self, value):
+        self._hover = value and self.item is not None and self.owner._enabled
+        self.draw()
+
+    def _focused(self):
+        try:
+            return self.focus_get() is self
+        except (KeyError, tk.TclError):
+            return False
+
+    @staticmethod
+    def _fit(text, font, room):
+        """`text` cut with an ellipsis so it is at most `room` pixels wide."""
+        if font.measure(text) <= room:
+            return text
+        while text and font.measure(text + "…") > room:
+            text = text[:-1]
+        return text.rstrip() + "…"
+
+    def draw(self):
+        owner = self.owner
+        focused = self._focused()  # before anything is erased
+        self.delete("all")
+        w = max(self.winfo_width(), 240) if self.winfo_width() > 1 else 560
+        h = self.HEIGHT
+        cy = h / 2
+        if self.item is None:  # skeleton: no text, no animation
+            base = "#2c2c2e" if owner.dark else "#e9e9ee"
+            bar = "#3a3a3c" if owner.dark else "#d1d1d6"
+            self._rounded(3, 3, w - 3, h - 3, 10, fill=base, outline=base)
+            self.create_oval(16, cy - 8, 32, cy + 8, fill=bar, outline=bar)
+            self.create_rectangle(44, cy - 14, 44 + w * 0.34, cy - 4, fill=bar, outline=bar)
+            self.create_rectangle(44, cy + 5, 44 + w * 0.2, cy + 13, fill=bar, outline=bar)
+            return
+        enabled = owner._enabled
+        muted = "#8e8e93"
+        text_color = owner.fg if enabled else muted
+        color = "#6e6e73" if enabled else muted
+        width = 1
+        fill = ""
+        if self.selected:
+            color, width = owner.ACCENT, 2
+            fill = "#10263d" if owner.dark else "#e6f1ff"
+        elif enabled and (self._hover or focused):
+            color, width = "#a0a0a8", 2
+        self._rounded(3, 3, w - 3, h - 3, 10, outline=color, fill=fill, width=width)
+        if focused and enabled:  # keyboard focus ring, also on the selected row
+            self._rounded(1, 1, w - 1, h - 1, 12, outline="#ffffff" if owner.dark else "#003d99", fill="", width=1)
+        marker = owner.ACCENT if self.selected else muted
+        self.create_oval(16, cy - 8, 32, cy + 8, outline=marker, width=2)
+        if self.selected:
+            self.create_oval(20, cy - 4, 28, cy + 4, fill=marker, outline=marker)
+        name, size, detail = drive_row_texts(self.item)
+        right = w - 16
+        if size:
+            self.create_text(right, 21, text=size, anchor="e", fill=text_color, font=owner.name_font)
+            right -= owner.name_font.measure(size) + 12
+        accented = self.selected and enabled
+        badge = _("USB")
+        badge_w = owner.badge_font.measure(badge) + 14
+        badge_fill = owner.ACCENT if accented else ("#3a3a3c" if owner.dark else "#e5e5ea")
+        self._rounded(right - badge_w, 12, right, 30, 8, fill=badge_fill, outline=badge_fill)
+        self.create_text(right - badge_w / 2, 21, text=badge, fill="#ffffff" if accented else text_color,
+                         font=owner.badge_font)
+        self.create_text(44, 21, text=self._fit(name, owner.name_font, right - badge_w - 54), anchor="w",
+                         fill=text_color, font=owner.name_font)
+        if detail:
+            self.create_text(44, 41, text=self._fit(detail, owner.detail_font, w - 44 - 16), anchor="w",
+                             fill=muted, font=owner.detail_font)
+
+
+_FrameBase = ttk.Frame if ttk else object
+
+
+class DriveList(_FrameBase):
+    """The list of USB drives: one selectable row per drive, a placeholder while the drives are being
+    listed and a short message when there are none. Replaces a drop-down so the drives are visible at once.
+
+    Model API: `set_items(items)` (drive records with an "id"; the selection stays on the drive with the
+    same id, otherwise it moves to the first one), `selected_index()` (-1 for none), `selected_item()`,
+    `select(index)`, `set_enabled(flag)` (a disabled list greys out and ignores the mouse and the keyboard)
+    and `set_loading(flag)` (two grey placeholder rows while no drive is shown). `view_state()` says what
+    is on screen: "items", "loading" or "empty". `on_select()` runs when the USER (or `select`) changes the
+    selection, never for `set_items`.
+    Keyboard: Tab reaches the selected row; Up/Down move the selection; Space/Return choose the focused row.
+    """
+
+    ACCENT = "#0a84ff"
+    SKELETON_ROWS = 2
+
+    def __init__(self, parent, on_select=None):
+        super().__init__(parent)
+        style = ttk.Style(parent)
+        self.bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        self.fg = style.lookup("TLabel", "foreground") or "#000000"
+        r, g, b = self.winfo_rgb(self.bg)
+        self.dark = (r + g + b) / 3 < 32768  # follows the light/dark theme through the window background
+        base = tkfont.nametofont("TkDefaultFont")
+        family, size = base.actual("family"), base.actual("size")
+        self.name_font = tkfont.Font(family=family, size=size, weight="bold")
+        self.detail_font = tkfont.Font(family=family, size=max(size - 1, 8))
+        self.badge_font = tkfont.Font(family=family, size=max(size - 3, 7), weight="bold")
+        self._on_select = on_select
+        self._items = []
+        self._selected = -1
+        self._enabled = True
+        self._loading = False
+        self._loaded = False
+        self.rows = []       # one _DriveRow per item
+        self.skeleton = [_DriveRow(self, self) for _i in range(self.SKELETON_ROWS)]
+        self.empty = ttk.Frame(self)
+        ttk.Label(self.empty, text=_("No USB drive found"), font=self.name_font).pack(pady=(8, 0))
+        ttk.Label(self.empty, text=_("Plug in a USB drive (8 GB or more) and it will appear here."),
+                  foreground="#8e8e93").pack(pady=(2, 8))
+        self._show()
+
+    # ----- model -----
+    def set_items(self, items):
+        previous = self.selected_item()
+        self._items = list(items)
+        self._loaded = True
+        if self._items:
+            keep = next((i for i, d in enumerate(self._items)
+                         if previous is not None and d.get("id") == previous.get("id")), 0)
+        else:
+            keep = -1
+        self._selected = keep
+        while len(self.rows) > len(self._items):
+            self.rows.pop().destroy()
+        while len(self.rows) < len(self._items):
+            self.rows.append(_DriveRow(self, self))
+        for i, (row, item) in enumerate(zip(self.rows, self._items, strict=True)):
+            row.item, row.selected = item, i == self._selected
+            row.refresh()
+        self._show()
+
+    def items(self):
+        return list(self._items)
+
+    def selected_index(self):
+        return self._selected
+
+    def selected_item(self):
+        return self._items[self._selected] if 0 <= self._selected < len(self._items) else None
+
+    def select(self, index):
+        """Select row `index` (-1 clears the selection); calls `on_select` when the selection changed."""
+        index = index if 0 <= index < len(self._items) else -1
+        if index == self._selected:
+            return
+        self._selected = index
+        for i, row in enumerate(self.rows):
+            row.selected = i == index
+            row.refresh()
+        if self._on_select:
+            self._on_select()
+
+    def set_enabled(self, enabled):
+        self._enabled = bool(enabled)
+        for row in self.rows + self.skeleton:
+            row._hover = row._hover and self._enabled
+            row.refresh()
+
+    def is_enabled(self):
+        return self._enabled
+
+    def set_loading(self, loading):
+        loading = bool(loading)
+        if loading != self._loading:
+            self._loading = loading
+            self._show()
+
+    def is_loading(self):
+        return self._loading
+
+    def view_state(self):
+        """What the list shows: "items", "loading" (placeholder rows) or "empty" (the no-drive message)."""
+        if self._items:
+            return "items"
+        return "loading" if (self._loading or not self._loaded) else "empty"
+
+    # ----- layout -----
+    def _show(self):
+        state = self.view_state()
+        wanted = self.rows if state == "items" else (self.skeleton if state == "loading" else [self.empty])
+        for widget in self.rows + self.skeleton + [self.empty]:
+            if widget not in wanted and widget.winfo_manager():
+                widget.pack_forget()
+        for widget in wanted:
+            if not widget.winfo_manager():
+                widget.pack(fill="x", pady=2)
+
+    # ----- input from the rows -----
+    def _row_pressed(self, row):
+        if not self._enabled or row.item is None:
+            return
+        row.focus_set()
+        self.select(self.rows.index(row))
+
+    def _row_arrow(self, row, step):
+        if not self._enabled or row.item is None:
+            return None
+        target = self.rows.index(row) + step
+        if 0 <= target < len(self.rows):
+            self.select(target)
+            self.rows[target].focus_set()
+        return "break"
+
+
 def _pack_bar(bar, *followers, pady=(8, 2)):
     """Show a progress bar that was hidden with pack_forget(), just above the first of `followers`
     that is on screen (so it keeps its place in the page)."""
@@ -4052,11 +4327,11 @@ class App(_TkBase):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
         row = ttk.Frame(page)
         row.pack(fill="x")
-        self.refresh_btn = ttk.Button(row, text=_("Refresh USB drives list"), command=self.refresh_disks)
-        self.refresh_btn.pack(side="left")
-        self.disk_combo = ttk.Combobox(row, state="readonly")
-        self.disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.disk_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_create_button_state())
+        ttk.Label(row, text=_("USB drive")).pack(side="left")
+        self.refresh_btn = ttk.Button(row, text="⟳ " + _("Refresh USB drives list"), command=self.refresh_disks)
+        self.refresh_btn.pack(side="right")
+        self.disk_list = DriveList(page, on_select=self.update_create_button_state)
+        self.disk_list.pack(fill="x", pady=(4, 0))
 
     def _build_image(self, page):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
@@ -4676,6 +4951,7 @@ class App(_TkBase):
             self._disk_pending = quiet if self._disk_pending is None else (self._disk_pending and quiet)
             return
         self._disk_listing = True
+        self.disk_list.set_loading(True)
         self._disk_job += 1
         job = self._disk_job
 
@@ -4699,6 +4975,7 @@ class App(_TkBase):
     def _listing_finished(self, job, disks, error, quiet):
         """The listing worker delivered its result on the Tk thread; then serve the request made meanwhile."""
         self._disk_listing = False
+        self.disk_list.set_loading(False)
         try:
             if error is not None:
                 self._on_disks_error(job, error, quiet)
@@ -4712,6 +4989,8 @@ class App(_TkBase):
     def _on_disks_error(self, job, error, quiet):
         if job != self._disk_job or self._closing:
             return  # an older listing, or the window is closing
+        if self.disk_list.view_state() == "loading":
+            self.disk_list.set_items(self.disks)  # the listing failed: stop showing the placeholder rows
         if quiet:
             self.log(_("Could not list disks: {error}").format(error=error))
         else:
@@ -4720,17 +4999,11 @@ class App(_TkBase):
     def _on_disks(self, job, disks):
         if job != self._disk_job or self._closing or self._creating:
             return  # an older listing, or the write is running: _creation_ended lists again
-        previous = self.selected_disk()
         self.disks = disks
         self._last_disk_refresh = time.monotonic()
-        labels = [d["label"] for d in self.disks]
-        self.disk_combo["values"] = labels
-        if labels:
-            keep = next((i for i, d in enumerate(self.disks) if previous and d["id"] == previous["id"]), 0)
-            self.disk_combo.current(keep)
-        else:
-            self.disk_combo.set("")
+        self.disk_list.set_items(self.disks)  # keeps the selection on the same drive (by id), else the first
         self.update_create_button_state()
+        self.after_idle(self._fit_window)  # the list is taller or shorter with more or fewer drives
 
     def _auto_refresh_disks(self, _event=None):
         """Look for newly plugged drives when the program starts and whenever its window gets
@@ -4742,7 +5015,7 @@ class App(_TkBase):
         self.refresh_disks(quiet=True)
 
     def selected_disk(self):
-        idx = self.disk_combo.current()
+        idx = self.disk_list.selected_index()
         if idx < 0 or idx >= len(self.disks):
             return None
         return self.disks[idx]
@@ -4758,7 +5031,7 @@ class App(_TkBase):
         busy = "disabled"
         for card in self.cards.values():
             card.set_enabled(not creating)
-        self.disk_combo.config(state="disabled" if creating else "readonly")
+        self.disk_list.set_enabled(not creating)
         self.refresh_btn.config(state=busy if creating else "normal")
         self.windows_dl.sync(self._download_running, creating)
         self.flex_dl.sync(self._flex_busy, creating)

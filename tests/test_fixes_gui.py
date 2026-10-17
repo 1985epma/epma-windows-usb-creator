@@ -284,7 +284,7 @@ class WriteLockTests(GuiTestCase):
         self.assertEqual(self.state(self.win.create_btn), "disabled")
         self.win.refresh_disks(sync=True)
         self.assertEqual(self.state(self.win.create_btn), "disabled")
-        self.win.disk_combo.event_generate("<<ComboboxSelected>>")
+        self.win.disk_list._row_pressed(self.win.disk_list.rows[0])  # a click on the locked list does nothing
         self.win.update_idletasks()
         self.assertEqual(self.state(self.win.create_btn), "disabled")
 
@@ -292,7 +292,7 @@ class WriteLockTests(GuiTestCase):
         self.with_disk()
         self.win._creating = True
         self.win._sync_controls()
-        self.assertEqual(self.state(self.win.disk_combo), "disabled")
+        self.assertFalse(self.win.disk_list.is_enabled())
         for widget in (self.win.refresh_btn, self.win.pick_btn, self.win.download_btn,
                        self.win.flex_download_btn, self.win.install_deps_btn):
             self.assertEqual(self.state(widget), "disabled")
@@ -306,7 +306,7 @@ class WriteLockTests(GuiTestCase):
 
         self.win._creation_ended()
         self.pump(lambda: not self.win._disk_listing)
-        self.assertEqual(self.state(self.win.disk_combo), "readonly")
+        self.assertTrue(self.win.disk_list.is_enabled())
         for widget in (self.win.refresh_btn, self.win.pick_btn, self.win.download_btn, self.win.flex_download_btn):
             self.assertEqual(self.state(widget), "normal")
         self.assertTrue(all(c._enabled for c in self.win.cards.values()))
@@ -329,7 +329,7 @@ class WriteLockTests(GuiTestCase):
             self.win.start_create_usb()
         self.assertFalse(self.win._creating)
         self.assertEqual(self.state(self.win.create_btn), "normal")
-        self.assertEqual(self.state(self.win.disk_combo), "readonly")
+        self.assertTrue(self.win.disk_list.is_enabled())
 
     def test_an_exception_while_starting_unlocks_again(self):
         self.with_disk()
@@ -542,7 +542,7 @@ class DriveListingTests(GuiTestCase):
     def test_selected_drive_survives_a_refresh(self):
         self.listed = [dict(USB_DISK, id="disk7", label="/dev/disk7"), USB_DISK]
         self.win.refresh_disks(sync=True)
-        self.win.disk_combo.current(1)
+        self.win.disk_list.select(1)
         self.win.refresh_disks(sync=True)
         self.assertEqual(self.win.selected_disk()["id"], "disk9")
 

@@ -41,7 +41,7 @@ import win11_usb_creator as app  # noqa: E402
 WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn",
     "progress", "progress_label", "iso_label",
-    "dep_label", "install_deps_btn", "disk_combo",
+    "dep_label", "install_deps_btn", "disk_list",
     "flex_download_btn", "flex_progress", "flex_progress_label",
     "card_var", "cards", "panels", "mode_var",
     "create_btn", "cancel_create_btn", "create_hint", "create_progress", "create_progress_label", "log_text",
@@ -277,7 +277,7 @@ try:
             janela._sync_controls()
             janela.update_create_button_state()
             assert str(janela.create_btn.cget("state")) == "disabled", "o botão Criar reabilitou durante a gravação"
-            assert str(janela.disk_combo.cget("state")) == "disabled"
+            assert not janela.disk_list.is_enabled()
             assert str(janela.refresh_btn.cget("state")) == "disabled" and str(janela.pick_btn.cget("state")) == "disabled"
             janela._last_disk_refresh = 0.0
             discos.clear()
@@ -287,7 +287,7 @@ try:
             janela._creation_ended()                 # ao terminar, lê a lista de novo
             esperar_lista()
             assert janela.selected_disk() is None and not janela._creating
-            assert str(janela.disk_combo.cget("state")) == "readonly" and str(janela.pick_btn.cget("state")) == "normal"
+            assert janela.disk_list.is_enabled() and str(janela.pick_btn.cget("state")) == "normal"
         finally:
             app.get_external_disks = original
             app.get_missing_dependencies = original_deps
