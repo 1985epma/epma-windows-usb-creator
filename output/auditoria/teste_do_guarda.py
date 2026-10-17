@@ -119,6 +119,36 @@ CENARIOS = [
         lambda s: s.replace("hashlib.sha256()", "hashlib.md5()"),
         "G13",
     ),
+    (
+        "Colar o caminho da pasta dentro do script que copia os arquivos de hardening",
+        lambda s: s.replace(
+            "'STAGE=\"$1\"; MNT=\"$2\"; STOP=\"$3\"\\n'",
+            "f'STAGE=\"{iso_path}\"; MNT=\"$2\"; STOP=\"$3\"\\n'",
+        ),
+        "G14",
+    ),
+    (
+        "Fazer a cópia dos arquivos de hardening seguir links simbólicos",
+        lambda s: s.replace("'cp -RP -- \"$STAGE\"/. \"$MNT\"/\\n'", "'cp -RL -- \"$STAGE\"/. \"$MNT\"/\\n'"),
+        "G14",
+    ),
+    (
+        "Deixar de recusar links simbólicos na pasta de hardening",
+        lambda s: s.replace('find "$STAGE" -type l', 'find "$STAGE" -type f'),
+        "G14",
+    ),
+    (
+        "Ignorar o arquivo de cancelamento na cópia dos arquivos de hardening",
+        lambda s: s.replace(
+            "'if [ -e \"$STOP\" ]; then echo \"HARDENING_CANCELED\"; exit 0; fi\\n'\n", ""),
+        "G14",
+    ),
+    (
+        "Tirar o 'set -eu' só do script de cópia dos arquivos de hardening",
+        lambda s: s.replace(
+            "HARDENING_COPY_SCRIPT = (\n    'set -eu\\n'", "HARDENING_COPY_SCRIPT = (\n    '# sem set -eu\\n'"),
+        "G14",
+    ),
 ]
 
 print("Autoteste do guarda de segurança")
