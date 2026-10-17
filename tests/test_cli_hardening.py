@@ -51,6 +51,8 @@ class HardeningCliCase(TempDirTestCase):
                                             side_effect=lambda target, profile: (
                                                 SEED_FILES[target][0], dict(SEED_FILES[target][1]))),
             "validate": mock.patch.object(app, "validate_seed_files", create=True, side_effect=fake_validate),
+            # added by the engine part of the feature (ValueError for a known size under 64 MiB)
+            "size_check": mock.patch.object(app, "check_seed_target_size", create=True),
             "pin": mock.patch.object(app, "pin_target_identity"),
             "env": mock.patch.dict(os.environ, {"NO_COLOR": "1"}),
         }.items():
@@ -667,6 +669,73 @@ class HardenFilesTests(HardeningCliCase):
             code, _stdout, _err = run_main(["harden-files", "--target", "windows", "--out", "~/from-home"])
         self.assertEqual(code, 0)
         self.assertTrue(os.path.isfile(self.path("from-home", "autounattend.xml")))
+
+
+class SeedSizeAndConflictTests(HardeningCliCase):
+    """A too-small seed drive is refused first; the engine's refusal for an ISO that already has the files exits 2."""
+
+    TOO_SMALL = "The drive (16.0 MB) is too small for a seed drive (at least 64.0 MB). Nothing was changed."
+
+    def test_the_size_is_checked_with_the_size_of_the_listed_drive(self):
+        code, _out, _err = run_main(self.seed_args("--dry-run"))
+        self.assertEqual(code, 0)
+        self.size_check.assert_called_once_with(self.disks[0]["size"])
+
+    def test_a_dry_run_flags_a_too_small_drive(self):
+        self.size_check.side_effect = ValueError(self.TOO_SMALL)
+        code, out, err = run_main(self.seed_args("--dry-run"))
+        self.assertEqual(code, app.EXIT_USAGE)
+        self.assertEqual(out, "")                          # no plan was printed
+        self.assertIn("too small for a seed drive", err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("Dry run: nothing was changed", err)
+        self.build_seed_usb.assert_not_called()
+
+    def test_the_refusal_comes_before_any_confirmation_or_password(self):
+        self.size_check.side_effect = ValueError(self.TOO_SMALL)
+        self.interactive()
+        with mock.patch("sys.stdin") as stdin:
+            code, out, err = run_main(self.seed_args())
+        self.assertEqual(code, app.EXIT_USAGE)
+        stdin.readline.assert_not_called()                 # the typed identifier was never asked for
+        self.assertNotIn("PERMANENTLY ERASE", err)
+        self.authenticate.assert_not_called()
+        self.pin.assert_not_called()
+        self.build_seed_usb.assert_not_called()
+
+    def test_the_refusal_is_a_json_error_too(self):
+        self.size_check.side_effect = ValueError(self.TOO_SMALL)
+        code, out, _err = run_main(self.seed_args("--json", "--yes"))
+        self.assertEqual(code, app.EXIT_USAGE)
+        result = json.loads(out)
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["exit_code"], 2)
+        self.assertIn("too small", result["error"])
+
+    def test_an_iso_that_already_holds_the_hardening_files_exits_2_with_the_message(self):
+        iso = self.make_iso("Win11.iso", hybrid=False)
+        text = "This ISO already contains the hardening files (autounattend.xml). Nothing was changed."
+        self.build_usb.side_effect = ValueError(text)
+        code, out, err = run_main(self.write_args(iso, "--yes", "--hardened", "--mode", "windows", "--json"))
+        self.assertEqual(code, app.EXIT_USAGE)
+        self.assertEqual(json.loads(out)["exit_code"], 2)
+        self.assertIn("already contains the hardening files", err)
+        self.assertNotIn("Traceback", err)
+        self.assertNotIn("Unexpected failure", err)
+        self.pin.assert_called_with("disk9", None)
+
+    def test_other_engine_value_errors_keep_exit_1(self):
+        iso = self.make_iso("Win11.iso", hybrid=False)
+        self.build_usb.side_effect = ValueError("bad value")
+        code, _out, _err = run_main(self.write_args(iso, "--yes", "--hardened", "--mode", "windows"))
+        self.assertEqual(code, 1)
+
+
+class EpilogTests(unittest.TestCase):
+    def test_the_read_back_claim_is_true_for_every_write_command(self):
+        text = app.cli_epilog()
+        self.assertIn("compared with its source", text)
+        self.assertNotIn("compared with the ISO", text)
 
 
 class HelpAndDocsTests(unittest.TestCase):

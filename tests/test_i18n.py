@@ -192,7 +192,8 @@ class SourceCoverageTests(unittest.TestCase):
     def test_only_known_variables_are_translated_dynamically(self):
         # _(variable) is invisible to the check above, so each such use is listed here:
         # `text` in _on_create_progress (engine stage names, covered by the next test),
-        # `title` in _report_error (literals checked below), and `_text_for`'s own return.
+        # `title` in _report_error (literals checked below), the lines of describe_hardening_windows() in
+        # _hardening_details_text (`text`; the engine owns those lines and their PT_BR entries), and `_text_for`'s own return.
         allowed = {"text", "title"}
         dynamic = []
         for call in self.translate_calls():
