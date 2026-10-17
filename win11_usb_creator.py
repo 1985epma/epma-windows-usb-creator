@@ -3696,7 +3696,7 @@ setup_work() {
   WORK="$(mktemp -d "$base/epma-harden.XXXXXX")"
 }
 
-# shellcheck disable=SC2329  # called through "trap cleanup EXIT" in main
+# shellcheck disable=SC2317,SC2329  # called through "trap cleanup EXIT" in main
 cleanup() {
   if [ -n "$WORK" ] && [ -d "$WORK" ]; then
     rm -rf -- "${WORK:?}"
@@ -10103,9 +10103,9 @@ def _fill_staging_folder(stage, files):
     """Write `files` into the private staging folder `stage`.
 
     Nothing the user can see is touched here, so a failure leaves nothing behind (the caller removes
-    the staging folder). Folders end up 0755 and files 0644, whatever the umask.
+    the staging folder). Folders end up 0700 and files 0600 (private, like every file this program creates), whatever the umask.
     """
-    os.chmod(stage, 0o755)  # noqa: S103 - plain files to read, 0755/0644 on purpose
+    os.chmod(stage, 0o700)
     for rel, data in files.items():
         parts = rel.split("/")
         target = os.path.normpath(os.path.join(stage, *parts))
@@ -10114,15 +10114,15 @@ def _fill_staging_folder(stage, files):
             raise ValueError(f"Refusing a path outside the folder: {rel}")
         folder = os.path.dirname(target)
         if folder != stage and not os.path.isdir(folder):
-            os.makedirs(folder, mode=0o755)
+            os.makedirs(folder, mode=0o700)
             part = folder
             while part != stage:  # makedirs applies the umask to every level it creates
-                os.chmod(part, 0o755)  # noqa: S103 - plain files to read, 0755/0644 on purpose
+                os.chmod(part, 0o700)
                 part = os.path.dirname(part)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), PRIVATE_FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
-        os.chmod(target, 0o644)
+        os.chmod(target, PRIVATE_FILE_MODE)
 
 
 def _install_staged(stage, out, out_existed):

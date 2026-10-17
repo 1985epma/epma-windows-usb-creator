@@ -508,9 +508,9 @@ class HardenFilesTests(HardeningCliCase):
             os.umask(old)
         for rel, full in self.tree(out).items():
             mode = stat.S_IMODE(os.stat(full).st_mode)
-            expected = 0o755 if os.path.isdir(full) else 0o644
+            expected = 0o700 if os.path.isdir(full) else 0o600
             self.assertEqual(mode, expected, f"{rel} is {oct(mode)}")
-        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o700)
 
     def test_an_existing_empty_folder_is_filled_and_keeps_its_identity(self):
         out = self.out_dir()

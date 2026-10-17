@@ -975,6 +975,10 @@ class StepLayoutTests(GuiTestCase, TempDirTestCase):
     def test_the_window_grows_and_settles_back(self):
         win = self.win
         minimum = win.MIN_WINDOW_HEIGHT
+        # the height is capped to the screen: a small CI display would hide what is being tested here
+        patcher = mock.patch.object(win, "winfo_screenheight", return_value=4000)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         with mock.patch.object(win, "winfo_reqheight", return_value=minimum - 100):
             win._fit_window()                              # a small page: the usual height, not smaller
         self.assertEqual(win._window_size[1], minimum)
