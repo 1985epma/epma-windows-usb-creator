@@ -41,6 +41,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
 - **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
 - **Progress bar** with percentage, speed and time remaining for writing and verifying; a **Cancel** button for the whole operation.
+- **USB drives are found automatically** when the program starts and whenever you come back to its window, and a hint under the **Create** button says what is still missing (image file or drive) while it is disabled.
 - **Protection against erasing the wrong disk**: only USB drives are listed with their model and volumes, the system disk is never shown, risky drives (large, holding data, looking like a backup disk) require you to **type the disk identifier**, and a final confirmation is always required. Closing the window while a drive is being written asks first, and a Windows ISO larger than the drive is refused up front.
 - **SHA-256 check for an ISO you already have** (paste the expected value or a `SHA256SUMS` line).
 - **Resumable downloads** with automatic retries.
@@ -144,7 +145,7 @@ One window, from top to bottom: **four cards**, **the USB drive**, **the image f
    - **Google Chrome (ChromeOS Flex)** — click **"Download ChromeOS Flex from Google"**; the ZIP is downloaded (resumable), extracted and selected for you. Details below.
    - **Linux / Other ISO** — download the ISO from your distribution's website.
 3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** panel appears: paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
-4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex), click **"Refresh USB drives list"** and select it.
+4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex) and select it in the list. The list is read when the program starts and whenever you return to its window; click **"Refresh USB drives list"** if the drive does not show up. While **Create** is disabled, a hint under it says why.
 5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again.
 
 What each card does:
@@ -166,7 +167,7 @@ The interface is always in US English. A Brazilian Portuguese translation exists
 [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) is Google's free version of ChromeOS for PCs and Macs. This program does not offer regular ChromeOS because Google does not publish it for ordinary computers.
 
 1. Choose the **Google Chrome** card and click **"Download ChromeOS Flex from Google"**, then choose where to save the file. The ZIP is extracted automatically (and the ZIP the program downloaded is deleted). Already have `latest.bin.zip` or the `.bin` inside it? Use **"Select existing ISO file..."** — a ZIP is extracted for you.
-2. Plug in a USB drive of **16 GB or larger** (Google's requirement), click **"Refresh USB drives list"**, select the drive and click **"Create Bootable USB Drive"**.
+2. Plug in a USB drive of **16 GB or larger** (Google's requirement), select it in the list (click **"Refresh USB drives list"** if it is not there) and click **"Create Bootable USB Drive"**.
 3. Boot the target computer from the drive and follow [Google's guide](https://support.google.com/chromeosflex/answer/11541904).
 
 Google lists these requirements for the computer: Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage and USB boot; it only guarantees certified models ([requirements](https://support.google.com/chromeosflex/answer/11552529)). Google also notes that some USB drives may not work as installers. ChromeOS Flex is provided by Google under Google's own terms.
@@ -282,7 +283,7 @@ Install `sudo` or run the application as root.
 The device changed between selection and writing. Click *Refresh USB drives list* and select the drive again — this check exists precisely to prevent the wrong disk from being erased.
 
 **No drives appear in the list**
-Only drives attached over **USB** are listed (SD cards, internal disks and the system disk never are). Check that the drive is plugged in and click *Refresh*.
+Only drives attached over **USB** are listed (SD cards, internal disks and the system disk never are). Check that the drive is plugged in and click *Refresh USB drives list* (the list is also refreshed when you return to the window, but not while a write is running). The hint under the **Create** button says whether the list is empty or no drive is selected.
 
 **The drive does not show up in Finder after a Linux ISO write (macOS)**
 This is expected: macOS cannot read Linux images. If macOS says "the disk is not readable", click **Ignore**, never *Initialize*. The content was verified against the ISO before ejecting.

@@ -43,6 +43,7 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **ChromeOS Flex**: o cartão *Google Chrome* baixa a imagem oficial do Google (`dl.google.com`, HTTPS, com retomada), extrai do ZIP com segurança e a prepara para o pendrive. O ChromeOS comum não é distribuído para PCs em geral; por isso o Flex — o ChromeOS gratuito do Google para PCs e Macs — é a opção oficial.
 - **Gravação verificada**: depois de gravar, o pendrive é relido e comparado com a ISO (byte a byte nas imagens Linux; comparação de checksum e `wimlib-imagex verify` no Windows). Se algo for diferente, o pendrive **não** é ejetado e você é avisado para não usá-lo.
 - **Eject confiável** depois da verificação, com mensagem clara se o sistema recusar.
+- **Pendrives encontrados automaticamente** ao abrir o programa e sempre que você volta à janela; uma dica sob o botão **Criar** diz o que ainda falta (arquivo da imagem ou pendrive) enquanto ele está desativado.
 - **Barra de progresso** com porcentagem, velocidade e tempo restante na gravação e na verificação; botão **Cancel** para a operação inteira.
 - **Proteção contra apagar o disco errado**: só discos USB são listados, com modelo e volumes; o disco do sistema nunca aparece; discos de risco (grandes, com dados ou parecidos com disco de backup) exigem que você **digite o identificador**; e há sempre uma confirmação final. Fechar a janela durante a gravação pede confirmação antes, e uma ISO do Windows maior que o pendrive é recusada logo de início.
 - **Conferência SHA-256 de uma ISO que você já tem** (cole o valor esperado ou uma linha de `SHA256SUMS`).
@@ -147,7 +148,7 @@ Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arq
    - **Google Chrome (ChromeOS Flex)** — clique em **"Download ChromeOS Flex from Google"**; o ZIP é baixado (com retomada), extraído e selecionado para você. Detalhes abaixo.
    - **Linux / Other ISO** — baixe a ISO no site da sua distribuição.
 3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o painel **"Verify the selected ISO (SHA-256)"**: cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
-4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou maior** para o ChromeOS Flex), clique em **"Refresh USB drives list"** e selecione-o.
+4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex) e selecione-o na lista. A lista é lida ao abrir o programa e sempre que você volta à janela; clique em **"Refresh USB drives list"** se o pendrive não aparecer. Enquanto o **Create** está desativado, uma dica abaixo dele diz o motivo.
 5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo.
 
 O que cada cartão faz:
@@ -169,7 +170,7 @@ A interface é sempre em inglês americano. Existe uma tradução em português,
 O [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) é a versão gratuita do ChromeOS do Google para PCs e Macs. O programa não oferece o ChromeOS comum porque o Google não o publica para computadores em geral.
 
 1. Escolha o cartão **Google Chrome** e clique em **"Download ChromeOS Flex from Google"**; escolha onde salvar. O ZIP é extraído automaticamente (e o ZIP que o programa baixou é apagado). Já tem o `latest.bin.zip` ou o `.bin` de dentro dele? Use **"Select existing ISO file..."** — um ZIP é extraído para você.
-2. Conecte um pendrive de **16 GB ou maior** (exigência do Google), clique em **"Refresh USB drives list"**, selecione-o e clique em **"Create Bootable USB Drive"**.
+2. Conecte um pendrive de **16 GB ou maior** (exigência do Google), selecione-o na lista (clique em **"Refresh USB drives list"** se ele não estiver lá) e clique em **"Create Bootable USB Drive"**.
 3. Inicie o computador de destino pelo pendrive e siga o [guia do Google](https://support.google.com/chromeosflex/answer/11541904).
 
 O Google lista estes requisitos para o computador: processador Intel ou AMD de 64 bits, 4 GB de RAM, 16 GB de armazenamento interno e boot por USB; só garante modelos certificados ([requisitos](https://support.google.com/chromeosflex/answer/11552529)). O Google também avisa que alguns pendrives podem não funcionar como instaladores. O ChromeOS Flex é fornecido pelo Google sob os termos do próprio Google.
@@ -285,7 +286,7 @@ Instale o `sudo` ou execute a aplicação como root.
 O dispositivo mudou entre a seleção e a gravação. Clique em *Refresh USB drives list* e selecione o pendrive de novo — essa verificação existe justamente para impedir que o disco errado seja apagado.
 
 **Nenhum disco aparece na lista**
-Só aparecem discos ligados por **USB** (cartões SD, discos internos e o disco do sistema nunca aparecem). Confira se o pendrive está conectado e clique em *Refresh*.
+Só aparecem discos ligados por **USB** (cartões SD, discos internos e o disco do sistema nunca aparecem). Confira se o pendrive está conectado e clique em *Refresh USB drives list* (a lista também é atualizada quando você volta à janela, mas não durante uma gravação). A dica sob o botão **Create** diz se a lista está vazia ou se nenhum pendrive foi selecionado.
 
 **O pendrive não aparece no Finder depois de gravar uma ISO Linux (macOS)**
 É esperado: o macOS não lê imagens Linux. Se ele disser que "o disco não pôde ser lido", clique em **Ignorar**, nunca em *Inicializar*. O conteúdo foi verificado contra a ISO antes de ejetar.

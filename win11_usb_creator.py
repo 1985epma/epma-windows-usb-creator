@@ -466,6 +466,8 @@ PT_BR = {
     "The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. Nothing was changed.": "A imagem ({image}) é maior que este pendrive ({drive}). Escolha um pendrive maior. Nada foi alterado.",
     "Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. It may not work as an installer.\n\nContinue anyway?": "O Google pede um pendrive de 16 GB ou maior para o ChromeOS Flex, e este tem {size}. Ele pode não funcionar como instalador.\n\nContinuar mesmo assim?",
     "Downloading...": "Baixando...",
+    "Canceled during verification. The image was written but NOT verified; do not rely on this drive.": "Cancelado durante a verificação. A imagem foi gravada mas NÃO foi verificada; não confie neste pendrive.",
+    "The operation was canceled during verification.\n\nThe image was written to the drive but NOT verified, so do not rely on it. Create it again to verify it.": "A operação foi cancelada durante a verificação.\n\nA imagem foi gravada no pendrive mas NÃO foi verificada, então não confie nele. Crie-o de novo para verificá-lo.",
     "Choose the image file first (\"Select existing ISO file...\" or the download above).": "Escolha primeiro o arquivo da imagem (\"Select existing ISO file...\" ou o download acima).",
     "No USB drive found. Plug it in and click \"Refresh USB drives list\".": "Nenhum pendrive USB encontrado. Conecte-o e clique em \"Refresh USB drives list\".",
     "Select a USB drive in the list.": "Selecione um pendrive USB na lista.",
@@ -3240,7 +3242,7 @@ def help_sections():
 
 ## The window, from top to bottom
 • Four cards choose the type of image: Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO. The panel under the cards changes with the card and shows where to get that kind of image.
-• "Refresh USB drives list" and the list of USB drives.
+• The list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Select existing ISO file...": the image you already have, with an optional SHA-256 check.
 • "Create Bootable USB Drive" with its progress bar and Cancel button, and the log below.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
@@ -3337,7 +3339,7 @@ def help_sections():
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
 ## The drive list
-• Each entry shows the device, its model, size and volumes, for example "/dev/disk4 — SanDisk Ultra — 58.6 GB — 2 volumes ('Untitled', 'EFI')". Click "Refresh USB drives list" after plugging a drive in.
+• Each entry shows the device, its model, size and volumes, for example "/dev/disk4 — SanDisk Ultra — 58.6 GB — 2 volumes ('Untitled', 'EFI')". The list is read when the program starts and whenever you return to the window; click "Refresh USB drives list" if a drive you just plugged in is missing. While "Create Bootable USB Drive" is disabled, a line under it says what is missing.
 
 ## The confirmation
 • The dialog shows model, size and every volume with its used space, so you can recognise the drive.
@@ -4747,7 +4749,7 @@ class App(_TkBase):
                            _("Bootable USB drive created successfully!") + f"\n\n{note}")
             except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
-                log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True))
+                log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True), getattr(e, "written", False))
                 self._post(self._finish_create_progress, False, True)
                 self._post(self.log, log_text)
                 self._post(self._notify, "info", title, body)
@@ -4770,9 +4772,16 @@ class App(_TkBase):
         return True
 
     @staticmethod
-    def _canceled_texts(drive_touched):
+    def _canceled_texts(drive_touched, written=False):
         """(log line, dialog title, dialog text) after a cancel. The engine says whether it had already
-        started to change the drive; when it did not, the drive must not be called unusable."""
+        started to change the drive (when it did not, the drive must not be called unusable) and
+        whether the whole image had been written (canceled during the final check)."""
+        if drive_touched and written:
+            return (_("Canceled during verification. The image was written but NOT verified; do not rely "
+                      "on this drive."),
+                    _("Canceled"),
+                    _("The operation was canceled during verification.\n\nThe image was written to the "
+                      "drive but NOT verified, so do not rely on it. Create it again to verify it."))
         if drive_touched:
             return (_("Canceled. The drive was left unusable; create it again before use."),
                     _("Canceled"),

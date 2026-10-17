@@ -890,3 +890,19 @@ class ProgressTextTests(GuiTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CanceledAfterWriteTextsTests(unittest.TestCase):
+    """Canceled during the final check: the image is on the drive but was never verified."""
+
+    def test_written_but_not_verified(self):
+        log, title, body = app.App._canceled_texts(True, True)
+        self.assertIn("NOT verified", log)
+        self.assertIn("NOT verified", body)
+        self.assertNotIn("unusable", log + body)
+
+    def test_the_other_cases_keep_their_wording(self):
+        self.assertIn("unusable", " ".join(app.App._canceled_texts(True)))
+        self.assertIn("NOT modified", " ".join(app.App._canceled_texts(False)))
+        self.assertIn("NOT modified", " ".join(app.App._canceled_texts(False, True)))  # nothing was written
+

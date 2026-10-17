@@ -49,6 +49,8 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 - **ChromeOS Flex** (Google's free ChromeOS for PCs and Macs): the *Google Chrome* card downloads the official image from `dl.google.com` (HTTPS, resumable) and extracts it from the ZIP with a hardened routine. It is then written byte for byte to the USB drive, like a Linux ISO, with the same read-back verification and eject (a real 9.5 GB write was verified end to end). The image is recognised by its GPT partition names. `fetch-chromeos` and `write --mode chromeos` on the command line. Google asks for a USB drive of 16 GB or larger, which is checked and warned about.
 - **One-page window:** four cards (*Google Chrome*, *Windows 11*, *Linux*, *Other ISO*) replace the three tabs; below them the source panel of the chosen card, the USB drive list, the image file (with the SHA-256 check), and a large Create button with progress and log. The card is picked from the image contents, a mismatching file is questioned before anything is erased, and the window keeps one height whichever card is chosen.
 - **Help menu** with built-in documentation (F1): quick starts for Windows and Linux ISOs, the window and its four cards, safety, verification and eject, command line, troubleshooting, files and settings, plus About, the audit log folder and the project page. Tests check it against the code (commands, exit codes, thresholds, messages).
+- **USB drives are found automatically:** the list is read when the program starts and whenever its window gets focus again (not while a write is running, at most every 3 seconds; the selected drive stays selected), and again after a write, so an ejected drive disappears. *Refresh USB drives list* is still there.
+- **A hint under the Create button says why it is disabled** (no image file chosen, no USB drive found, or no drive selected).
 - Unit test suite (`tests/`, standard library only) and a per-distribution package probe.
 - Release engineering: end-to-end tests against loop devices (Linux CI), ShellCheck over the
   embedded privileged scripts, a per-distribution package-manager probe, a CycloneDX SBOM and
@@ -81,6 +83,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ### Fixed
 
+- The ChromeOS Flex link buttons ("Google's installation guide" / "requirements page") are on their own row, so the second one is no longer cut off; the SHA-256 panel no longer reserves space for empty result lines.
 - Disk identifiers are matched with `fullmatch`: `"sdb\n"` used to pass the `$`-anchored
   pattern.
 - Unnamed volumes are labelled with their file system instead of `?`.
