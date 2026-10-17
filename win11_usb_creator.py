@@ -139,13 +139,26 @@ VOL_NAME = "WIN11USB"
 MODE_WINDOWS = "windows"
 MODE_LINUX = "linux"
 MODE_CHROMEOS = "chromeos"
+ALL_MODES = (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS)
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
+MODE_AUTO = "auto"  # command line only: take the mode from what detect_iso_kind() finds in the image
+
+# What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
+# mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
+ISO_KIND_WINDOWS = "windows"
+ISO_KIND_LINUX = "linux"
+ISO_KIND_CHROMEOS = "chromeos"
+ISO_KIND_UNKNOWN = "unknown"
+KIND_UNKNOWN = ISO_KIND_UNKNOWN
+KIND_MODE = {ISO_KIND_WINDOWS: MODE_WINDOWS, ISO_KIND_LINUX: MODE_LINUX, ISO_KIND_CHROMEOS: MODE_CHROMEOS}
 
 # The four choices at the top of the window ("cards"), and how each one writes the drive.
 CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER = "chrome", "windows", "linux", "other"
 CARD_ORDER = (CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER)
 CARD_MODE = {CARD_CHROME: MODE_CHROMEOS, CARD_WINDOWS: MODE_WINDOWS, CARD_LINUX: MODE_LINUX, CARD_OTHER: MODE_LINUX}
+# The card a detected image selects (a hybrid image keeps "Other ISO" when that one is already chosen).
+KIND_CARD = {ISO_KIND_CHROMEOS: CARD_CHROME, ISO_KIND_WINDOWS: CARD_WINDOWS, ISO_KIND_LINUX: CARD_LINUX}
 LOG_MAX_LINES = 5000   # the on-screen log keeps only this many lines
 LOG_FLUSH_MS = 100     # worker log lines are queued and written to the log box this often
 AUTO_REFRESH_MIN_SECONDS = 3.0  # the drive list is not re-read more often than this when the window regains focus
@@ -711,10 +724,6 @@ def validate_hybrid_iso(path):
 # ============================================================
 # ISO inspection (pure stdlib, never raises, reads a few MB at most)
 # ============================================================
-ISO_KIND_WINDOWS = "windows"
-ISO_KIND_LINUX = "linux"
-ISO_KIND_CHROMEOS = "chromeos"
-ISO_KIND_UNKNOWN = "unknown"
 GPT_HEADER_OFFSET = 512                 # LBA 1: "EFI PART"
 GPT_ENTRIES_OFFSET = 1024               # LBA 2: the partition entries (128 bytes each)
 GPT_ENTRY_SIZE = 128
@@ -2826,7 +2835,7 @@ def validate_image_for_mode(iso_path, mode, expected_size=None):
     Also refuses, with a message that says how to fix it, when a tool the chosen type needs is
     missing: otherwise that would only be discovered after the drive had been erased.
     """
-    if mode != MODE_WINDOWS and mode not in RAW_MODES:
+    if mode not in ALL_MODES:
         raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
     if mode == MODE_LINUX:
@@ -3235,6 +3244,11 @@ def set_macos_app_name(name):
         send(send(objc.objc_getClass(b"NSProcessInfo"), "processInfo"), "setProcessName:", nsstring(name))
     except Exception:  # noqa: S110 - cosmetic only; never block the app over a label
         pass
+
+
+def _image_label(mode, other):
+    """The window's name for what `mode` writes; `other` (already translated) names a Linux or other ISO."""
+    return {MODE_WINDOWS: _("Windows 11"), MODE_CHROMEOS: _("ChromeOS Flex")}.get(mode, other)
 
 
 _TkBase = tk.Tk if tk else object  # lets the module import (engine, CLI) without Tk
@@ -4293,14 +4307,10 @@ class App(_TkBase):
                        "Check that the selected card ({card}) is the right one.").format(
                            card=self.card_titles.get(card, card)))
         else:
-            if kind == ISO_KIND_CHROMEOS:
-                card = CARD_CHROME
-            elif kind == ISO_KIND_WINDOWS:
-                card = CARD_WINDOWS
-            else:  # a hybrid image: keep "Other ISO" if that is what was chosen, otherwise "Linux"
-                card = self.card_var.get() if self.card_var.get() in (CARD_LINUX, CARD_OTHER) else CARD_LINUX
-            image = {ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_CHROMEOS: _("ChromeOS Flex")}.get(
-                kind, _("Linux / other hybrid ISO"))
+            card = KIND_CARD[kind]
+            if kind == ISO_KIND_LINUX and self.card_var.get() == CARD_OTHER:
+                card = CARD_OTHER  # a hybrid image keeps "Other ISO" if that is what was chosen, otherwise "Linux"
+            image = _image_label(KIND_MODE[kind], _("Linux / other hybrid ISO"))
             self.log(_("Image type preselected {how}: {image}.").format(
                 how=_("from the content of the ISO"), image=image))
         self.select_card(card)
@@ -4723,8 +4733,7 @@ class App(_TkBase):
             return
         if not self._image_matches_choice(mode):
             return
-        what = {MODE_WINDOWS: _("Windows 11"), MODE_CHROMEOS: _("ChromeOS Flex")}.get(
-            mode, _("the selected Linux image"))
+        what = _image_label(mode, _("the selected Linux image"))
         if mode in RAW_MODES:
             try:
                 image_size = os.path.getsize(self.iso_path.get())
@@ -5010,8 +5019,6 @@ EXIT_EJECT_FAILED = 4      # written and verified, but the drive could not be ej
 EXIT_INTERRUPTED = 130     # Ctrl-C
 
 CLI_PROG = APP_NAME
-MODE_AUTO = "auto"
-KIND_UNKNOWN = "unknown"
 # Engine log lines worth showing without --verbose (everything else is command output).
 CLI_MILESTONE_RE = re.compile(
     r"warning|error|fail|verif|eject|done!|safety re-check|erasing|writing the iso|copying|"
@@ -5228,7 +5235,7 @@ def cli_sha256_file(path, progress=None, chunk=SHA256_CHUNK):
 
 
 def cli_detect_kind(iso_path):
-    """Return (kind, method): kind is windows, linux, chromeos or unknown.
+    """Return (kind, method): kind is one of the ISO_KIND_* values (windows, linux, chromeos or unknown).
 
     Uses detect_iso_kind() when the engine provides it (reads the ISO), then the hybrid-image
     boot signature. The FILE NAME is never used: a guess from the name could select the
@@ -5241,11 +5248,11 @@ def cli_detect_kind(iso_path):
             kind = detector(iso_path)
         except Exception:
             kind = None
-        if isinstance(kind, str) and kind.lower() in (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS):
+        if isinstance(kind, str) and kind.lower() in KIND_MODE:
             return kind.lower(), "content"
     try:
         validate_hybrid_iso(iso_path)
-        return MODE_LINUX, "boot-signature"
+        return ISO_KIND_LINUX, "boot-signature"
     except (ValueError, OSError):
         return KIND_UNKNOWN, "none"
 
@@ -5460,12 +5467,13 @@ def _prepare_write(args):
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     mode = args.mode
     detected, _method = cli_detect_kind(iso)
+    detected_mode = KIND_MODE.get(detected)
     if mode == MODE_AUTO:
-        if detected == KIND_UNKNOWN:
+        if detected_mode is None:
             raise CliError("Could not tell what kind of image this is. "
                            "Pass --mode windows, --mode linux or --mode chromeos.", EXIT_USAGE)
-        mode = detected
-    elif detected in (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS) and detected != mode:
+        mode = detected_mode
+    elif detected_mode is not None and detected_mode != mode:
         _warn(f"This ISO looks like a {detected} image but --mode {mode} was requested.")
     iso_size = os.path.getsize(iso)
     size = disk.get("size") or 0
@@ -5683,7 +5691,7 @@ def build_cli_parser():
                    help="path of the ISO or disk image (.bin for ChromeOS Flex; use fetch-chromeos to get it)")
     p.add_argument("--disk", required=True, metavar="DISKID",
                    help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
-    p.add_argument("--mode", choices=[MODE_AUTO, MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS], default=MODE_AUTO,
+    p.add_argument("--mode", choices=[MODE_AUTO, *ALL_MODES], default=MODE_AUTO,
                    help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
                         "chromeos: raw write of a ChromeOS Flex disk image; auto: detect (default)")
     p.add_argument("--yes", action="store_true",

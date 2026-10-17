@@ -127,7 +127,7 @@ class SharedRuleTests(TempDirTestCase):
 
     def test_needs_admin_follows_platform_and_mode(self):
         with mock.patch.object(app, "IS_LINUX", True):
-            self.assertTrue(all(app.needs_admin(m) for m in (app.MODE_WINDOWS, app.MODE_LINUX, app.MODE_CHROMEOS)))
+            self.assertTrue(all(app.needs_admin(m) for m in app.ALL_MODES))
         with mock.patch.object(app, "IS_LINUX", False):
             self.assertFalse(app.needs_admin(app.MODE_WINDOWS))
             self.assertTrue(app.needs_admin(app.MODE_LINUX))
@@ -187,6 +187,31 @@ class SharedRuleTests(TempDirTestCase):
             with self.assertRaises(app.CliError) as ctx:
                 app._list_disks()
         self.assertEqual(ctx.exception.message, "Could not list the drives: boom")
+
+
+class ModeTableTests(unittest.TestCase):
+    def test_all_modes_is_windows_plus_the_raw_modes(self):
+        self.assertEqual(set(app.ALL_MODES), {app.MODE_WINDOWS, *app.RAW_MODES})
+        self.assertNotIn(app.MODE_AUTO, app.ALL_MODES)
+
+    def test_every_detectable_kind_maps_to_a_mode_and_a_card_that_agree(self):
+        kinds = {app.ISO_KIND_WINDOWS, app.ISO_KIND_LINUX, app.ISO_KIND_CHROMEOS}
+        self.assertEqual(set(app.KIND_MODE), kinds)
+        self.assertEqual(set(app.KIND_CARD), kinds)
+        for kind in kinds:
+            self.assertEqual(app.CARD_MODE[app.KIND_CARD[kind]], app.KIND_MODE[kind])
+        self.assertNotIn(app.KIND_UNKNOWN, app.KIND_MODE)
+        self.assertEqual(app.KIND_UNKNOWN, app.ISO_KIND_UNKNOWN)
+
+    def test_every_card_has_a_mode(self):
+        self.assertEqual(set(app.CARD_MODE), set(app.CARD_ORDER))
+        self.assertTrue(set(app.CARD_MODE.values()) <= set(app.ALL_MODES))
+
+    def test_cli_mode_choices_come_from_the_table(self):
+        parser = app.build_cli_parser()
+        write = parser._subparsers._group_actions[0].choices["write"]
+        mode_action = next(a for a in write._actions if a.dest == "mode")
+        self.assertEqual(list(mode_action.choices), [app.MODE_AUTO, *app.ALL_MODES])
 
 
 if __name__ == "__main__":
