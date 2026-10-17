@@ -19,6 +19,20 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   line right above the Create button. The SHA-256 panel and the log are behind links
   (*Verify the selected ISO (SHA-256)*, *Show details*; the log opens by itself when a write
   fails), and progress bars appear only while there is something to show.
+- **Drive list instead of a drop-down.** Each USB drive is a row with its model, size, volumes
+  and a `USB` badge (keyboard: Up/Down, Space/Return); while the drives are being read two
+  grey placeholder rows are shown, and with no drive a short "No USB drive found" message.
+- **Results under the Create button, not in pop-ups.** A red box for a failed download,
+  extraction, drive listing or tool installation (with *Try again* / *Dismiss*) and a green
+  box when the drive was written, verified and ejected (with *Make another*). A failed write,
+  a cancel and every confirmation keep their dialogs.
+- **Header** with the version, a *Ready* / *Missing tools* chip (with *Install missing
+  dependencies* beside it) and a *Help* link; the old dependency row is gone.
+- **Three numbered steps** (1 Image type, 2 Image, 3 USB drive); the four cards share the full
+  width; the panel under them is only as tall as the chosen card needs (no blank area) and the
+  window settles back to its usual height; the chosen file is a card with its name, folder,
+  size and detected type. Drag and drop of an image was not added: Tk 9.1 on macOS has no
+  file-drop support in the standard library.
 
 ## [1.1.0] - 2026-10-17
 

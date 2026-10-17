@@ -170,7 +170,7 @@ python3 win11_usb_creator.py
 
 ### The window
 
-One window, from top to bottom: **four cards**, **the USB drive**, **the image file** and the **Create** button.
+One window with three numbered steps — **1 Image type** (four cards), **2 Image** (where to get it, and the file) and **3 USB drive** — and the **Create** button. A slim header shows the version, a **Ready** / **Missing tools** chip for the tools the program needs, and **Help**.
 
 1. **Choose a card** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* or *Other ISO*. The panel under the cards shows where to get that kind of image. Selecting an image file picks the right card for you, from the **contents** of the file.
 2. **Get the image** (skip this if you already have it):
@@ -178,8 +178,8 @@ One window, from top to bottom: **four cards**, **the USB drive**, **the image f
    - **Google Chrome (ChromeOS Flex)** — click **"Download ChromeOS Flex from Google"**; the ZIP is downloaded (resumable), extracted and selected for you. Details below.
    - **Linux / Other ISO** — download the ISO from your distribution's website.
 3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** link appears under the file name: click it, paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
-4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex) and select it in the list. The list is read when the program starts and whenever you return to its window; click **"Refresh USB drives list"** if the drive does not show up. While **Create** is disabled, a hint under it says why.
-5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again.
+4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex) and select its row (model, size, volumes and a `USB` badge). The list is read when the program starts and whenever you return to its window; click **"Refresh USB drives list"** if the drive does not show up. While **Create** is disabled, a hint under it says why.
+5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again. Results appear under the button instead of in pop-up windows: a green box when the drive was verified and ejected (with **Make another**), a red box with **Try again** for a failed download.
 
 What each card does:
 

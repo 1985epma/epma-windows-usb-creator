@@ -6,6 +6,7 @@ default python3 on a bare machine) or when no display is available. Nothing here
 device: the drive listing, the message boxes and the engine are replaced.
 """
 import io
+import os
 import plistlib
 import subprocess
 import threading
@@ -844,7 +845,7 @@ class QuietLayoutTests(GuiTestCase):
         win.sha_toggle.toggle()
         self.assertEqual(self.manager(win.iso_check_frame), "pack")
         slaves = win.sha_toggle.master.pack_slaves()
-        self.assertLess(slaves.index(win.iso_label), slaves.index(win.sha_toggle))
+        self.assertLess(slaves.index(win.iso_card), slaves.index(win.sha_toggle))
         self.assertLess(slaves.index(win.sha_toggle), slaves.index(win.iso_check_frame))
         win.set_iso("/tmp/other.iso")                      # a new file keeps the panel as the user left it
         self.assertEqual(self.manager(win.iso_check_frame), "pack")
@@ -887,6 +888,183 @@ class QuietLayoutTests(GuiTestCase):
         self.assertLess(order.index(win.iso_sha_progress), order.index(win.iso_sha_label))
         win._reset_iso_sha()
         self.assertEqual(self.manager(win.iso_sha_progress), "")
+
+
+class ShortenMiddleTests(unittest.TestCase):
+    def test_short_text_is_unchanged(self):
+        self.assertEqual(app._shorten_middle("abc", 10), "abc")
+        self.assertEqual(app._shorten_middle("a" * 10, 10), "a" * 10)
+
+    def test_long_text_keeps_both_ends_and_the_limit(self):
+        for limit in (5, 6, 11, 20, 64):
+            with self.subTest(limit=limit):
+                text = "/Users/someone/" + "x" * 100 + "/Downloads/ubuntu.iso"
+                short = app._shorten_middle(text, limit)
+                self.assertEqual(len(short), limit)
+                self.assertIn("…", short)
+                self.assertTrue(short.startswith(text[:2]) and short.endswith(text[-2:]))
+
+
+class StepLayoutTests(GuiTestCase, TempDirTestCase):
+    """P2/P3 of the GUI review: equal cards, no dead space under the panels, numbered steps, a file card."""
+
+    def setUp(self):
+        GuiTestCase.setUp(self)
+        TempDirTestCase.setUp(self)
+
+    def settle(self):
+        self.win.update_idletasks()
+
+    def test_the_four_cards_are_equal_columns_that_share_the_row(self):
+        win = self.win
+        row = win.cards_row
+        self.assertEqual(len(win.cards), 4)
+        uniform = set()
+        for column in range(4):
+            info = row.grid_columnconfigure(column)
+            self.assertEqual(int(info["weight"]), 1)
+            uniform.add(info["uniform"])
+        self.assertEqual(len(uniform), 1)
+        self.assertNotEqual(uniform, {""})
+        columns = []
+        for card in win.cards.values():
+            self.assertEqual(card.winfo_manager(), "grid")
+            self.assertEqual(card.grid_info()["sticky"], "ew")
+            columns.append(int(card.grid_info()["column"]))
+        self.assertEqual(sorted(columns), [0, 1, 2, 3])
+
+    def test_a_card_draws_itself_with_the_width_it_is_given(self):
+        card = self.win.cards[app.CARD_WINDOWS]
+        card._on_resize(mock.Mock(width=220))
+        right_edges = [card.bbox(item)[2] for item in card.find_all() if card.type(item) == "polygon"]
+        self.assertTrue(right_edges)
+        self.assertGreaterEqual(max(right_edges), 214)   # the outline reaches (almost) the new right edge
+        self.assertLessEqual(max(right_edges), 222)
+        card._on_resize(mock.Mock(width=160))
+        right_edges = [card.bbox(item)[2] for item in card.find_all() if card.type(item) == "polygon"]
+        self.assertLessEqual(max(right_edges), 162)
+        card.set_selected(True)                          # selecting keeps the width
+        self.assertEqual(card._cw, 160)
+
+    def test_the_panel_holder_is_as_tall_as_the_panel_on_screen(self):
+        win = self.win
+        heights = {}
+        for key in app.CARD_ORDER:
+            win.select_card(key)
+            self.settle()
+            shown = [k for k, panel in win.panels.items() if panel.winfo_manager() == "grid"]
+            self.assertEqual(shown, [key])
+            heights[key] = win.panels[key].winfo_reqheight()
+            self.assertEqual(win._panel_holder.winfo_reqheight(), heights[key])
+        self.assertLess(min(heights.values()), max(heights.values()))   # no more fixed, tallest height
+
+    def test_a_download_bar_adds_height_only_while_it_is_shown(self):
+        win = self.win
+        win.select_card(app.CARD_WINDOWS)
+        self.settle()
+        idle = win._panel_holder.winfo_reqheight()
+        self.assertEqual(str(win.progress_label.winfo_manager()), "")   # an empty label takes no room either
+        win.windows_dl.show(30, "30%")
+        self.settle()
+        self.assertGreater(win._panel_holder.winfo_reqheight(), idle)
+        win.windows_dl.hide_bar()
+        win.progress_label.config(text="")
+        self.settle()
+        self.assertEqual(win._panel_holder.winfo_reqheight(), idle)
+
+    def test_the_window_grows_and_settles_back(self):
+        win = self.win
+        minimum = win.MIN_WINDOW_HEIGHT
+        with mock.patch.object(win, "winfo_reqheight", return_value=minimum - 100):
+            win._fit_window()                              # a small page: the usual height, not smaller
+        self.assertEqual(win._window_size[1], minimum)
+        with mock.patch.object(win, "winfo_reqheight", return_value=minimum + 150):
+            win._fit_window()
+        self.assertEqual(win._window_size[1], minimum + 150)
+        with mock.patch.object(win, "winfo_reqheight", return_value=minimum - 100):
+            win._fit_window()
+        self.assertEqual(win._window_size[1], minimum)     # back to the usual height, not smaller
+        with mock.patch.object(win, "winfo_reqheight", return_value=minimum + 150):
+            win._fit_window()
+        # the user made it taller by hand: the content shrinking must not take that away
+        with mock.patch.object(win, "winfo_reqheight", return_value=minimum), \
+                mock.patch.object(win, "winfo_height", return_value=minimum + 400):
+            win._fit_window()
+        self.assertEqual(win._window_size[1], minimum + 150)
+
+    def test_the_numbered_steps_are_in_order_on_the_page(self):
+        win = self.win
+        self.assertEqual([win.step_headings[n].number for n in (1, 2, 3)], [1, 2, 3])
+        self.assertEqual([win.step_headings[n].title for n in (1, 2, 3)], ["Image type", "Image", "USB drive"])
+        page = win.iso_card.master
+        order = page.pack_slaves()
+        create_row = win.create_btn.master
+        sequence = [win.step_headings[1], win.cards_row, win.step_headings[2], win._panel_holder, win.iso_card,
+                    win.step_headings[3], create_row]
+        positions = [order.index(widget) for widget in sequence]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(len(set(positions)), len(positions))
+        # nothing but the separator and the drive section sits between step 3 and the Create row
+        between = order[order.index(win.step_headings[3]) + 1:order.index(create_row)]
+        self.assertTrue(between)
+
+    def pvd_iso(self, name, volume_id, hybrid):
+        data = bytearray(2 * MIB)
+        pvd = 16 * 2048
+        data[pvd:pvd + 7] = b"\x01CD001\x01"
+        data[pvd + 40:pvd + 72] = volume_id.encode("latin-1").ljust(32)
+        data[pvd + 128:pvd + 130] = (2048).to_bytes(2, "little")
+        if hybrid:
+            data[510:512] = b"\x55\xaa"
+        return self.write_file(name, bytes(data))
+
+    def test_no_image_shows_only_the_empty_state(self):
+        card = self.win.iso_card
+        self.assertFalse(card.has_file)
+        self.assertEqual(str(card.label.cget("text")), "No ISO selected yet.")
+        shown = card.grid_slaves()
+        for widget in (card.folder_label, card.size_label, card.badge):
+            self.assertNotIn(widget, shown)
+        self.assertIs(self.win.iso_label, card.label)
+        self.assertEqual(self.win.iso_card.winfo_manager(), "pack")
+
+    def test_a_chosen_image_shows_name_folder_size_and_kind(self):
+        path = self.pvd_iso("ubuntu-24.04.iso", "Ubuntu 24.04 LTS amd64", hybrid=True)
+        self.win.set_iso(path)
+        card = self.win.iso_card
+        self.assertTrue(card.has_file)
+        self.assertEqual(str(card.label.cget("text")), "ubuntu-24.04.iso")
+        self.assertIn("bold", str(card.label.cget("font")).lower() + str(self.win.tk.call("font", "actual", card.label.cget("font"), "-weight")))
+        self.assertTrue(str(card.folder_label.cget("text")).endswith(os.path.basename(self.tmp)))
+        self.assertEqual(str(card.size_label.cget("text")), app.human_size(2 * MIB))
+        self.assertEqual(str(card.badge.cget("text")), "Linux")
+        for widget in (card.folder_label, card.size_label, card.badge):
+            self.assertIn(widget, card.grid_slaves())
+        self.assertEqual(self.win.iso_path.get(), path)
+
+    def test_the_badge_follows_the_detected_kind(self):
+        for vid, hybrid, text in (("CCCOMA_X64FRE_EN-US_DV9", False, "Windows 11"),
+                                  ("Ubuntu 24.04 LTS amd64", True, "Linux")):
+            with self.subTest(text=text):
+                self.win.set_iso(self.pvd_iso("x.iso", vid, hybrid))
+                self.assertEqual(str(self.win.iso_card.badge.cget("text")), text)
+        self.win.iso_card.show(self.write_file("flex.bin", b"x"), app.ISO_KIND_CHROMEOS, 1)
+        self.assertEqual(str(self.win.iso_card.badge.cget("text")), "ChromeOS Flex")
+
+    def test_an_unreadable_or_unknown_image_still_shows_a_card(self):
+        self.win.set_iso(self.path("missing.iso"))
+        card = self.win.iso_card
+        self.assertEqual(str(card.label.cget("text")), "missing.iso")
+        self.assertEqual(str(card.size_label.cget("text")), "")
+        self.assertEqual(str(card.badge.cget("text")), "Unknown")
+
+    def test_clear_returns_to_the_empty_state(self):
+        self.win.set_iso(self.pvd_iso("a.iso", "Ubuntu 24.04 LTS amd64", hybrid=True))
+        self.win.iso_card.clear()
+        card = self.win.iso_card
+        self.assertFalse(card.has_file)
+        self.assertEqual(str(card.label.cget("text")), "No ISO selected yet.")
+        self.assertNotIn(card.badge, card.grid_slaves())
 
 
 class CancelMessageTests(GuiTestCase):

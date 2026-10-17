@@ -173,7 +173,7 @@ python3 win11_usb_creator.py
 
 ### A janela
 
-Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arquivo da imagem** e o botão **Create**.
+Uma janela só, com três etapas numeradas — **1 Image type** (quatro cartões), **2 Image** (onde obter e o arquivo) e **3 USB drive** — e o botão **Create**. Um cabeçalho fino mostra a versão, um indicador **Ready** / **Missing tools** das ferramentas necessárias e o **Help**.
 
 1. **Escolha um cartão** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* ou *Other ISO*. O painel sob os cartões mostra onde obter esse tipo de imagem. Ao selecionar um arquivo de imagem, o cartão certo é escolhido para você, pelo **conteúdo** do arquivo.
 2. **Obtenha a imagem** (pule se já tiver):
@@ -181,8 +181,8 @@ Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arq
    - **Google Chrome (ChromeOS Flex)** — clique em **"Download ChromeOS Flex from Google"**; o ZIP é baixado (com retomada), extraído e selecionado para você. Detalhes abaixo.
    - **Linux / Other ISO** — baixe a ISO no site da sua distribuição.
 3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o link **"Verify the selected ISO (SHA-256)"** sob o nome do arquivo: clique nele, cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
-4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex) e selecione-o na lista. A lista é lida ao abrir o programa e sempre que você volta à janela; clique em **"Refresh USB drives list"** se o pendrive não aparecer. Enquanto o **Create** está desativado, uma dica abaixo dele diz o motivo.
-5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo.
+4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex) e selecione a linha dele (modelo, tamanho, volumes e um selo `USB`). A lista é lida ao abrir o programa e sempre que você volta à janela; clique em **"Refresh USB drives list"** se o pendrive não aparecer. Enquanto o **Create** está desativado, uma dica abaixo dele diz o motivo.
+5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo. Os resultados aparecem sob o botão, sem janelas pop-up: uma caixa verde quando o pendrive foi verificado e ejetado (com **Make another**) e uma vermelha com **Try again** para um download que falhou.
 
 O que cada cartão faz:
 
