@@ -122,5 +122,72 @@ class PartialDownloadHashTests(TempDirTestCase):
             thread._hash_part(part, hashlib.sha256(), 3)
 
 
+class SharedRuleTests(TempDirTestCase):
+    """Rules the window and the command line used to implement twice."""
+
+    def test_needs_admin_follows_platform_and_mode(self):
+        with mock.patch.object(app, "IS_LINUX", True):
+            self.assertTrue(all(app.needs_admin(m) for m in (app.MODE_WINDOWS, app.MODE_LINUX, app.MODE_CHROMEOS)))
+        with mock.patch.object(app, "IS_LINUX", False):
+            self.assertFalse(app.needs_admin(app.MODE_WINDOWS))
+            self.assertTrue(app.needs_admin(app.MODE_LINUX))
+            self.assertTrue(app.needs_admin(app.MODE_CHROMEOS))
+
+    def test_image_exceeds_drive(self):
+        self.assertTrue(app.image_exceeds_drive(9, 8))
+        self.assertFalse(app.image_exceeds_drive(8, 8))
+        self.assertFalse(app.image_exceeds_drive(7, 8))
+        for unknown in (0, None):  # an unknown size is never a reason to refuse
+            self.assertFalse(app.image_exceeds_drive(9, unknown))
+            self.assertFalse(app.image_exceeds_drive(unknown, 8))
+
+    def test_chromeos_drive_too_small(self):
+        small, big = app.CHROMEOS_MIN_USB_BYTES - 1, app.CHROMEOS_MIN_USB_BYTES
+        self.assertTrue(app.chromeos_drive_too_small(app.MODE_CHROMEOS, small))
+        self.assertFalse(app.chromeos_drive_too_small(app.MODE_CHROMEOS, big))
+        self.assertFalse(app.chromeos_drive_too_small(app.MODE_CHROMEOS, 0))  # unknown size
+        self.assertFalse(app.chromeos_drive_too_small(app.MODE_LINUX, small))
+        self.assertFalse(app.chromeos_drive_too_small(app.MODE_WINDOWS, small))
+
+    def test_normalize_typed_identifier(self):
+        for text, expected in (("disk4", "disk4"), ("  /dev/disk4 \n", "disk4"), ("/dev/sdb", "sdb"),
+                               ("", ""), (None, ""), ("dev/sdb", "dev/sdb")):
+            self.assertEqual(app.normalize_typed_identifier(text), expected)
+
+    def test_is_sha256_hex(self):
+        good = "ab" * 32
+        self.assertTrue(app.is_sha256_hex(good))
+        self.assertTrue(app.is_sha256_hex(good.upper()))
+        for bad in (good[:-1], good + "0", good[:-1] + "g", "", " " + good, good + "\n"):
+            self.assertFalse(app.is_sha256_hex(bad))
+
+    def test_parse_expected_sha256_still_finds_a_hash_inside_a_line(self):
+        good = "cd" * 32
+        self.assertEqual(app.parse_expected_sha256(f"{good.upper()} *ubuntu.iso"), good)
+        with self.assertRaises(ValueError):
+            app.parse_expected_sha256("0" * 65)  # too long: not a SHA-256
+
+    def test_resolve_path_expands_home_and_symlinks(self):
+        target = self.write_file("real.iso", b"x")
+        link = self.path("link.iso")
+        os.symlink(target, link)
+        self.assertEqual(app.resolve_path(link), os.path.realpath(target))
+        self.assertEqual(app.resolve_path("~"), os.path.realpath(os.path.expanduser("~")))
+
+    def test_has_mbr_signature(self):
+        head = bytearray(512)
+        self.assertFalse(app.has_mbr_signature(bytes(head)))
+        head[510:512] = app.MBR_SIGNATURE
+        self.assertTrue(app.has_mbr_signature(bytes(head)))
+        self.assertFalse(app.has_mbr_signature(app.MBR_SIGNATURE))  # a short read never counts
+        self.assertFalse(app.has_mbr_signature(b""))
+
+    def test_list_disks_turns_a_failure_into_a_cli_error(self):
+        with mock.patch.object(app, "get_external_disks", side_effect=OSError("boom")):
+            with self.assertRaises(app.CliError) as ctx:
+                app._list_disks()
+        self.assertEqual(ctx.exception.message, "Could not list the drives: boom")
+
+
 if __name__ == "__main__":
     unittest.main()

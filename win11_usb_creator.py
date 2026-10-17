@@ -154,6 +154,8 @@ SHA_UI_INTERVAL = 0.1           # ... and the SHA-256 panel this often (~10 time
 VERIFY_PROGRESS_INTERVAL = 0.5  # seconds between the progress updates of the read-back verification
 DD_LOG_INTERVAL = 5.0           # dd's frequent byte-count lines reach the log at most this often
 PANEL_WRAP = 720                # wrap width (pixels) of the explanatory texts in the window
+MBR_SIGNATURE = b"\x55\xaa"  # the last two bytes of the first sector of an image that can boot from USB
+MBR_SIGNATURE_OFFSET = 510
 VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw write back
 RAW_WRITE_BLOCK = {"mac": "4m", "linux": "4M"}  # BSD dd and GNU dd spell the unit differently
 
@@ -659,11 +661,21 @@ def validate_device_name(dev):
     return dev
 
 
+def has_mbr_signature(head):
+    """True if `head` (the first bytes of a file) carries the MBR boot signature at offset 510."""
+    return head[MBR_SIGNATURE_OFFSET:MBR_SIGNATURE_OFFSET + 2] == MBR_SIGNATURE
+
+
+def resolve_path(path):
+    """The absolute, symlink-free form of a path the user typed (``~`` expanded)."""
+    return os.path.realpath(os.path.expanduser(path))
+
+
 def validate_iso_path(path):
     """Return an absolute, existing, regular-file ISO path, or raise."""
     if not path:
         raise ValueError("No ISO file has been selected yet.")
-    resolved = os.path.realpath(os.path.expanduser(path))
+    resolved = resolve_path(path)
     if not os.path.exists(resolved):
         raise ValueError(f"The selected ISO file no longer exists: {resolved}")
     if not os.path.isfile(resolved):
@@ -687,7 +699,7 @@ def validate_hybrid_iso(path):
     """
     with open(path, "rb") as fh:
         head = fh.read(512)
-    if len(head) < 512 or head[510:512] != b"\x55\xaa":
+    if not has_mbr_signature(head):
         raise ValueError(
             "This ISO is not a bootable hybrid image, so it cannot be written directly to a USB drive.\n\n"
             "If this is a Windows ISO, choose 'Windows 11' as the image type. Otherwise use an "
@@ -813,7 +825,7 @@ def _detect_iso_kind(path):
             return ISO_KIND_WINDOWS
 
         # 3. Everything else that boots from a USB drive as-is is a hybrid image (Linux & co).
-        if head[510:512] == b"\x55\xaa":
+        if has_mbr_signature(head):
             return ISO_KIND_LINUX
     return ISO_KIND_UNKNOWN
 
@@ -907,7 +919,13 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
 
 # ---- SHA-256 of a local file ----
 SHA256_CHUNK = 4 * 1024 * 1024
-_HEX64_RE = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{64}(?![0-9A-Fa-f])")
+SHA256_HEX_RE = re.compile(r"[0-9A-Fa-f]{64}")  # exactly 64 hex digits (use with fullmatch)
+_HEX64_RE = re.compile(rf"(?<![0-9A-Fa-f]){SHA256_HEX_RE.pattern}(?![0-9A-Fa-f])")  # one inside a longer text
+
+
+def is_sha256_hex(text):
+    """True if `text` is exactly a SHA-256 in hex (64 digits, either case)."""
+    return bool(SHA256_HEX_RE.fullmatch(text))
 
 
 def parse_expected_sha256(text, filename=None):
@@ -939,14 +957,12 @@ def validate_disk_image(path):
     the drive byte for byte. They carry the MBR boot signature like a hybrid ISO does.
     """
     with open(path, "rb") as fh:
-        head = fh.read(4)
-        fh.seek(510)
-        sig = fh.read(2)
-    if head == b"PK\x03\x04":
+        head = fh.read(512)
+    if head[:4] == b"PK\x03\x04":
         raise ValueError(
             "This is the ZIP archive, not the disk image inside it. Select it with 'Select existing "
             "ISO file...' so the program can extract the .bin file, or extract it yourself.")
-    if sig != b"\x55\xaa":
+    if not has_mbr_signature(head):
         raise ValueError(
             "This file is not a bootable disk image, so it cannot be written to a USB drive. "
             "For ChromeOS Flex use the .bin file from the official latest.bin.zip.")
@@ -1535,9 +1551,12 @@ def ask_password(parent, title, prompt):
 
 
 def normalize_typed_identifier(text):
-    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed."""
+    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed.
+
+    The window's confirmation dialog and the command line (--disk, the typed confirmation) both use it.
+    """
     text = (text or "").strip()
-    return text[5:] if text.startswith("/dev/") else text
+    return text[len("/dev/"):] if text.startswith("/dev/") else text
 
 
 def build_typed_confirmation_dialog(parent, title, message, expected, reasons=()):
@@ -2816,8 +2835,9 @@ def validate_image_for_mode(iso_path, mode, expected_size=None):
         validate_disk_image(iso_path)
     # Raw modes write the image as it is; Windows mode copies its contents. Either way it must
     # fit (the copy of a Windows ISO needs at least the ISO's size).
-    if expected_size and os.path.getsize(iso_path) > expected_size:
-        raise ValueError(f"The image ({human_size(os.path.getsize(iso_path))}) is larger than the "
+    image_size = os.path.getsize(iso_path)
+    if image_exceeds_drive(image_size, expected_size):
+        raise ValueError(f"The image ({human_size(image_size)}) is larger than the "
                          f"drive ({human_size(expected_size)}). Nothing was changed.")
     missing = get_missing_dependencies(mode)
     if missing:
@@ -2872,6 +2892,26 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
         raise
     audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
     return bool(ejected)
+
+
+def needs_admin(mode):
+    """Whether writing a drive in `mode` needs administrator rights: always on Linux, and on macOS
+    only for the byte-for-byte modes (diskutil and hdiutil need no root, writing /dev/rdiskN does)."""
+    return IS_LINUX or mode in RAW_MODES
+
+
+def image_exceeds_drive(image_size, drive_size):
+    """True when an image of `image_size` bytes cannot fit a drive of `drive_size` bytes.
+
+    An unknown size (0 or None) is never a reason to refuse. Pure: the window and the command line each
+    word the refusal themselves (translated in the window, English on the command line).
+    """
+    return bool(image_size and drive_size and image_size > drive_size)
+
+
+def chromeos_drive_too_small(mode, drive_size):
+    """True when ChromeOS Flex is going to a drive below the 16 GB Google asks for (a warning, not a refusal)."""
+    return mode == MODE_CHROMEOS and bool(drive_size) and drive_size < CHROMEOS_MIN_USB_BYTES
 
 
 def get_missing_dependencies(mode=MODE_WINDOWS):
@@ -4278,7 +4318,7 @@ class App(_TkBase):
             return
 
         expected_sha = self.sha_entry.get().strip().lower()
-        if expected_sha and not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
+        if expected_sha and not is_sha256_hex(expected_sha):
             messagebox.showerror(
                 _("Invalid checksum"),
                 _("A SHA-256 checksum must be exactly 64 characters using only 0-9 and a-f.\n\n"
@@ -4690,13 +4730,13 @@ class App(_TkBase):
                 image_size = os.path.getsize(self.iso_path.get())
             except OSError:
                 image_size = 0
-            if image_size and image_size > disk_size:
+            if image_exceeds_drive(image_size, disk_size):
                 messagebox.showerror(
                     _("Drive too small"),
                     _("The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. "
                       "Nothing was changed.").format(image=human_size(image_size), drive=human_size(disk_size)))
                 return
-        if mode == MODE_CHROMEOS and disk_size < CHROMEOS_MIN_USB_BYTES and not messagebox.askyesno(
+        if chromeos_drive_too_small(mode, disk_size) and not messagebox.askyesno(
                 _("Small USB drive"),
                 _("Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. "
                   "It may not work as an installer.\n\nContinue anyway?").format(size=human_size(disk_size)),
@@ -4709,7 +4749,7 @@ class App(_TkBase):
         # Writing the drive needs administrator rights (always on Linux; on macOS only for
         # the direct-write mode). Collect and verify the password now, before touching
         # the drive.
-        if (IS_LINUX or mode in RAW_MODES) and not self.priv.authenticate(
+        if needs_admin(mode) and not self.priv.authenticate(
                 _("Administrator access is required to write /dev/{id}.").format(id=disk["id"])):
             self.priv.clear_cached_password()
             self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
@@ -4972,7 +5012,6 @@ EXIT_INTERRUPTED = 130     # Ctrl-C
 CLI_PROG = APP_NAME
 MODE_AUTO = "auto"
 KIND_UNKNOWN = "unknown"
-SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 # Engine log lines worth showing without --verbose (everything else is command output).
 CLI_MILESTONE_RE = re.compile(
     r"warning|error|fail|verif|eject|done!|safety re-check|erasing|writing the iso|copying|"
@@ -5267,17 +5306,17 @@ def _engine_kwargs(cancel_event):
     return {}, False
 
 
-def _normalize_disk_id(value):
-    value = (value or "").strip()
-    return value[len("/dev/"):] if value.startswith("/dev/") else value
+def _list_disks():
+    """get_external_disks() with a failure turned into the command line's CliError."""
+    try:
+        return get_external_disks()
+    except Exception as e:
+        raise CliError(f"Could not list the drives: {e}") from None
 
 
 # ---------- commands ----------
 def cmd_list(args):
-    try:
-        disks = get_external_disks()
-    except Exception as e:
-        raise CliError(f"Could not list the drives: {e}") from None
+    disks = _list_disks()
     if args.json:
         _out(json.dumps({"disks": [_disk_summary(d) for d in disks]}, indent=2, default=str))
         return EXIT_OK
@@ -5295,7 +5334,7 @@ def cmd_list(args):
 
 
 def cmd_detect(args):
-    iso = os.path.realpath(os.path.expanduser(args.iso))
+    iso = resolve_path(args.iso)
     if not os.path.isfile(iso):
         raise CliError(f"Not a file: {iso}")
     kind, method = cli_detect_kind(iso)
@@ -5312,9 +5351,9 @@ def cmd_sha256(args):
         expected = args.expected.strip().lower()
         if expected.startswith("sha256:"):
             expected = expected[len("sha256:"):]
-        if not SHA256_HEX_RE.match(expected):
+        if not is_sha256_hex(expected):
             raise CliError("--expected must be a 64-character hexadecimal SHA-256 value.", EXIT_USAGE)
-    iso = os.path.realpath(os.path.expanduser(args.iso))
+    iso = resolve_path(args.iso)
     if not os.path.isfile(iso):
         raise CliError(f"Not a file: {iso}")
     progress = CliProgress()
@@ -5364,7 +5403,7 @@ def download_file_blocking(url, dest, progress=None, cancel_event=None):
 
 def cmd_fetch_chromeos(args):
     """Download ChromeOS Flex from Google and extract the disk image (nothing is written to a drive)."""
-    dest_dir = os.path.realpath(os.path.expanduser(args.dest or "."))
+    dest_dir = resolve_path(args.dest or ".")
     if not os.path.isdir(dest_dir):
         raise CliError(f"Not a folder: {dest_dir}")
     zip_path = os.path.join(dest_dir, "chromeos_flex_latest.bin.zip")
@@ -5411,13 +5450,10 @@ def _prepare_write(args):
     """Validate everything and build the plan. Raises CliError; touches nothing."""
     try:
         iso = validate_iso_path(args.iso)
-        disk_id = validate_device_name(_normalize_disk_id(args.disk))
+        disk_id = validate_device_name(normalize_typed_identifier(args.disk))
     except ValueError as e:
         raise CliError(str(e)) from None
-    try:
-        disks = get_external_disks()
-    except Exception as e:
-        raise CliError(f"Could not list the drives: {e}") from None
+    disks = _list_disks()
     disk = next((d for d in disks if d.get("id") == disk_id), None)
     if disk is None:
         raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
@@ -5438,13 +5474,11 @@ def _prepare_write(args):
             (validate_disk_image if mode == MODE_CHROMEOS else validate_hybrid_iso)(iso)
         except ValueError as e:
             raise CliError(str(e)) from None
-        if mode == MODE_CHROMEOS and size and size < CHROMEOS_MIN_USB_BYTES:
+        if chromeos_drive_too_small(mode, size):
             _warn(f"Google asks for a USB drive of 16 GB or larger for ChromeOS Flex; this one is "
                   f"{human_size(size)}.")
-        if size and iso_size > size:
-            raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
-    if mode == MODE_WINDOWS and size and iso_size > size:
-        # The copy of a Windows ISO holds at least the ISO's contents: it cannot fit.
+    if image_exceeds_drive(iso_size, size):
+        # A raw write needs the whole image; the copy of a Windows ISO holds at least its contents.
         raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
     missing = get_missing_dependencies(mode)
     if missing:
@@ -5473,7 +5507,7 @@ def _confirm_write(args, plan):
 
 
 def _run_write(args, plan, result):
-    needs_priv = IS_LINUX or plan["mode"] in RAW_MODES
+    needs_priv = needs_admin(plan["mode"])
     priv = CliPrivilege()
     progress = CliProgress()
     log = CliLogger(progress, verbose=args.verbose)
