@@ -1344,7 +1344,7 @@ def build_disk_label(dev_path, model, size, volumes):
     elif not volumes:
         parts.append("no volumes")
     else:
-        names = [repr(v.get("name") or "?") for v in volumes[:3]]
+        names = [repr(v.get("name") or v.get("filesystem") or "unnamed") for v in volumes[:3]]
         if len(volumes) > 3:
             names.append("…")
         noun = "volume" if len(volumes) == 1 else "volumes"
