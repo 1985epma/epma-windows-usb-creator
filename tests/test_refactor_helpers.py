@@ -571,7 +571,9 @@ class DownloadCardWiringTests(gui_tests.GuiTestCase):
         self.pump(lambda: not self.win._flex_busy)
         self.assertEqual(str(self.win.flex_progress_label.cget("text")), "Failed.")
         self.assertEqual(float(self.win.flex_progress.cget("value")), 0.0)
-        self.assertEqual(self.box.titles("error"), ["ChromeOS Flex"])
+        self.assertEqual(self.box.titles("error"), [], "a download failure is a banner, not a dialog")
+        self.assertEqual(self.win.error_banner.title_text, "ChromeOS Flex")
+        self.assertEqual(self.win.error_banner.message_text, "network down")
         self.assertEqual(self.state(self.win.flex_download_btn), "normal")
 
 
