@@ -130,6 +130,7 @@ CHROMEOS_MIN_USB_BYTES = 15_000_000_000
 DISK_IMAGE_MAX_BYTES = 64 * 1024 ** 3      # an image larger than this is not a plausible ChromeOS image
 FAT32_MAX_FILE_SIZE = 4_294_967_295  # 4GB - 1 byte
 CHUNK_SIZE = 1024 * 1024
+MIN_IMAGE_BYTES = 1024 * 1024  # a file smaller than this cannot be a disk image or an ISO
 VOL_NAME = "WIN11USB"
 
 # What kind of image is being written.
@@ -147,6 +148,12 @@ CARD_ORDER = (CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER)
 CARD_MODE = {CARD_CHROME: MODE_CHROMEOS, CARD_WINDOWS: MODE_WINDOWS, CARD_LINUX: MODE_LINUX, CARD_OTHER: MODE_LINUX}
 LOG_MAX_LINES = 5000   # the on-screen log keeps only this many lines
 LOG_FLUSH_MS = 100     # worker log lines are queued and written to the log box this often
+AUTO_REFRESH_MIN_SECONDS = 3.0  # the drive list is not re-read more often than this when the window regains focus
+PROGRESS_UI_INTERVAL = 0.2      # the write progress bar redraws at most this often (~5 times a second)
+SHA_UI_INTERVAL = 0.1           # ... and the SHA-256 panel this often (~10 times a second)
+VERIFY_PROGRESS_INTERVAL = 0.5  # seconds between the progress updates of the read-back verification
+DD_LOG_INTERVAL = 5.0           # dd's frequent byte-count lines reach the log at most this often
+PANEL_WRAP = 720                # wrap width (pixels) of the explanatory texts in the window
 VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw write back
 RAW_WRITE_BLOCK = {"mac": "4m", "linux": "4M"}  # BSD dd and GNU dd spell the unit differently
 
@@ -199,6 +206,7 @@ DOWNLOAD_BACKOFF_SECONDS = (2, 5)  # wait before retry 2 and 3
 QUERY_TIMEOUT = 30             # seconds allowed for quick query commands (diskutil list, lsblk, ...)
 IOREG_TIMEOUT = 10             # seconds for `ioreg`: it only adds the USB serial number, so it must not stall the list
 SUDO_KEEPALIVE_SECONDS = 60    # how often the sudo timestamp is refreshed while an operation runs
+SUDO_TIMEOUT = QUERY_TIMEOUT   # seconds allowed for the sudo password check and the timestamp refresh
 SUDO_KEEPALIVE_MAX_SECONDS = 6 * 3600  # the keep-alive never outlives this, whatever happens
 AUDIT_LOG_MAX_BYTES = 1_000_000
 AUDIT_LOG_BACKUPS = 5
@@ -650,7 +658,7 @@ def validate_iso_path(path):
         raise ValueError(f"The selected ISO path is not a regular file: {resolved}")
     if not os.access(resolved, os.R_OK):
         raise ValueError(f"The selected ISO file cannot be read: {resolved}")
-    if os.path.getsize(resolved) < 1024 * 1024:
+    if os.path.getsize(resolved) < MIN_IMAGE_BYTES:
         raise ValueError(
             "The selected file is too small to be a valid image "
             f"({human_size(os.path.getsize(resolved))}). It may be an incomplete download."
@@ -831,7 +839,7 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
         if not images:
             raise ValueError("The ZIP file does not contain a .bin disk image.")
         info = max(images, key=lambda i: i.file_size)
-        if not 1024 * 1024 <= info.file_size <= DISK_IMAGE_MAX_BYTES:
+        if not MIN_IMAGE_BYTES <= info.file_size <= DISK_IMAGE_MAX_BYTES:
             raise ValueError(f"The disk image inside the ZIP has an implausible size "
                              f"({human_size(info.file_size)}), so it was not extracted.")
         if not os.path.isdir(dest_dir):
@@ -952,7 +960,7 @@ def validate_disk_image(path):
             "For ChromeOS Flex use the .bin file from the official latest.bin.zip.")
 
 
-def make_progress_log(log, interval=5.0):
+def make_progress_log(log, interval=DD_LOG_INTERVAL):
     """Wrap `log` so dd's frequent progress lines are shown at most every `interval` seconds."""
     last = [0.0]
 
@@ -1041,7 +1049,7 @@ def verify_raw_write(iso_path, device_path, log, priv, progress, cancel_event=No
         m = re.fullmatch(r"VERIFY_PROGRESS (\d+)", line)
         if m:
             now = time.time()
-            if progress and (now - last[0] >= 0.5 or int(m.group(1)) >= total):
+            if progress and (now - last[0] >= VERIFY_PROGRESS_INTERVAL or int(m.group(1)) >= total):
                 last[0] = now
                 progress(min(int(m.group(1)), total), total, "Verifying the written image...")
             return
@@ -1652,7 +1660,7 @@ class PrivilegeHelper:
         try:
             proc = subprocess.run(
                 ["sudo", "-S", "-k", "-p", "", "true"],
-                input=password + "\n", capture_output=True, text=True, timeout=30)
+                input=password + "\n", capture_output=True, text=True, timeout=SUDO_TIMEOUT)
         except (OSError, subprocess.SubprocessError):
             return False
         return proc.returncode == 0
@@ -1666,7 +1674,7 @@ class PrivilegeHelper:
         """True if sudo currently accepts us without a password (and refreshes its timestamp)."""
         try:
             proc = subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
-                                  capture_output=True, timeout=QUERY_TIMEOUT)
+                                  capture_output=True, timeout=SUDO_TIMEOUT)
         except (OSError, subprocess.SubprocessError):
             return False
         return proc.returncode == 0
@@ -1679,7 +1687,7 @@ class PrivilegeHelper:
         """
         try:
             proc = subprocess.run(["sudo", "-S", "-v", "-p", ""], input=password + "\n",
-                                  capture_output=True, text=True, timeout=30)
+                                  capture_output=True, text=True, timeout=SUDO_TIMEOUT)
         except (OSError, subprocess.SubprocessError):
             return False
         return proc.returncode == 0 and self._sudo_probe()
@@ -3713,7 +3721,7 @@ class App(_TkBase):
         # --- Google Chrome (ChromeOS Flex) ---
         f = self.panels[CARD_CHROME]
         ttk.Label(
-            f, justify="left", wraplength=720,
+            f, justify="left", wraplength=PANEL_WRAP,
             text=_("ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. Google does not publish "
                    "regular ChromeOS for ordinary computers. It needs a USB drive of 16 GB or larger; the "
                    "computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM and 16 GB "
@@ -3739,7 +3747,7 @@ class App(_TkBase):
         # --- Windows 11 ---
         f = self.panels[CARD_WINDOWS]
         ttk.Label(
-            f, justify="left", wraplength=720,
+            f, justify="left", wraplength=PANEL_WRAP,
             text=_("Microsoft only gives out the direct ISO link after you choose the edition and language: "
                    "open the official page, pick 'Windows 11 (multi-edition ISO)', right-click the blue 64-bit "
                    "button, choose 'Copy Link Address' (do NOT click it) and paste the link here.")
@@ -3769,13 +3777,13 @@ class App(_TkBase):
 
         # --- Linux and Other ISO: nothing to download here ---
         ttk.Label(
-            self.panels[CARD_LINUX], justify="left", wraplength=720,
+            self.panels[CARD_LINUX], justify="left", wraplength=PANEL_WRAP,
             text=_("Download the ISO from your distribution's website (Ubuntu, Debian, Fedora, Mint, Arch...), "
                    "then choose the file below. It is written to the drive as it is, so it must be a hybrid "
                    "image; all current Linux ISOs are. Check its SHA-256 below if the site publishes one.")
         ).pack(anchor="nw")
         ttk.Label(
-            self.panels[CARD_OTHER], justify="left", wraplength=720,
+            self.panels[CARD_OTHER], justify="left", wraplength=PANEL_WRAP,
             text=_("Any bootable hybrid ISO or disk image is written to the drive exactly as it is. Choose the "
                    "file below. Images that cannot boot from a USB drive are refused before anything is erased.")
         ).pack(anchor="nw")
@@ -3803,7 +3811,7 @@ class App(_TkBase):
         warn += "\n" + (_("You'll be asked for your administrator (sudo) password to write the drive.") if IS_LINUX
                         else _("Linux, ChromeOS and Other ISO modes on macOS ask for your administrator "
                                "password to write the drive."))
-        ttk.Label(page, text=warn, foreground="#ff453a", justify="left", wraplength=720).pack(
+        ttk.Label(page, text=warn, foreground="#ff453a", justify="left", wraplength=PANEL_WRAP).pack(
             anchor="w", pady=(6, 0))
 
     def _build_image(self, page):
@@ -3814,7 +3822,7 @@ class App(_TkBase):
         self.pick_btn = ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso)
         self.pick_btn.pack(side="left", padx=(8, 0))
         self.iso_label = ttk.Label(page, text=_("No ISO selected yet."), foreground="#4da3ff",
-                                   wraplength=720, justify="left")
+                                   wraplength=PANEL_WRAP, justify="left")
         self.iso_label.pack(anchor="w", pady=(4, 4))
 
         # Integrity check of the selected image; shown once an image is selected (see set_iso).
@@ -4469,7 +4477,7 @@ class App(_TkBase):
         focus again, so the user does not have to remember to click "Refresh"."""
         if _event is not None and _event.widget is not self:
             return  # focus moved between widgets inside the window
-        if self._creating or time.monotonic() - self._last_disk_refresh < 3.0:
+        if self._creating or time.monotonic() - self._last_disk_refresh < AUTO_REFRESH_MIN_SECONDS:
             return
         self.refresh_disks(quiet=True)
 
@@ -4590,7 +4598,7 @@ class App(_TkBase):
 
         def progress(done, total):
             now = time.time()
-            if done < total and now - last[0] < 0.1:
+            if done < total and now - last[0] < SHA_UI_INTERVAL:
                 return  # ~10 UI updates per second is plenty
             last[0] = now
             self.after(0, self._on_iso_sha_progress, job, done, total)
@@ -4846,7 +4854,7 @@ class App(_TkBase):
             return
         finished = done >= total
         # Updates can arrive thousands of times (one per copied file); redraw ~5x/s.
-        if not finished and now - self._create_last_ui < 0.2:
+        if not finished and now - self._create_last_ui < PROGRESS_UI_INTERVAL:
             return
         self._create_last_ui = now
         if str(self.create_progress.cget("mode")) != "determinate":
@@ -4982,7 +4990,7 @@ EXIT_VERIFY_FAILED = 3     # the drive does not match the ISO, or the checksum d
 EXIT_EJECT_FAILED = 4      # written and verified, but the drive could not be ejected
 EXIT_INTERRUPTED = 130     # Ctrl-C
 
-CLI_PROG = "epma-usb-creator"
+CLI_PROG = APP_NAME
 MODE_AUTO = "auto"
 KIND_UNKNOWN = "unknown"
 SHA256_HEX_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -5162,7 +5170,7 @@ class CliPrivilege:
                 with contextlib.suppress(OSError, subprocess.SubprocessError):
                     subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=30, check=False)
+                                   timeout=SUDO_TIMEOUT, check=False)
 
         self._thread = threading.Thread(target=refresh, daemon=True)
         self._thread.start()
