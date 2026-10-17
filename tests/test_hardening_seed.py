@@ -70,6 +70,8 @@ def _scalar(text):
     if text.startswith("[") and text.endswith("]"):
         inner = text[1:-1].strip()
         return [_scalar(p) for p in inner.split(",")] if inner else []
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        return text[1:-1]
     return text
 
 
@@ -323,6 +325,10 @@ class CommonSafetyTests(SeedTestBase):
             self.script = script
             for target in app.SEED_TARGETS:
                 with self.subTest(target=target, size=len(script)):
+                    if target == app.SEED_DEBIAN and script is big:
+                        with self.assertRaises(ValueError):  # too big for one late_command argument
+                            self.seed(target)
+                        continue
                     _label, files = self.seed(target)
                     self.assertTrue(all(len(data) <= MAX_FILE for data in files.values()),
                                     {k: len(v) for k, v in files.items()})
@@ -421,6 +427,42 @@ class ReadmeTests(SeedTestBase):
         for family in ("Fedora", "RHEL", "Rocky", "Alma"):
             self.assertIn(family, text)
 
+    def test_no_firewall_claim_on_fedora_and_no_login_promise(self):
+        for target in app.SEED_TARGETS:
+            with self.subTest(target=target):
+                text = " ".join(self.text(target, "README.txt").split())
+                self.assertNotIn("keep your own login working", text)
+                self.assertNotIn("keeps working", text.replace("cannot promise your login keeps working", ""))
+                self.assertIn("tries not to lock you out", text)
+                self.assertIn("cannot promise your login keeps working", text)
+                self.assertIn("sudo (Debian/Ubuntu) or wheel (Fedora/RHEL)", text)
+                self.assertIn("authorized_keys", text)
+                self.assertIn("[WARN]", text)
+                self.assertIn("50-cloud-init.conf", text)
+        fedora = " ".join(self.text(app.SEED_FEDORA, "README.txt").split())
+        self.assertNotIn("blocks unsolicited incoming", fedora)
+        self.assertNotIn("blocks incoming connections", fedora)
+        self.assertIn("default zone is left exactly as Fedora/RHEL set it", fedora)
+        for target in (app.SEED_UBUNTU, app.SEED_DEBIAN):
+            text = " ".join(self.text(target, "README.txt").split())
+            self.assertIn("ufw firewall blocks incoming connections by default", text)
+            self.assertIn("Docker, libvirt or LXD", text)
+
+    def test_ubuntu_readme_says_every_screen_is_interactive_and_packages_come_later(self):
+        text = " ".join(self.text(app.SEED_UBUNTU, "README.txt").split())
+        self.assertIn("Every installer screen stays interactive", text)
+        self.assertIn("installed by the hardening script on the first boot", text)
+        self.assertNotIn("are fetched then", text)
+
+    def test_debian_readme_mentions_su_without_sudo(self):
+        text = " ".join(self.text(app.SEED_DEBIAN, "README.txt").split())
+        self.assertIn("If sudo is not installed", text)
+        self.assertIn("su -", text)
+        self.assertIn("bash /path/to/harden-linux.sh", text)
+        self.assertIn("sudo bash harden-linux.sh", text)
+        other = " ".join(self.text(app.SEED_FEDORA, "README.txt").split())
+        self.assertNotIn("If sudo is not installed", other)
+
     def test_debian_readme_is_honest_about_detection(self):
         text = " ".join(self.text(app.SEED_DEBIAN, "README.txt").split())
         self.assertIn("does NOT detect this drive by itself", text)
@@ -441,18 +483,18 @@ class UbuntuSeedTests(SeedTestBase):
         tree = self.parsed()
         self.assertEqual(set(tree), {"autoinstall"})
         auto = tree["autoinstall"]
-        self.assertEqual(set(auto), {"version", "interactive-sections", "packages", "late-commands"})
+        self.assertEqual(set(auto), {"version", "interactive-sections", "late-commands"})
         self.assertEqual(auto["version"], "1")
 
-    def test_storage_and_identity_stay_interactive(self):
+    def test_every_screen_stays_interactive(self):
+        # "*" makes EVERY section interactive, storage and identity included: by construction the seed
+        # cannot pick a disk or create an account, and a section nobody thought of cannot be skipped.
         auto = self.parsed()["autoinstall"]
-        sections = auto["interactive-sections"]
-        self.assertIsInstance(sections, list)
-        self.assertIn("storage", sections)
-        self.assertIn("identity", sections)
-        self.assertEqual(len(sections), len(set(sections)))
-        self.assertLessEqual(set(sections), {"locale", "keyboard", "network", "storage", "identity", "timezone"})
-        self.assertNotIn("*", sections)
+        self.assertEqual(auto["interactive-sections"], ["*"])
+        self.assertEqual(app.SEED_UBUNTU_INTERACTIVE, ("*",))
+        self.assertNotIn("storage", auto)
+        self.assertNotIn("identity", auto)
+        self.assertIn('    - "*"\n', self.text(app.SEED_UBUNTU))
 
     def test_no_forbidden_keys_anywhere(self):
         keys = {str(k).lower() for k in walk_keys(self.parsed())}
@@ -468,10 +510,14 @@ class UbuntuSeedTests(SeedTestBase):
         for line in self.text(app.SEED_UBUNTU).split("\n"):
             self.assertIsNone(re.match(r"\s*(storage|identity|users?|ssh|chpasswd|password)\s*:", line), line)
 
-    def test_packages_are_only_what_the_script_needs(self):
+    def test_no_packages_key(self):
+        # A failing `packages:` entry is fatal in Subiquity; the script / first-boot unit installs what is missing.
         auto = self.parsed()["autoinstall"]
-        self.assertEqual(auto["packages"], list(app.SEED_PACKAGES_DEB))
-        self.assertLessEqual(set(auto["packages"]), {"ufw", "auditd", "unattended-upgrades"})
+        self.assertNotIn("packages", auto)
+        text = self.text(app.SEED_UBUNTU)
+        self.assertNotIn("packages", text.replace("no packages", ""))
+        for name in app.SEED_PACKAGES_DEB:
+            self.assertNotIn("    - " + name, text)
 
     def test_late_commands_write_and_run_the_script(self):
         commands = self.parsed()["autoinstall"]["late-commands"]
@@ -487,6 +533,14 @@ class UbuntuSeedTests(SeedTestBase):
         payload = heredoc_payload(write)
         self.assertTrue(all(0 < len(line) <= 76 for line in payload))
         self.assertEqual(decode_b64(payload), FAKE_SCRIPT.encode("utf-8"))
+
+    def test_script_output_is_not_appended_to_its_own_log(self):
+        write, run = self.parsed()["autoinstall"]["late-commands"]
+        invocation = next(line for line in run.split("\n") if "harden-linux.sh --yes --chroot" in line)
+        self.assertNotIn(">>", invocation)
+        self.assertNotIn("2>&1", invocation)
+        # the script itself writes /var/log/epma-hardening.log; the seed only adds one status line
+        self.assertEqual(run.count("epma-hardening.log"), 2)  # "finished" and "failed" lines
 
     def test_a_failing_script_never_fails_the_install(self):
         write, run = self.parsed()["autoinstall"]["late-commands"]
@@ -550,6 +604,12 @@ class FedoraSeedTests(SeedTestBase):
     def test_embedded_base64_is_exactly_the_script(self):
         self.assertEqual(decode_b64(heredoc_payload(self.text(app.SEED_FEDORA))), FAKE_SCRIPT.encode("utf-8"))
 
+    def test_script_output_is_not_appended_to_its_own_log(self):
+        _commands, sections = self.sections()
+        invocation = next(line for line in sections["%post"] if "harden-linux.sh --yes --chroot" in line)
+        self.assertNotIn(">>", invocation)
+        self.assertNotIn("2>&1", invocation)
+
     def test_post_never_fails_the_install(self):
         _commands, sections = self.sections()
         body = [line for line in sections["%post"] if line.strip()]
@@ -586,8 +646,45 @@ class DebianSeedTests(SeedTestBase):
         text = self.text(app.SEED_DEBIAN)
         chunks = re.findall(r"echo ([A-Za-z0-9+/=]+) >> /target/root/harden-linux\.b64", text)
         self.assertTrue(chunks)
-        self.assertTrue(all(len(c) <= 76 for c in chunks))
+        self.assertTrue(all(len(c) <= app.SEED_DEBIAN_B64_WIDTH for c in chunks))
         self.assertEqual(decode_b64(chunks), FAKE_SCRIPT.encode("utf-8"))
+
+    def test_late_command_uses_long_base64_lines(self):
+        self.script = "#!/bin/sh\n" + "# padding padding padding padding padding\n" * 600
+        text = self.text(app.SEED_DEBIAN)
+        chunks = re.findall(r"echo ([A-Za-z0-9+/=]+) >> /target/root/harden-linux\.b64", text)
+        self.assertGreaterEqual(app.SEED_DEBIAN_B64_WIDTH, 4096, "several KB per line")
+        self.assertTrue(all(len(c) == app.SEED_DEBIAN_B64_WIDTH for c in chunks[:-1]))
+        self.assertLess(len(chunks), 10)  # a 25 KB script: a handful of echo lines, not 450
+        self.assertEqual(decode_b64(chunks), self.script.encode("utf-8"))
+
+    def test_script_output_is_not_appended_to_its_own_log(self):
+        late = next(line for line in self.lines() if line.startswith("d-i preseed/late_command"))
+        invocation = late[late.index("in-target /bin/sh -c"):]
+        self.assertIn("/bin/bash /root/harden-linux.sh --yes --chroot &&", invocation)
+        self.assertNotIn("--chroot >>", invocation)
+        self.assertNotIn("2>&1", invocation)
+
+    def test_late_command_too_big_is_refused(self):
+        # ~80 KB of script becomes ~107 KB of base64: above the 100,000 byte limit that keeps the
+        # command far from MAX_ARG_STRLEN (131,072).
+        self.script = "#!/bin/sh\n" + "".join(f"# line {n:05d} ............................................\n" for n in range(1500))
+        self.assertGreater(len(self.script) * 4 // 3, app.SEED_DEBIAN_LATE_MAX)
+        with self.assertRaises(ValueError) as ctx:
+            self.seed(app.SEED_DEBIAN)
+        self.assertIn("late_command", str(ctx.exception))
+        # the other seeds carry the same script without a limit of this kind
+        self.seed(app.SEED_UBUNTU)
+        self.seed(app.SEED_FEDORA)
+
+    def test_late_command_just_under_the_limit_is_accepted(self):
+        # a script whose late_command is close to, but below, the limit
+        per_line = len("# line 00000 ............................................\n")
+        self.script = "#!/bin/sh\n" + "".join(f"# line {n:05d} ............................................\n"
+                                                for n in range(int(app.SEED_DEBIAN_LATE_MAX * 0.70 / per_line)))
+        late = next(line for line in preseed_logical_lines(self.text(app.SEED_DEBIAN))
+                    if line.startswith("d-i preseed/late_command"))
+        self.assertLess(len(late.split(" string ", 1)[1]), app.SEED_DEBIAN_LATE_MAX)
 
     def test_late_command_runs_the_script_and_tolerates_failure(self):
         late = [line for line in self.lines() if line.startswith("d-i preseed/late_command")]
@@ -702,6 +799,11 @@ class RealScriptTests(unittest.TestCase):
                 if target == app.SEED_DEBIAN:
                     chunks = re.findall(r"echo ([A-Za-z0-9+/=]+) >> /target/root/harden-linux\.b64", text)
                     self.assertEqual(decode_b64(chunks), script)
+                    late = next(line for line in preseed_logical_lines(text) if line.startswith("d-i preseed/late_command"))
+                    command = late.split(" string ", 1)[1]
+                    self.assertLess(len(command), app.SEED_DEBIAN_LATE_MAX, "the real late_command must fit with room to spare")
+                    self.assertLess(len(command), 131072)
+                    self.assertLessEqual(len(chunks), 30, "long base64 lines, few echo commands")
                 else:
                     self.assertEqual(decode_b64(heredoc_payload(text)), script)
                 for name in set(files) - {"harden-linux.sh"}:
