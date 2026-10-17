@@ -1,6 +1,6 @@
 # Security Policy
 
-This document describes the security model of **EPMA Windows 11 Creator USB**,
+This document describes the security model of **EPMA USB CREATOR**,
 the protections implemented in the code, and the optional environment variables
 that tune its security behaviour.
 

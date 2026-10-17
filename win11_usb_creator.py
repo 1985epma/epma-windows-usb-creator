@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# EPMA Windows 11 Creator USB
+# EPMA USB CREATOR
 # Copyright (C) 2026 EPMA
 #
 # This program is free software: you can redistribute it and/or modify
@@ -2795,7 +2795,7 @@ class App(_TkBase):
             raise RuntimeError(TK_MISSING_MESSAGE)
         set_macos_app_name(APP_NAME)  # must run before the first window exists
         super().__init__(className=APP_NAME)
-        self.title("EPMA Windows 11 Creator USB")
+        self.title("EPMA USB CREATOR")
         self._window_size = (760, 700)  # grows when content needs more room (see _fit_window)
         self.geometry("{}x{}".format(*self._window_size))
         self.iso_path = tk.StringVar(value="")

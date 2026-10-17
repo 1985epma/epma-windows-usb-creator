@@ -1,4 +1,4 @@
-# EPMA Windows 11 Creator USB — dependências Python
+# EPMA USB CREATOR — dependências Python
 #
 # ESTE PROJETO NÃO TEM DEPENDÊNCIAS DE TERCEIROS. Este arquivo existe
 # deliberadamente vazio para tornar esse fato explícito e verificável por

@@ -1,4 +1,4 @@
-# Homebrew formula for EPMA Windows 11 Creator USB
+# Homebrew formula for EPMA USB CREATOR
 #
 # Homebrew only installs formulae from a tap, so this file is published to
 # https://github.com/1985epma/homebrew-tap. Users install with:

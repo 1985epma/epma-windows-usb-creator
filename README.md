@@ -1,4 +1,4 @@
-# EPMA Windows 11 Creator USB
+# EPMA USB CREATOR
 
 **English** · [Português](README.pt-BR.md)
 

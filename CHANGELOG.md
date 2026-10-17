@@ -65,6 +65,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   sudo's credential timestamp (with an automatic fallback that asks again).
 - Linux partitioning waits for `udevadm settle` instead of a fixed `sleep 2`, unmounts
   partitions the desktop auto-mounted, and uses `oflag=direct` when the image size allows it.
+- The product and window title is now **EPMA USB CREATOR** (it was "EPMA Windows 11 Creator USB"; the tool also writes Linux images).
 - The application name shown in the macOS menu bar and Dock is now `epma-usb-creator`
   instead of `Python`; the Linux window class matches.
 - Minimum supported Python is now 3.10 (CI covers 3.10 through 3.14).

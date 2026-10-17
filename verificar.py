@@ -69,7 +69,7 @@ CONFERENCIAS = [
 LARGURA = 68
 print()
 print("=" * LARGURA)
-print("  VERIFICAÇÃO LOCAL — EPMA Windows 11 Creator USB")
+print("  VERIFICAÇÃO LOCAL — EPMA USB CREATOR")
 print("=" * LARGURA)
 print("  As mesmas conferências que a esteira automática do GitHub faz.")
 print("  Nenhuma delas toca em disco nem pede senha de administrador.")
