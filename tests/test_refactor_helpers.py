@@ -261,5 +261,41 @@ class DiskEntryTests(unittest.TestCase):
         self.assertIsNone(entry["volumes"])
 
 
+class EtaTextTests(unittest.TestCase):
+    def test_eta_text_minutes_and_seconds(self):
+        self.assertEqual(app._eta_text(125, 1.0), "~2m05s left")
+        self.assertEqual(app._eta_text(0, 1.0), "~0m00s left")
+        self.assertEqual(app._eta_text(3600, 1.0), "~60m00s left")
+
+    def test_eta_text_is_empty_when_nothing_can_be_estimated(self):
+        for remaining, speed in ((10, 0), (10, None), (10, -1), (None, 5), (-1, 5), (float("inf"), 5)):
+            self.assertEqual(app._eta_text(remaining, speed), "", (remaining, speed))
+
+    def test_translate_flag_picks_the_language(self):
+        with mock.patch.object(app, "ACTIVE_LANGUAGE", app.LANG_PT):
+            self.assertEqual(app._eta_text(125, 1.0), "faltam ~2m05s")
+            self.assertEqual(app._eta_text(125, 1.0, translate=False), "~2m05s left")  # the CLI stays English
+
+    def test_eta_remaining_from_done_total_and_speed(self):
+        self.assertEqual(app._eta_remaining(0, 1000, 10.0), "~1m40s left")
+        self.assertEqual(app._eta_remaining(1000, 1000, 10.0), "~0m00s left")
+        self.assertEqual(app._eta_remaining(0, 1000, 0), "")
+        self.assertEqual(app._eta_remaining(0, 1000, None), "")
+
+    def test_rate_tail(self):
+        self.assertEqual(app._rate_tail(0, 2 * 1024 ** 2, 1024 ** 2), " — 1.0 MB/s — ~0m02s left")
+        self.assertEqual(app._rate_tail(0, 100, 0), "")
+        self.assertEqual(app._rate_tail(0, 100, None), "")
+
+    def test_cli_progress_line_uses_the_same_wording(self):
+        clock = [0.0]
+        progress = app.CliProgress(stream=io.StringIO(), clock=lambda: clock[0])
+        progress._text, progress._base, progress._stage_start = "Writing", 0, 0.0
+        line = progress._format(1024 ** 2, 3 * 1024 ** 2, "Writing", 2.0)
+        self.assertEqual(line, "Writing   33.3%  1.0 MB / 3.0 MB  512.0 KB/s  ~0m04s left")
+        with mock.patch.object(app, "ACTIVE_LANGUAGE", app.LANG_PT):
+            self.assertTrue(progress._format(1024 ** 2, 3 * 1024 ** 2, "Writing", 2.0).endswith("~0m04s left"))
+
+
 if __name__ == "__main__":
     unittest.main()

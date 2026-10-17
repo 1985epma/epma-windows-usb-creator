@@ -567,12 +567,13 @@ def _silent_rmdir(*paths):
             os.rmdir(path)
 
 
-def _eta_text(remaining_seconds, speed):
+def _eta_text(remaining_seconds, speed, translate=True):
     """'~2m05s left' for the progress labels; '' when the speed is unknown (nothing to estimate from).
 
-    One helper for every GUI progress label, so a long wait reads the same everywhere (minutes and
-    seconds, never a raw count of seconds).
+    One helper for every progress label, so a long wait reads the same everywhere (minutes and
+    seconds, never a raw count of seconds). `translate=False` (the command line) keeps it English.
     """
+    _ = _text_for(translate)
     try:
         if not speed or speed <= 0 or remaining_seconds is None or remaining_seconds < 0:
             return ""
@@ -580,6 +581,20 @@ def _eta_text(remaining_seconds, speed):
     except (TypeError, ValueError, OverflowError):
         return ""
     return _("~{minutes}m{seconds:02d}s left").format(minutes=seconds // 60, seconds=seconds % 60)
+
+
+def _eta_remaining(done, total, speed, translate=True):
+    """The time left to move `total` - `done` bytes at `speed` bytes per second ('' when the speed is unknown)."""
+    if not speed or speed <= 0:
+        return ""
+    return _eta_text((total - done) / speed, speed, translate)
+
+
+def _rate_tail(done, total, speed):
+    """' — 12.0 MB/s — ~2m05s left' for a progress label; '' when the speed is unknown."""
+    if not speed or speed <= 0:
+        return ""
+    return f" — {human_size(speed)}/s — {_eta_remaining(done, total, speed)}"
 
 
 # ============================================================
@@ -4059,12 +4074,8 @@ class App(_TkBase):
         if total:
             pct = done / total * 100
             self.flex_progress.config(mode="determinate", value=pct)
-            tail = ""
-            if speed and speed > 0:
-                eta = (total - done) / speed
-                tail = f" — {human_size(speed)}/s — {_eta_text(eta, speed)}"
             self.flex_progress_label.config(
-                text=f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
+                text=f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{_rate_tail(done, total, speed)}")
         else:
             self.flex_progress.config(mode="indeterminate")
             self.flex_progress_label.config(text=f"{stage}  {human_size(done)}")
@@ -4379,7 +4390,7 @@ class App(_TkBase):
         if total:
             pct = downloaded / total * 100
             self.progress.config(mode="determinate", value=pct)
-            eta = _eta_text((total - downloaded) / speed, speed) if speed > 0 else ""
+            eta = _eta_remaining(downloaded, total, speed)
             self.progress_label.config(
                 text=_("{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}").format(
                     done=human_size(downloaded), total=human_size(total), pct=pct,
@@ -4899,10 +4910,7 @@ class App(_TkBase):
             return
         elapsed = max(now - self._create_started, 0.001)
         speed = (done - self._create_stage_base) / elapsed
-        if speed > 0:
-            tail = f" — {human_size(speed)}/s — {_eta_text((total - done) / speed, speed)}"
-        else:
-            tail = _(" — calculating...")
+        tail = _rate_tail(done, total, speed) or _(" — calculating...")
         self.create_progress_label.config(
             text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
 
@@ -5094,8 +5102,7 @@ class CliProgress:
         elapsed = now - self._stage_start
         if elapsed >= 1.0 and done > self._base:
             speed = (done - self._base) / elapsed
-            eta = int((total - done) / speed) if speed > 0 else 0
-            line += f"  {human_size(speed)}/s  ~{eta // 60}m{eta % 60:02d}s left"
+            line += f"  {human_size(speed)}/s  {_eta_remaining(done, total, speed, translate=False)}"
         return line
 
     def __call__(self, done, total, text):
