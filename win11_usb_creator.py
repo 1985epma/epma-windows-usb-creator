@@ -142,6 +142,12 @@ ALL_MODES = (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS)
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
 MODE_AUTO = "auto"  # command line only: take the mode from what detect_iso_kind() finds in the image
+MODE_SEED = "seed"  # a drive that carries only the hardening seed files (no operating system image)
+HARDENING_NONE = "none"
+HARDENING_BASELINE = "baseline"
+HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
+SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -2984,6 +2990,470 @@ def get_missing_dependencies(mode=MODE_WINDOWS):
     if IS_MAC:
         return [] if shutil.which("wimlib-imagex") else ["wimlib-imagex"]
     return [t for t in LINUX_REQUIRED_TOOLS if not shutil.which(t)]
+
+
+# ===== hardening: windows content =====
+# What the "Hardened setup" option adds to the Windows 11 install media. Everything here is PURE: text in, bytes
+# out. Nothing touches a drive and nothing is executed on this computer. The files are plain ASCII so no
+# encoding surprise can reach the target PC.
+#
+# Honest naming: these are "recommended settings inspired by common baselines", NOT a compliance profile.
+WINDOWS_HARDENING_LOG = "%windir%\\Temp\\epma-hardening.log"  # where SetupComplete.cmd and harden.ps1 write
+WINDOWS_HARDENING_AUTOUNATTEND = "autounattend.xml"
+WINDOWS_HARDENING_SCRIPTS_DIR = "sources/$OEM$/$$/Setup/Scripts"  # `$$` is copied to %windir% by Windows Setup
+WINDOWS_HARDENING_CMD = WINDOWS_HARDENING_SCRIPTS_DIR + "/SetupComplete.cmd"
+WINDOWS_HARDENING_PS1 = WINDOWS_HARDENING_SCRIPTS_DIR + "/harden.ps1"
+
+# One row per setting: (id, short text, risk note). The id is also the marker in harden.ps1 ("# setting: <id>");
+# the script header and describe_hardening_windows() are generated from these rows, and a test checks that every
+# row has a code block and every code block has a row. The baseline is kept SMALL: anything that commonly
+# breaks home or office use is left out (see WINDOWS_HARDENING_NOT_CHANGED).
+WINDOWS_HARDENING_SETTINGS = (
+    ("smb1", "Turn off SMBv1 (obsolete file-sharing protocol)",
+     "Very old NAS boxes, scanners or Windows XP-era PCs that only speak SMBv1 can no longer connect."),
+    ("llmnr", "Turn off LLMNR name lookups",
+     "Single-word names that only resolve through LLMNR stop resolving on networks without proper DNS."),
+    ("autorun", "Turn off AutoRun and AutoPlay on every drive type",
+     "Inserted USB sticks and discs no longer start installers or show the AutoPlay prompt; open them from File Explorer."),
+    ("firewall", "Windows Firewall on for all network profiles, inbound blocked unless a rule allows it",
+     "A program that must accept incoming connections (game server, file sharing, remote tools) needs an allow rule."),
+    ("defender_cloud", "Defender: block potentially unwanted apps and turn cloud protection on",
+     "Some bundled freeware may be flagged, and cloud protection sends file metadata to Microsoft. Fails harmlessly when another antivirus is active."),
+    ("asr_lsass", "Defender attack surface rule in Block mode: no credential stealing from LSASS",
+     "Rarely, security or backup tools that read LSASS memory are blocked and Defender shows a notification."),
+    ("asr_audit", "Defender attack surface rules in Audit mode (log only): email executable content, Office child processes, obfuscated scripts, script-launched downloads",
+     "Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block."),
+    ("wdigest", "Do not keep plain-text WDigest credentials in memory",
+     "Only legacy digest authentication against very old web servers is affected."),
+    ("ps_logging", "PowerShell script block logging",
+     "Adds events to the PowerShell log; secrets typed inside a script would be logged as well."),
+    ("ps2", "Remove the PowerShell 2.0 optional feature",
+     "Very old scripts or tools that insist on running with -Version 2 stop working."),
+    ("remote_assist", "Turn off Remote Assistance invitations",
+     "Old-style Remote Assistance invitations stop working; Quick Assist and Remote Desktop are not changed."),
+    ("audit", "Basic audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation",
+     "The Security event log fills faster; Windows overwrites the oldest events when it is full."),
+    ("uac", "Keep User Account Control switched on",
+     "Only acts when UAC was switched off; takes effect after the next restart."),
+)
+
+# Deliberately NOT done, with the reason (shown in the script header and available to the README / help text).
+WINDOWS_HARDENING_NOT_CHANGED = (
+    ("bitlocker", "BitLocker is not turned on automatically",
+     "It needs a TPM, a choice of where the recovery key goes and the owner's consent; a wrong default can lock someone out of their own data."),
+    ("ntlm", "NTLM authentication levels are left as they are",
+     "Stricter levels can break access to older file shares, printers and NAS devices without any warning."),
+    ("accounts_disks", "Accounts, passwords, disks, language, licence and product key",
+     "Windows Setup stays fully interactive; the answer file never touches them."),
+)
+
+
+def _windows_hardening_check(profile):
+    """Validate the profile name; True when there is something to add (anything but HARDENING_NONE)."""
+    if profile not in HARDENING_PROFILES:
+        raise ValueError(f"unknown hardening profile: {profile!r}")
+    return profile != HARDENING_NONE
+
+
+def describe_hardening_windows(profile):
+    """Human-readable lines (English, ASCII) saying what the Windows hardening changes and what it risks.
+
+    One line per setting: "<text> -- risk: <note>". Empty for HARDENING_NONE; unknown profile -> ValueError.
+    """
+    if not _windows_hardening_check(profile):
+        return []
+    return [f"{text} -- risk: {risk}" for _sid, text, risk in WINDOWS_HARDENING_SETTINGS]
+
+
+def _windows_autounattend_xml():
+    # A deliberately tiny answer file. Windows Setup stays interactive: no disk selection, no licence
+    # acceptance, no keys, no accounts, no language or region forcing, no requirement bypasses and no
+    # shutdown or seal action. The only thing it sets is the most protective privacy choice of the first-run
+    # screens that still lets the person create an account normally.
+    # ProtectYourPC = 1 means "recommended": automatic updates and SmartScreen stay ON (the value 3 would turn
+    # automatic updates OFF, so it must never be used). Recent Windows 11 builds may ignore the element, which
+    # is harmless. The component is listed for both processor families because Setup ignores the one that does
+    # not match the media; the SetupComplete script under sources does the real work.
+    component = (
+        '    <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="{arch}"'
+        ' publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"'
+        ' xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"'
+        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
+        "      <OOBE>\n"
+        "        <ProtectYourPC>1</ProtectYourPC>\n"
+        "      </OOBE>\n"
+        "    </component>\n"
+    )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        "<!-- EPMA USB CREATOR: optional hardened setup (recommended settings). Setup stays interactive. -->\n"
+        "<!-- Edit or delete this file freely; the media installs fine without it. -->\n"
+        '<unattend xmlns="urn:schemas-microsoft-com:unattend">\n'
+        '  <settings pass="oobeSystem">\n'
+        + component.format(arch="amd64")
+        + component.format(arch="arm64")
+        + "  </settings>\n"
+        "</unattend>\n"
+    ).encode("utf-8")
+
+
+def _windows_setupcomplete_cmd():
+    # SetupComplete.cmd runs once as SYSTEM at the very end of Setup (before the first sign-in), from
+    # %windir%\Setup\Scripts. It must never make Setup fail, so every path ends in `exit /b 0`. No parenthesised
+    # blocks on purpose: %errorlevel% inside one is expanded too early.
+    lines = (
+        "@echo off",
+        "rem EPMA USB CREATOR - optional hardened setup. Runs harden.ps1 once, logs, never fails the setup.",
+        'set "EPMA_LOG=' + WINDOWS_HARDENING_LOG + '"',
+        'echo [%date% %time%] SetupComplete.cmd: starting >> "%EPMA_LOG%"',
+        'if not exist "%~dp0harden.ps1" goto missing',
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1',
+        'echo [%date% %time%] SetupComplete.cmd: harden.ps1 exit code %errorlevel% (ignored) >> "%EPMA_LOG%"',
+        "goto done",
+        ":missing",
+        'echo [SKIP] harden.ps1 not found next to SetupComplete.cmd >> "%EPMA_LOG%"',
+        ":done",
+        "exit /b 0",
+    )
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+# PowerShell code for each setting. A block runs inside its own try/catch, logs exactly one line
+# ([OK], [SKIP] or [FAIL]), and can run again without changing anything. `@WHAT@` is replaced by the setting's
+# text from WINDOWS_HARDENING_SETTINGS. Only PowerShell 5.1 syntax; no network access, no downloads.
+_WINDOWS_PS_CODE = {
+    "smb1": r"""
+try {
+    $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 0
+    $note = 'server side already off'
+    if ($c1) { $note = 'server side turned off' }
+    $feature = Get-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -ErrorAction SilentlyContinue
+    if ($null -eq $feature) {
+        $note = $note + '; optional feature not present'
+    } elseif ($feature.State -eq 'Enabled') {
+        Disable-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -NoRestart | Out-Null
+        $note = $note + '; optional feature removed'
+    } else {
+        $note = $note + '; optional feature already off'
+    }
+    Write-Result 'OK' '@WHAT@' $note
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "llmnr": r"""
+try {
+    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name 'EnableMulticast' -Value 0
+    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "autorun": r"""
+try {
+    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+    $c1 = Set-RegDword -Path $key -Name 'NoDriveTypeAutoRun' -Value 255
+    $c2 = Set-RegDword -Path $key -Name 'NoAutorun' -Value 1
+    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "firewall": r"""
+try {
+    $profiles = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
+    $todo = @($profiles | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
+    if ($todo.Count -eq 0) {
+        Write-Result 'OK' '@WHAT@' 'already set'
+    } else {
+        Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultInboundAction Block
+        Write-Result 'OK' '@WHAT@' ('changed on ' + $todo.Count + ' profile(s)')
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "defender_cloud": r"""
+try {
+    if (-not (Get-Command Set-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $pref = Get-MpPreference
+        $changed = @()
+        if ([int]$pref.PUAProtection -ne 1) {
+            Set-MpPreference -PUAProtection Enabled
+            $changed += 'PUA protection'
+        }
+        if ([int]$pref.MAPSReporting -ne 2) {
+            Set-MpPreference -MAPSReporting Advanced
+            $changed += 'cloud protection'
+        }
+        if ($changed.Count -eq 0) {
+            Write-Result 'OK' '@WHAT@' 'already set'
+        } else {
+            Write-Result 'OK' '@WHAT@' ('turned on: ' + ($changed -join ', '))
+        }
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "asr_lsass": r"""
+try {
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $r = Set-AsrRule -Id '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2' -Action 'Enabled'
+        Write-Result 'OK' '@WHAT@' $r
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "asr_audit": r"""
+try {
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $rules = @(
+            'be9ba2d9-53ea-4cdc-84e5-9b1eeee46550',
+            'd4f940ab-401b-4efc-aadc-ad5f3c50688a',
+            '5beb7efe-fd9a-4556-801d-275e5ffc04cc',
+            'd3e037e1-3eb8-44c8-a917-57927947596d'
+        )
+        $applied = 0
+        foreach ($id in $rules) {
+            $r = Set-AsrRule -Id $id -Action 'AuditMode'
+            if ($r -eq 'changed') { $applied++ }
+        }
+        Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "wdigest": r"""
+try {
+    $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name 'UseLogonCredential' -Value 0
+    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "ps_logging": r"""
+try {
+    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name 'EnableScriptBlockLogging' -Value 1
+    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "ps2": r"""
+try {
+    $found = $false
+    $removed = $false
+    foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
+        $feature = Get-WindowsOptionalFeature -Online -FeatureName $name -ErrorAction SilentlyContinue
+        if ($null -ne $feature) {
+            $found = $true
+            if ($feature.State -eq 'Enabled') {
+                Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
+                $removed = $true
+            }
+        }
+    }
+    if (-not $found) {
+        Write-Result 'SKIP' '@WHAT@' 'feature not present on this Windows build'
+    } elseif ($removed) {
+        Write-Result 'OK' '@WHAT@' 'feature removed'
+    } else {
+        Write-Result 'OK' '@WHAT@' 'already off'
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "remote_assist": r"""
+try {
+    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
+    $c1 = Set-RegDword -Path $key -Name 'fAllowToGetHelp' -Value 0
+    $c2 = Set-RegDword -Path $key -Name 'fAllowFullControl' -Value 0
+    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "audit": r"""
+try {
+    # Subcategories are addressed by GUID because their names are translated on non-English Windows.
+    # Logon, Account Lockout, User Account Management, Security Group Management, Audit Policy Change
+    # (success and failure); Process Creation (success only, no command-line capture).
+    $items = @(
+        @('{0CCE9215-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
+        @('{0CCE9217-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
+        @('{0CCE9235-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
+        @('{0CCE9237-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
+        @('{0CCE922F-69AE-11D9-BED3-505054503030}', '/success:enable', '/failure:enable'),
+        @('{0CCE922B-69AE-11D9-BED3-505054503030}', '/success:enable', '')
+    )
+    $bad = 0
+    foreach ($item in $items) {
+        if ($item[2] -eq '') {
+            & auditpol.exe /set ('/subcategory:' + $item[0]) $item[1] | Out-Null
+        } else {
+            & auditpol.exe /set ('/subcategory:' + $item[0]) $item[1] $item[2] | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) { $bad++ }
+    }
+    if ($bad -gt 0) {
+        Write-Result 'FAIL' '@WHAT@' ('auditpol failed for ' + $bad + ' of ' + $items.Count + ' subcategories')
+    } else {
+        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories set')
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "uac": r"""
+try {
+    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
+    $cur = (Get-ItemProperty -LiteralPath $key -Name 'EnableLUA' -ErrorAction SilentlyContinue).EnableLUA
+    if (($null -ne $cur) -and ([int]$cur -eq 0)) {
+        Set-RegDword -Path $key -Name 'EnableLUA' -Value 1 | Out-Null
+        Write-Result 'OK' '@WHAT@' 'was off, turned on (effective after the next restart)'
+    } else {
+        Write-Result 'OK' '@WHAT@' 'already on, left unchanged'
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+}
+
+_WINDOWS_PS_HELPERS = r"""
+$ErrorActionPreference = 'Stop'
+$script:CountOk = 0
+$script:CountSkip = 0
+$script:CountFail = 0
+
+# One log line per setting: [OK], [SKIP] or [FAIL], what it was, and why. SetupComplete.cmd appends the
+# output of this script to the log file, so nothing here opens the log itself.
+function Write-Result {
+    param([string]$Status, [string]$What, [string]$Why)
+    if ($Status -eq 'OK') { $script:CountOk++ }
+    elseif ($Status -eq 'SKIP') { $script:CountSkip++ }
+    else { $script:CountFail++ }
+    Write-Host ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
+}
+
+function Get-ChangeText {
+    param([bool]$Changed)
+    if ($Changed) { return 'changed' }
+    return 'already set'
+}
+
+# Writes one DWORD only when it differs. Returns $true when it changed something.
+function Set-RegDword {
+    param([string]$Path, [string]$Name, [int]$Value)
+    if (-not (Test-Path -LiteralPath $Path)) {
+        New-Item -Path $Path -Force | Out-Null
+    }
+    $current = $null
+    $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+    if ($null -ne $item) { $current = $item.$Name }
+    if (($null -ne $current) -and ([int]$current -eq $Value)) { return $false }
+    New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+    return $true
+}
+
+# Attack surface reduction rule: 'Enabled' (Block) or 'AuditMode'. A rule that is already Block or Warn is
+# never weakened to Audit. Returns 'changed' or 'already set'.
+function Set-AsrRule {
+    param([string]$Id, [string]$Action)
+    $pref = Get-MpPreference
+    $ids = @()
+    $actions = @()
+    if ($null -ne $pref.AttackSurfaceReductionRules_Ids) {
+        $ids = @($pref.AttackSurfaceReductionRules_Ids)
+        $actions = @($pref.AttackSurfaceReductionRules_Actions)
+    }
+    $wanted = 2
+    if ($Action -eq 'Enabled') { $wanted = 1 }
+    for ($i = 0; $i -lt $ids.Count; $i++) {
+        if ([string]$ids[$i] -ieq $Id) {
+            $current = [int]$actions[$i]
+            if ($current -eq $wanted) { return 'already set' }
+            if (($wanted -eq 2) -and (($current -eq 1) -or ($current -eq 6))) { return 'already set' }
+        }
+    }
+    if ($wanted -eq 1) {
+        Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions Enabled
+    } else {
+        Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions AuditMode
+    }
+    return 'changed'
+}
+"""
+
+
+def _windows_ps_comment_lines(rows):
+    out = []
+    for sid, text, note in rows:
+        out.append(f"#   {sid}: {text}")
+        out.append(f"#       risk/why: {note}")
+    return out
+
+
+def _windows_harden_ps1():
+    if [s[0] for s in WINDOWS_HARDENING_SETTINGS] != list(_WINDOWS_PS_CODE):
+        raise RuntimeError("PowerShell code blocks and hardening settings do not match")
+    head = [
+        "# EPMA USB CREATOR - optional hardened setup for Windows 11 (recommended settings inspired by common",
+        "# baselines; this is NOT a compliance profile). Runs once from SetupComplete.cmd as SYSTEM, can be run",
+        "# again at any time and changes nothing that is already set. PowerShell 5.1; no network access, no",
+        "# downloads, no extra tools (auditpol.exe is part of Windows). Every setting has its own error handler",
+        "# and writes one line: [OK], [SKIP] or [FAIL], what it is, and why. Output goes to",
+        "# " + WINDOWS_HARDENING_LOG + " (appended by SetupComplete.cmd). The exit code is always 0.",
+        "#",
+        "# Settings, each with the risk it carries:",
+        *_windows_ps_comment_lines(WINDOWS_HARDENING_SETTINGS),
+        "#",
+        "# Deliberately NOT changed:",
+        *_windows_ps_comment_lines(WINDOWS_HARDENING_NOT_CHANGED),
+    ]
+    body = []
+    for sid, text, _risk in WINDOWS_HARDENING_SETTINGS:
+        code = _WINDOWS_PS_CODE[sid].replace("@WHAT@", text.replace("'", "''")).strip("\n")
+        body.append(f"\n# setting: {sid}\n{code}\n")
+    tail = (
+        "\nWrite-Host ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, '"
+        " + $script:CountFail + ' failed')\n"
+        "exit 0\n"
+    )
+    text = (
+        "\n".join(head) + "\n"
+        + _WINDOWS_PS_HELPERS
+        + "\nWrite-Host ('[START] EPMA hardening ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))\n"
+        + "".join(body) + tail
+    )
+    return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("ascii")  # BOM: PowerShell 5.1 reads ANSI without it
+
+
+def hardening_files_windows(profile):
+    """The files the Windows 11 install media gets for the hardened setup: {relative posix path: bytes}.
+
+    autounattend.xml (tiny, Setup stays interactive), sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd and
+    harden.ps1 (applied once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log).
+    Empty for HARDENING_NONE; an unknown profile raises ValueError.
+    """
+    if not _windows_hardening_check(profile):
+        return {}
+    return {
+        WINDOWS_HARDENING_AUTOUNATTEND: _windows_autounattend_xml(),
+        WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(),
+        WINDOWS_HARDENING_PS1: _windows_harden_ps1(),
+    }
+# ===== end hardening: windows content =====
 
 
 # ============================================================
