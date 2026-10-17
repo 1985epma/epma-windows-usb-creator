@@ -37,7 +37,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   and volumes with used space. **High-risk drives** (over 256 GB, lots of data, backup-like
   names, unreadable contents) additionally require typing the disk identifier.
 - **Stronger target re-check:** the serial number / model / UUID must match, not only the size.
-- **SHA-256 of an existing ISO** (new panel on tab 1; accepts a bare hash or a `SHA256SUMS` line).
+- **SHA-256 of an existing ISO** (a panel under the selected file; accepts a bare hash or a `SHA256SUMS` line).
 - **ISO type detected from its contents** (ISO 9660 / UDF markers) instead of the file name.
 - **Command line mode:** `list`, `detect`, `sha256`, `write` (`--dry-run`, `--yes`, `--json`,
   `--no-eject`), `--version`, documented exit codes. The engine now imports without Tkinter.
@@ -46,7 +46,8 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   kept when the network drops.
 - **Audit log:** rotation (1 MB × 5, files stay `0600`) and the SHA-256 of the ISO that was
   written.
-- **ChromeOS Flex** (Google's free ChromeOS for PCs and Macs): a new tab downloads the official image from `dl.google.com` (HTTPS, resumable), extracts it from the ZIP with a hardened routine, and the same tab then writes it: it lists the USB drives and has its own "Create Bootable ChromeOS Flex USB" button, Cancel and progress bar (kept in step with tab 2). A third image type writes it to the USB drive byte for byte, with the same read-back verification and eject. The image is recognised by its GPT partition names. `fetch-chromeos` and `write --mode chromeos` on the command line. Google asks for a USB drive of 16 GB or larger, which is checked and warned about.
+- **ChromeOS Flex** (Google's free ChromeOS for PCs and Macs): the *Google Chrome* card downloads the official image from `dl.google.com` (HTTPS, resumable) and extracts it from the ZIP with a hardened routine. It is then written byte for byte to the USB drive, like a Linux ISO, with the same read-back verification and eject (a real 9.5 GB write was verified end to end). The image is recognised by its GPT partition names. `fetch-chromeos` and `write --mode chromeos` on the command line. Google asks for a USB drive of 16 GB or larger, which is checked and warned about.
+- **One-page window:** four cards (*Google Chrome*, *Windows 11*, *Linux*, *Other ISO*) replace the three tabs; below them the source panel of the chosen card, the USB drive list, the image file (with the SHA-256 check), and a large Create button with progress and log. The card is picked from the image contents, a mismatching file is questioned before anything is erased, and the window keeps one height whichever card is chosen.
 - **Help menu** with built-in documentation (F1): quick starts for Windows and Linux ISOs, both tabs, safety, verification and eject, command line, troubleshooting, files and settings, plus About, the audit log folder and the project page. Tests check it against the code (commands, exit codes, thresholds, messages).
 - Unit test suite (`tests/`, standard library only) and a per-distribution package probe.
 - Release engineering: end-to-end tests against loop devices (Linux CI), ShellCheck over the

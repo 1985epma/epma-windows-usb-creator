@@ -100,13 +100,13 @@ class MatchesTheCodeTests(unittest.TestCase):
         self.assertIn(app.audit_log_path(), sections()["Files, logs and settings"])
 
     def test_risk_thresholds_match_the_constants(self):
-        text = sections()["Tab 2: Create USB drive"]
+        text = sections()["The drive and the Create button"]
         self.assertIn(f"larger than {app.LARGE_DISK_BYTES // 1024 ** 3} GB", text)
         self.assertIn(f"{app.SUBSTANTIAL_USED_BYTES // 1024 ** 3} GB or more in use", text)
         self.assertIn(f"{app.MANY_VOLUMES} or more volumes", text)
 
     def test_trusted_download_hosts_are_listed(self):
-        text = sections()["Tab 1: Download ISO"]
+        text = sections()["Getting the image"]
         for host in app.DEFAULT_TRUSTED_ISO_HOSTS:
             with self.subTest(host=host):
                 self.assertIn(host, text)
@@ -155,17 +155,34 @@ class ChromeOSSectionTests(unittest.TestCase):
 
     def test_the_overview_and_command_line_mention_it(self):
         self.assertIn("ChromeOS Flex", sections()["Overview"])
-        self.assertIn("Tab 3", sections()["Overview"])
+        self.assertIn("Google Chrome", sections()["Overview"])
         self.assertRegex(sections()["Command line"], r"(?m)^• fetch-chromeos ")
         self.assertIn("--mode auto|windows|linux|chromeos", sections()["Command line"])
 
     def test_the_ui_strings_it_quotes_exist(self):
         import inspect
         source = inspect.getsource(app)
-        for label in ("Download ChromeOS Flex from Google", "Select existing image...",
-                      "Create Bootable USB Drive", "ChromeOS Flex (disk image, written directly)"):
+        for label in ("Download ChromeOS Flex from Google", "Select existing ISO file...",
+                      "Create Bootable USB Drive", "Refresh USB drives list", "Install missing dependencies",
+                      "Calculate SHA-256", "Open Microsoft's official page"):
             with self.subTest(label=label):
                 self.assertIn(label, source)
+
+    def test_the_cards_it_names_exist_in_the_window(self):
+        import inspect
+        source = inspect.getsource(app.App._build_cards)
+        for card in ("Google Chrome", "Windows 11", "Linux", "Other ISO"):
+            with self.subTest(card=card):
+                self.assertIn(f'_("{card}")', source)
+                self.assertIn(f'"{card}"', sections()["Overview"] + sections()["Quick start: Windows 11"]
+                              + sections()["Quick start: Linux and other ISOs"] + sections()["ChromeOS Flex"]
+                              + sections()["The drive and the Create button"])
+
+    def test_no_section_still_talks_about_tabs(self):
+        import re
+        for title, body in app.help_sections():
+            with self.subTest(section=title):
+                self.assertNotRegex(body, r"(?i)\btab [0-9]\b|\bthe tab\b|\bthat tab\b|\bon tab\b")
 
 
 class AboutAndProjectTests(unittest.TestCase):

@@ -40,11 +40,11 @@ import win11_usb_creator as app  # noqa: E402
 # esquecido, o programa quebra em tempo de execução — e este teste pega isso.
 WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn", "cancel_btn",
-    "progress", "progress_label", "iso_label", "iso_label2",
+    "progress", "progress_label", "iso_label",
     "dep_label", "install_deps_btn", "disk_combo",
-    "nb", "tab3", "flex_download_btn", "flex_cancel_btn", "flex_progress", "flex_progress_label",
-    "flex_status_label", "flex_disk_combo", "flex_create_btn", "flex_cancel_create_btn",
-    "flex_write_progress", "flex_write_label", "mode_var", "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
+    "flex_download_btn", "flex_cancel_btn", "flex_progress", "flex_progress_label",
+    "card_var", "cards", "panels", "mode_var",
+    "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
     "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
 ]
 
@@ -53,9 +53,10 @@ METODOS_OBRIGATORIOS = [
     "refresh_disks", "selected_disk", "update_create_button_state",
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
-    "install_dependencies", "open_ms_page", "on_mode_change",
-    "start_flex_download", "start_flex_write", "_on_disk_selected", "cancel_flex", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
-    "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "install_dependencies", "open_ms_page", "on_mode_change", "select_card", "_image_matches_choice",
+    "start_flex_download", "cancel_flex", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
+    "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about",
+    "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
 ]
 
@@ -201,23 +202,26 @@ try:
         falhas.append("progresso da criação")
 
     try:
-        # aba ChromeOS Flex: barra de progresso, erro e troca do tipo de imagem para ChromeOS
+        # cartões do topo: cada um mostra o seu painel e define como o pendrive é gravado
+        esperado = {app.CARD_CHROME: app.MODE_CHROMEOS, app.CARD_WINDOWS: app.MODE_WINDOWS,
+                    app.CARD_LINUX: app.MODE_LINUX, app.CARD_OTHER: app.MODE_LINUX}
+        for chave, modo in esperado.items():
+            janela.select_card(chave)
+            janela.update_idletasks()
+            assert janela.mode_var.get() == modo, f"o cartão {chave} deveria usar o modo {modo}"
+            mostrados = [k for k, painel in janela.panels.items() if painel.winfo_manager() == "grid"]
+            assert mostrados == [chave], f"só o painel de {chave} deveria aparecer (aparecem: {mostrados})"
+        # painel do ChromeOS Flex: barra de progresso e erro
         janela._on_flex_progress(500, 1000, 250.0, "Downloading...")
         janela._on_flex_progress(500, 0, 0, "Extracting...")
         janela._on_flex_error("mensagem de erro de exemplo")          # messagebox silencioso
-        janela.mode_var.set(app.MODE_CHROMEOS)
-        janela.on_mode_change()
-        # os controles de gravação da aba 2 e da aba ChromeOS Flex mostram sempre o mesmo estado
-        janela._reset_create_progress()   # zera o intervalo mínimo entre atualizações da barra
-        janela._on_create_progress(500, 1000, "Writing the image...")
-        assert float(janela.flex_write_progress.cget("value")) == 50.0, "o progresso não foi espelhado na aba 3"
-        janela._finish_create_progress(True)
-        assert "100" in str(janela.flex_write_label.cget("text")), "o fim da gravação não foi espelhado"
-        assert [str(t) for t in janela.nb.tabs()].__len__() == 3, "a terceira aba não existe"
-        print("  [OK]    aba ChromeOS Flex (progresso, erro e tipo de imagem)")
+        # sem imagem escolhida, o conferidor de compatibilidade não deve quebrar
+        janela.iso_path.set("")
+        assert janela._image_matches_choice(app.MODE_LINUX) is True
+        print("  [OK]    cartões, painéis e painel do ChromeOS Flex")
     except Exception as e:
-        print(f"  [FALHA] aba ChromeOS Flex: {type(e).__name__}: {e}")
-        falhas.append("aba ChromeOS Flex")
+        print(f"  [FALHA] cartões e painéis: {type(e).__name__}: {e}")
+        falhas.append("cartões e painéis")
 
     try:
         assert str(janela.cget("menu")), "a barra de menus (Help) não foi criada"

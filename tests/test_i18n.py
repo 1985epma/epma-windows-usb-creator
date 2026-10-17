@@ -84,10 +84,10 @@ class TranslateTests(unittest.TestCase):
 
     def test_format_after_translating(self):
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
-            self.assertEqual(app._("Platform: {name}").format(name="macOS"), "Plataforma: macOS")
+            self.assertEqual(app._("Selected ISO: {path}").format(path="/x.iso"), "ISO selecionada: /x.iso")
             self.assertEqual(app._("Missing: {tools}").format(tools="rsync, parted"), "Faltando: rsync, parted")
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "en"):
-            self.assertEqual(app._("Platform: {name}").format(name="macOS"), "Platform: macOS")
+            self.assertEqual(app._("Selected ISO: {path}").format(path="/x.iso"), "Selected ISO: /x.iso")
 
     def test_tr_is_the_same_function(self):
         self.assertIs(app.tr, app._)

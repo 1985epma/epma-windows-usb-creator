@@ -40,6 +40,30 @@ class ChromeTestCase(TempDirTestCase):
         return path
 
 
+class CardTests(unittest.TestCase):
+    """The four cards at the top of the window and how each one writes the drive."""
+
+    def test_every_card_has_a_mode_and_an_order(self):
+        self.assertEqual(set(app.CARD_ORDER), set(app.CARD_MODE))
+        self.assertEqual(len(app.CARD_ORDER), 4)
+        self.assertEqual(app.CARD_ORDER[0], app.CARD_CHROME)  # Google Chrome first, as designed
+
+    def test_how_each_card_writes(self):
+        self.assertEqual(app.CARD_MODE[app.CARD_CHROME], app.MODE_CHROMEOS)
+        self.assertEqual(app.CARD_MODE[app.CARD_WINDOWS], app.MODE_WINDOWS)
+        self.assertEqual(app.CARD_MODE[app.CARD_LINUX], app.MODE_LINUX)
+        self.assertEqual(app.CARD_MODE[app.CARD_OTHER], app.MODE_LINUX)
+
+    def test_only_windows_copies_files(self):
+        raw = [card for card, mode in app.CARD_MODE.items() if mode in app.RAW_MODES]
+        self.assertEqual(sorted(raw), sorted([app.CARD_CHROME, app.CARD_LINUX, app.CARD_OTHER]))
+
+    def test_the_module_imports_without_tkinter(self):
+        # OptionCard inherits from a Tk class; it must not make the engine/CLI need Tk
+        self.assertTrue(hasattr(app, "OptionCard"))
+        self.assertTrue(hasattr(app, "_CanvasBase"))
+
+
 class ConstantsTests(unittest.TestCase):
     def test_the_official_address_is_https_on_dl_google_com(self):
         self.assertEqual(app.CHROMEOS_FLEX_URL, "https://dl.google.com/chromeos-flex/images/latest.bin.zip")
@@ -264,7 +288,8 @@ class FlexRedirectTests(ChromeTestCase):
     def test_the_versioned_file_on_the_same_google_host_is_accepted(self):
         dest, outcome = self.download(self.VERSIONED, b"hello flex")
         self.assertNotIn("error", outcome)
-        self.assertEqual(open(dest, "rb").read(), b"hello flex")
+        with open(dest, "rb") as fh:
+            self.assertEqual(fh.read(), b"hello flex")
         import hashlib
         self.assertEqual(outcome["done"][1], hashlib.sha256(b"hello flex").hexdigest())
 

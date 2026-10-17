@@ -37,7 +37,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
 - **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
 - **Three image types**: *Windows 11* (GPT + FAT32, files copied), *Linux / other hybrid ISO* and *ChromeOS Flex* (both written byte-for-byte, like `dd`). The type is detected from the image's **contents**, not its file name, and you can always change it.
-- **ChromeOS Flex**: a dedicated tab downloads Google's official image (`dl.google.com`, HTTPS, resumable), extracts it safely from the ZIP and prepares it for the USB drive. Regular ChromeOS is not distributed for ordinary PCs, so Flex — Google's free ChromeOS for PCs and Macs — is the official option.
+- **ChromeOS Flex**: the *Google Chrome* card downloads Google's official image (`dl.google.com`, HTTPS, resumable), extracts it safely from the ZIP and prepares it for the USB drive. Regular ChromeOS is not distributed for ordinary PCs, so Flex — Google's free ChromeOS for PCs and Macs — is the official option.
 - **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
 - **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
 - **Progress bar** with percentage, speed and time remaining for writing and verifying; a **Cancel** button for the whole operation.
@@ -87,7 +87,7 @@ Example on Debian/Ubuntu:
 sudo apt install python3-tk parted dosfstools util-linux rsync wimtools
 ```
 
-Alternatively, just launch the application and use the **"Install missing dependencies"** button on tab 2 — it builds and runs the correct command for your package manager.
+Alternatively, just launch the application and use the **"Install missing dependencies"** button above the Create button — it builds and runs the correct command for your package manager.
 
 On Linux, partitioning/formatting/mounting a raw block device requires root, so the application will ask for your administrator password (via `sudo`, or `pkexec` if `sudo` is unavailable).
 
@@ -134,46 +134,39 @@ gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-crea
 python3 win11_usb_creator.py
 ```
 
-### Tab 1 — Download the ISO
+### The window
 
-Microsoft only exposes the direct ISO link after you select an edition and language on their official site, so:
+One window, from top to bottom: **four cards**, **the USB drive**, **the image file** and the **Create** button.
 
-1. Click **"Open Microsoft's official page"**.
-2. Under *Download Windows 11 Disk Image (ISO)*, select **Windows 11 (multi-edition ISO)** and click Download.
-3. Choose your language and confirm.
-4. **Right-click** the blue 64-bit download button and choose **"Copy Link Address"** (do not click it to download in the browser).
-5. Paste the link into the field and click **"Download ISO"**.
+1. **Choose a card** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* or *Other ISO*. The panel under the cards shows where to get that kind of image. Selecting an image file picks the right card for you, from the **contents** of the file.
+2. **Get the image** (skip this if you already have it):
+   - **Windows 11** — click **"Open Microsoft's official page"**, choose *Windows 11 (multi-edition ISO)* and your language, **right-click** the blue 64-bit button and choose **"Copy Link Address"** (do not click it). Paste the link, optionally paste Microsoft's SHA-256, and click **"Download ISO"**.
+   - **Google Chrome (ChromeOS Flex)** — click **"Download ChromeOS Flex from Google"**; the ZIP is downloaded (resumable), extracted and selected for you. Details below.
+   - **Linux / Other ISO** — download the ISO from your distribution's website.
+3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** panel appears: paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
+4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex), click **"Refresh USB drives list"** and select it.
+5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again.
 
-Optionally, paste Microsoft's published SHA-256 checksum into the *Expected SHA-256* field. If the downloaded file does not match, it is discarded automatically.
+What each card does:
 
-If you already downloaded the ISO manually, use **"Select existing ISO file..."** and skip to tab 2.
+- **Windows 11** — GPT + FAT32, the ISO files are copied (`install.wim` is split when over 4 GB).
+- **Linux** and **Other ISO** — the image is written byte-for-byte to the drive (like `dd`). Use *Linux* for Ubuntu, Debian, Fedora, Mint, Arch… and *Other ISO* for any other bootable image. Images without a boot signature are refused before anything is erased.
+- **Google Chrome (ChromeOS Flex)** — Google's disk image, also written byte-for-byte. The drive must be at least as large as the image (Google asks for 16 GB or larger).
 
-### Tab 2 — Create the USB drive
+If the file clearly does not match the card (for example a Linux ISO under *Windows 11*) the program asks before erasing anything, and a file that is not a ChromeOS Flex image under *Google Chrome* is refused.
 
-1. Check the dependency status at the top (install anything missing, if needed).
-2. Plug in the USB drive (**8 GB minimum**) and click **"Refresh USB drives list"**.
-3. Select your drive from the list.
-4. Choose the **image type** (it is suggested from the ISO file name):
-   - **Windows 11** — GPT + FAT32, ISO files copied (`install.wim` split when over 4 GB).
-   - **Linux / other hybrid ISO** — the ISO is written byte-for-byte to the drive (like `dd`). Use this for Ubuntu, Debian, Fedora, Mint, Arch, etc. Select the ISO with *Select existing ISO file...* on tab 1. ISOs without a boot signature are refused before anything is erased.
-   - **ChromeOS Flex** — Google's disk image, also written byte-for-byte. Get it on the *ChromeOS Flex* tab (see below). The drive must be at least as large as the image (Google asks for 16 GB or larger).
-5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written to it, verified and ejected.
-6. Use **Cancel** to stop an operation in progress. The drive is then left unusable until written again.
-
-> Administrator rights are needed on Linux, and on macOS in Linux (direct-write) mode. The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining.
+> Administrator rights are needed on Linux, and on macOS for the direct-write cards (*Google Chrome*, *Linux*, *Other ISO*). The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining.
 >
-> **macOS and Linux images:** macOS cannot read Linux (ISO 9660/ext) images, so the finished drive will **not appear in Finder**, and macOS may say the disk is "not readable". Click **Ignore** — never *Initialize*. The content was already verified against the ISO.
+> **macOS and Linux/ChromeOS images:** macOS cannot read those images, so the finished drive will **not appear in Finder**, and macOS may say the disk is "not readable". Click **Ignore** — never *Initialize*. The content was already verified against the image.
 
 The interface is always in US English. A Brazilian Portuguese translation exists and can be switched on explicitly with `EPMA_LANG=pt`; the system language is never used.
 
-The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
-
-### Tab 3 — ChromeOS Flex
+### ChromeOS Flex
 
 [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) is Google's free version of ChromeOS for PCs and Macs. This program does not offer regular ChromeOS because Google does not publish it for ordinary computers.
 
-1. Click **"Download ChromeOS Flex from Google"** and choose where to save the file. The ZIP is extracted automatically (and the ZIP the program downloaded is deleted). Already have `latest.bin.zip` or the `.bin` inside it? Use **"Select existing image..."** — a ZIP is extracted for you.
-2. Still on that tab, plug in a USB drive of **16 GB or larger** (Google's requirement), click **"Refresh USB drives list"**, select the drive and click **"Create Bootable ChromeOS Flex USB"**. The image is recognised by its partitions, so the image type is set for you; the confirmation, password, progress bar and **Cancel** work as on tab 2 (which shows the same drive and the log).
+1. Choose the **Google Chrome** card and click **"Download ChromeOS Flex from Google"**, then choose where to save the file. The ZIP is extracted automatically (and the ZIP the program downloaded is deleted). Already have `latest.bin.zip` or the `.bin` inside it? Use **"Select existing ISO file..."** — a ZIP is extracted for you.
+2. Plug in a USB drive of **16 GB or larger** (Google's requirement), click **"Refresh USB drives list"**, select the drive and click **"Create Bootable USB Drive"**.
 3. Boot the target computer from the drive and follow [Google's guide](https://support.google.com/chromeosflex/answer/11541904).
 
 Google lists these requirements for the computer: Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage and USB boot; it only guarantees certified models ([requirements](https://support.google.com/chromeosflex/answer/11552529)). Google also notes that some USB drives may not work as installers. ChromeOS Flex is provided by Google under Google's own terms.

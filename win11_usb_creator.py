@@ -128,6 +128,11 @@ MODE_LINUX = "linux"
 MODE_CHROMEOS = "chromeos"
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
+
+# The four choices at the top of the window ("cards"), and how each one writes the drive.
+CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER = "chrome", "windows", "linux", "other"
+CARD_ORDER = (CARD_CHROME, CARD_WINDOWS, CARD_LINUX, CARD_OTHER)
+CARD_MODE = {CARD_CHROME: MODE_CHROMEOS, CARD_WINDOWS: MODE_WINDOWS, CARD_LINUX: MODE_LINUX, CARD_OTHER: MODE_LINUX}
 LOG_MAX_LINES = 5000   # the on-screen log keeps only this many lines
 LOG_FLUSH_MS = 100     # worker log lines are queued and written to the log box this often
 VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw write back
@@ -233,8 +238,6 @@ ACTIVE_LANGUAGE = detect_language()  # decided once, at import
 
 PT_BR = {
     # ----- tabs and tab 1 (download) -----
-    "1. Download ISO": "1. Baixar a ISO",
-    "2. Create USB drive": "2. Criar o pendrive",
     "Microsoft only releases the direct ISO link after you pick the edition and "
     "language on the official site. Steps:\n\n"
     "1. Click 'Open Microsoft's official page' below.\n"
@@ -260,7 +263,6 @@ PT_BR = {
     "Download ISO": "Baixar a ISO",
     "Cancel": "Cancelar",
     "OK": "OK",
-    "Already downloaded the ISO manually in your browser?": "Já baixou a ISO manualmente pelo navegador?",
     "Select existing ISO file...": "Selecionar um arquivo ISO existente...",
     "No ISO selected yet.": "Nenhuma ISO selecionada ainda.",
     "Select the Windows 11 ISO file": "Selecione o arquivo ISO do Windows 11",
@@ -334,12 +336,6 @@ PT_BR = {
     "Could not read the file ({reason}).": "Não foi possível ler o arquivo ({reason}).",
 
     # ----- tab 2 (create the drive) -----
-    "Platform: {name}": "Plataforma: {name}",
-    "ISO: (none selected)": "ISO: (nenhuma selecionada)",
-    "ISO: {path}": "ISO: {path}",
-    "Image type:": "Tipo de imagem:",
-    "Windows 11 (GPT + FAT32, files copied)": "Windows 11 (GPT + FAT32, arquivos copiados)",
-    "Linux / other hybrid ISO (written directly)": "Linux / outra ISO híbrida (gravada diretamente)",
     "All dependencies OK": "Todas as dependências estão OK",
     "Missing: {tools}": "Faltando: {tools}",
     "Install missing dependencies": "Instalar as dependências que faltam",
@@ -469,35 +465,44 @@ PT_BR = {
     "ChromeOS Flex is ready": "O ChromeOS Flex está pronto",
     "ChromeOS Flex": "ChromeOS Flex",
     "Download ChromeOS Flex from Google": "Baixar o ChromeOS Flex do Google",
-    "No image selected yet.": "Nenhuma imagem selecionada ainda.",
     "Select an ISO or disk image": "Selecione uma ISO ou imagem de disco",
     "Download ChromeOS Flex": "Baixar o ChromeOS Flex",
     "Save ChromeOS Flex as": "Salvar o ChromeOS Flex como",
     "Extracting...": "Extraindo...",
     "Ready.": "Pronto.",
-    "The disk image is ready:\n{path}\n\nNext: plug in a USB drive of 16 GB or larger, click \"Refresh USB drives list\", select the drive and click \"Create Bootable ChromeOS Flex USB\" on this tab.": "A imagem de disco está pronta:\n{path}\n\nPróximo passo: conecte um pendrive de 16 GB ou maior, clique em \"Refresh USB drives list\", selecione o pendrive e clique em \"Create Bootable ChromeOS Flex USB\" nesta aba.",
-    "Write it to a USB drive (everything on the drive will be erased):": "Grave-a em um pendrive (tudo no pendrive será apagado):",
-    "Create Bootable ChromeOS Flex USB": "Criar pendrive bootável do ChromeOS Flex",
-    "The step-by-step log is on tab 2.": "O log passo a passo fica na aba 2.",
-    "Download or select the ChromeOS Flex image first.": "Baixe ou selecione primeiro a imagem do ChromeOS Flex.",
     "The selected image is not a ChromeOS Flex disk image:\n{path}\n\nDownload it with the button above, or select the .bin file from Google's latest.bin.zip.": "A imagem selecionada não é uma imagem de disco do ChromeOS Flex:\n{path}\n\nBaixe-a com o botão acima, ou selecione o arquivo .bin do latest.bin.zip do Google.",
     "Drive too small": "Pendrive pequeno demais",
     "Small USB drive": "Pendrive pequeno",
-    "ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs, and the official way to run ChromeOS on a computer you already own. Google does not publish regular ChromeOS for ordinary computers.\n\nThe button below downloads Google's official image, extracts it, and prepares it for tab 2, where you choose the USB drive.": "O ChromeOS Flex é a versão gratuita do ChromeOS do Google para PCs e Macs, e a forma oficial de usar o ChromeOS em um computador que você já tem. O Google não publica o ChromeOS comum para computadores em geral.\n\nO botão abaixo baixa a imagem oficial do Google, extrai e a prepara para a aba 2, onde você escolhe o pendrive.",
-    "Before you start:\n• You need a USB drive of 16 GB or larger. Everything on it will be erased. Google notes that some drives (certain Sandisk models, for example) may not work as installers.\n• The computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM and 16 GB of internal storage, and it must be able to boot from USB.\n• Google only guarantees ChromeOS Flex on certified models; other computers may work without guarantees.": "Antes de começar:\n• Você precisa de um pendrive de 16 GB ou maior. Tudo nele será apagado. O Google avisa que alguns pendrives (certos modelos Sandisk, por exemplo) podem não funcionar como instaladores.\n• O computador onde você vai instalar precisa de processador Intel ou AMD de 64 bits, 4 GB de RAM e 16 GB de armazenamento interno, e precisa conseguir iniciar por USB.\n• O Google só garante o ChromeOS Flex em modelos certificados; outros computadores podem funcionar, sem garantia.",
-    "Already have the image (latest.bin.zip from Google, or the .bin inside it)?": "Já tem a imagem (latest.bin.zip do Google, ou o .bin que está dentro dele)?",
-    "Select existing image...": "Selecionar uma imagem existente...",
     "Google's installation guide": "Guia de instalação do Google",
     "Google's requirements page": "Página de requisitos do Google",
-    "ChromeOS Flex (disk image, written directly)": "ChromeOS Flex (imagem de disco, gravada diretamente)",
     "ISO and disk images": "Imagens ISO e de disco",
     "All files": "Todos os arquivos",
     "ChromeOS Flex is provided by Google and is subject to Google's own terms.\n\nThis program only downloads Google's official image from its servers (dl.google.com) over HTTPS and prepares it for your USB drive. Google's installation guide: {url}\n\nDownload it now?": "O ChromeOS Flex é fornecido pelo Google e está sujeito aos termos do próprio Google.\n\nEste programa apenas baixa a imagem oficial dos servidores do Google (dl.google.com) por HTTPS e a prepara para o seu pendrive. Guia de instalação do Google: {url}\n\nBaixar agora?",
     "ZIP archive": "Arquivo ZIP",
-    "Selected image: {path}": "Imagem selecionada: {path}",
     "The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. Nothing was changed.": "A imagem ({image}) é maior que este pendrive ({drive}). Escolha um pendrive maior. Nada foi alterado.",
     "Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. It may not work as an installer.\n\nContinue anyway?": "O Google pede um pendrive de 16 GB ou maior para o ChromeOS Flex, e este tem {size}. Ele pode não funcionar como instalador.\n\nContinuar mesmo assim?",
     "Downloading...": "Baixando...",
+    "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased. Only USB drives are listed; the system disk is never shown.": "AVISO: TODOS OS DADOS do pendrive selecionado serão apagados PERMANENTEMENTE. Só pendrives USB aparecem na lista; o disco do sistema nunca é mostrado.",
+    "Google Chrome": "Google Chrome",
+    "Copies the files": "Copia os arquivos",
+    "Linux": "Linux",
+    "Ubuntu, Fedora...": "Ubuntu, Fedora...",
+    "Other ISO": "Outra ISO",
+    "Any bootable image": "Qualquer imagem de boot",
+    "You'll be asked for your administrator (sudo) password to write the drive.": "A senha de administrador (sudo) será pedida para gravar o pendrive.",
+    "Linux, ChromeOS and Other ISO modes on macOS ask for your administrator password to write the drive.": "Os modos Linux, ChromeOS e Outra ISO no macOS pedem a senha de administrador para gravar o pendrive.",
+    "Verify the selected ISO (SHA-256): paste the published hash or SHA256SUMS line": "Verificar a ISO selecionada (SHA-256): cole o hash publicado ou a linha do SHA256SUMS",
+    "a Linux image": "uma imagem Linux",
+    "a ChromeOS image": "uma imagem ChromeOS",
+    "This does not look like Windows": "Isto não parece ser Windows",
+    "The disk image is ready:\n{path}\n\nNext: plug in a USB drive of 16 GB or larger, click \"Refresh USB drives list\", select the drive and click \"Create Bootable USB Drive\".": "A imagem de disco está pronta:\n{path}\n\nPróximo passo: conecte um pendrive de 16 GB ou maior, clique em \"Refresh USB drives list\", selecione o pendrive e clique em \"Create Bootable USB Drive\".",
+    "ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. Google does not publish regular ChromeOS for ordinary computers. It needs a USB drive of 16 GB or larger; the computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM and 16 GB of storage, and Google only guarantees certified models.": "O ChromeOS Flex é a versão gratuita do ChromeOS do Google para PCs e Macs. O Google não publica o ChromeOS comum para computadores em geral. Precisa de um pendrive de 16 GB ou maior; o computador onde você instala precisa de processador Intel ou AMD de 64 bits, 4 GB de RAM e 16 GB de armazenamento, e o Google só garante modelos certificados.",
+    "Microsoft only gives out the direct ISO link after you choose the edition and language: open the official page, pick 'Windows 11 (multi-edition ISO)', right-click the blue 64-bit button, choose 'Copy Link Address' (do NOT click it) and paste the link here.": "A Microsoft só libera o link direto da ISO depois que você escolhe a edição e o idioma: abra a página oficial, escolha 'Windows 11 (ISO de várias edições)', clique com o botão direito no botão azul de 64 bits, escolha 'Copiar endereço do link' (NÃO clique nele) e cole o link aqui.",
+    "Expected SHA-256 (optional):": "SHA-256 esperado (opcional):",
+    "Download the ISO from your distribution's website (Ubuntu, Debian, Fedora, Mint, Arch...), then choose the file below. It is written to the drive as it is, so it must be a hybrid image; all current Linux ISOs are. Check its SHA-256 below if the site publishes one.": "Baixe a ISO no site da sua distribuição (Ubuntu, Debian, Fedora, Mint, Arch...) e escolha o arquivo abaixo. Ela é gravada no pendrive como está, então precisa ser uma imagem híbrida; todas as ISOs Linux atuais são. Confira o SHA-256 abaixo se o site publicar um.",
+    "Any bootable hybrid ISO or disk image is written to the drive exactly as it is. Choose the file below. Images that cannot boot from a USB drive are refused before anything is erased.": "Qualquer ISO híbrida de boot ou imagem de disco é gravada no pendrive exatamente como está. Escolha o arquivo abaixo. Imagens que não conseguem iniciar por USB são recusadas antes de apagar qualquer coisa.",
+    "Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?": "Já baixou a imagem (ISO, ou .zip/.bin do ChromeOS Flex)?",
+    "The selected file looks like {name}, but \"Windows 11\" is chosen. Windows mode would erase the drive and then fail to find the Windows installer.\n\nChoose the matching card instead, or continue only if you are sure.\n\nContinue anyway?": "O arquivo selecionado parece ser {name}, mas \"Windows 11\" está escolhido. O modo Windows apagaria o pendrive e só depois não acharia o instalador do Windows.\n\nEscolha o cartão correspondente, ou continue só se tiver certeza.\n\nContinuar mesmo assim?",
     "Not much free space": "Pouco espaço livre",
     "The download (about 1.4 GB) and the extracted image (about 9.5 GB) need roughly {need} free in this folder, and only {free} is available. It may fail part-way.\n\nContinue anyway?": "O download (cerca de 1,4 GB) e a imagem extraída (cerca de 9,5 GB) precisam de aproximadamente {need} livres nesta pasta, e há só {free}. Pode falhar no meio.\n\nContinuar mesmo assim?",
 }
@@ -2072,7 +2077,7 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
         copy_windows_payload(
             mount_dir, target, log, progress,
             "wimlib-imagex not found. Install it with: brew install wimlib "
-            "(or use the 'Install missing dependencies' button on tab 2).",
+            "(or use the 'Install missing dependencies' button).",
             reopen=reopen, cancel_event=cancel_event)
     except OperationCanceled:
         log("Canceled. Unmounting the drive; it is left incomplete and unusable.")
@@ -2542,7 +2547,7 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
             iso_mount, usb_mount, log, progress,
             "wimlib-imagex not found. Install it via your package manager "
             "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
-            "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2.",
+            "Arch/openSUSE) or use the 'Install missing dependencies' button.",
             reopen=reopen, cancel_event=cancel_event)
     except OperationCanceled:
         log("Canceled. The drive is left incomplete and unusable.")
@@ -3000,30 +3005,31 @@ def help_sections():
 ## Three image types
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux / other hybrid ISO — writes the ISO byte for byte to the whole drive (like dd). Use it for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images. An ISO that cannot boot from a USB drive is refused before anything is erased.
-• ChromeOS Flex — Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you (tab 3).
+• ChromeOS Flex — Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
 • Everything on the selected drive is erased. Nothing is kept.
 • After writing, the drive is read back and compared with the ISO. Only a drive that passes is ejected.
 
-## Where things are
-• Tab 1 "Download ISO": get the Windows 11 ISO, or pick an ISO you already have, and check its SHA-256.
-• Tab 2 "Create USB drive": choose the drive and write it.
-• Tab 3 "ChromeOS Flex": download Google's official ChromeOS Flex image and write it to a drive, all on that tab.
+## The window, from top to bottom
+• Four cards choose the type of image: Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO. The panel under the cards changes with the card and shows where to get that kind of image.
+• "Refresh USB drives list" and the list of USB drives.
+• "Select existing ISO file...": the image you already have, with an optional SHA-256 check.
+• "Create Bootable USB Drive" with its progress bar and Cancel button, and the log below.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
-        ("Quick start: Windows 11", """## 1. Get the ISO (tab 1)
+        ("Quick start: Windows 11", """## 1. Get the ISO (card "Windows 11")
 • Click "Open Microsoft's official page". Under "Download Windows 11 Disk Image (ISO)" choose "Windows 11 (multi-edition ISO)", pick the language and confirm.
 • Right-click the blue 64-bit button and choose "Copy Link Address". Do not click it to download in the browser.
 • Paste the link into "Direct ISO link". If Microsoft shows a SHA-256 checksum, paste it into "Expected SHA-256" so the download is checked automatically.
 • Click "Download ISO" and choose where to save it.
 • Already have the ISO? Click "Select existing ISO file..." instead.
 
-## 2. Write the drive (tab 2)
-• The dependency line must say "All dependencies OK". If something is missing, click "Install missing dependencies".
+## 2. Write the drive
+• The dependency line above the Create button must say "All dependencies OK". If something is missing, click "Install missing dependencies".
 • Plug in the USB drive (8 GB or more) and click "Refresh USB drives list". Select your drive.
-• Image type "Windows 11" is preselected when the ISO is a Windows installer.
+• The "Windows 11" card is chosen for you when the ISO is a Windows installer.
 • Click "Create Bootable USB Drive", read the confirmation (model, size, volumes) and confirm.
 • Wait for the progress bar. When the log says the drive was verified and ejected, unplug it.
 
@@ -3031,12 +3037,12 @@ def help_sections():
 • The computer must start in UEFI mode (not Legacy/CSM). The drive is UEFI + GPT only.
 • This tool does not bypass the Windows 11 requirements (TPM 2.0, Secure Boot)."""),
 
-        ("Quick start: Linux and other ISOs", """## 1. Choose the ISO (tab 1)
-• Download the ISO from your distribution's website, then click "Select existing ISO file...".
+        ("Quick start: Linux and other ISOs", """## 1. Choose the ISO (card "Linux" or "Other ISO")
+• Download the ISO from your distribution's website, then click "Select existing ISO file...". "Linux" and "Other ISO" write the image the same way; "Other ISO" is for any other bootable image.
 • Optional but recommended: in "Verify the selected ISO (SHA-256)" paste the checksum published by the distribution (or the whole line from its SHA256SUMS file) and click "Calculate SHA-256". Continue only on MATCH.
 
-## 2. Write the drive (tab 2)
-• Image type must be "Linux / other hybrid ISO" (preselected when the contents are not a Windows installer).
+## 2. Write the drive
+• The "Linux" card is chosen for you when the contents are a bootable ISO that is not a Windows installer.
 • Plug in the drive, click "Refresh USB drives list", select it, and click "Create Bootable USB Drive".
 • Confirm. The administrator password is requested before the drive is touched.
 • The ISO is written, then read back and compared, then the drive is ejected.
@@ -3057,9 +3063,9 @@ def help_sections():
 • Google's requirements: @REQUIREMENTS@
 
 ## Steps
-• On the "ChromeOS Flex" tab, click "Download ChromeOS Flex from Google" and choose where to save the file. The download is resumable. The ZIP is extracted automatically; the ZIP that this program downloaded is deleted afterwards (a ZIP you selected yourself is kept).
+• Choose the "Google Chrome" card and click "Download ChromeOS Flex from Google". Choose where to save the file. The download is resumable. The ZIP is extracted automatically; the ZIP that this program downloaded is deleted afterwards (a ZIP you selected yourself is kept).
 • Already have latest.bin.zip, or the .bin inside it? Use "Select existing image..." (a ZIP is extracted for you).
-• Still on that tab: plug in the USB drive, click "Refresh USB drives list", select the drive and click "Create Bootable ChromeOS Flex USB". The confirmation, the administrator password, the progress bar and the Cancel button work exactly as on tab 2 (which shows the same drive and the step-by-step log).
+• Then plug in the USB drive, click "Refresh USB drives list", select the drive and click "Create Bootable USB Drive". The confirmation, the administrator password, the progress bar and the Cancel button work as for any other image.
 • The image is written, read back and compared with the file, and the drive is ejected.
 • Boot the computer from the USB drive and follow Google's guide for the next steps.
 
@@ -3073,7 +3079,7 @@ def help_sections():
             "@GUIDE@", CHROMEOS_FLEX_GUIDE_URL).replace("@REQUIREMENTS@", CHROMEOS_FLEX_REQUIREMENTS_URL).replace(
             "@URL@", CHROMEOS_FLEX_URL)),
 
-        ("Tab 1: Download ISO", """## Direct ISO link
+        ("Getting the image", """## Windows 11: direct ISO link
 • Only https:// links are accepted: an unencrypted link could be altered on the way.
 • Links to servers outside Microsoft's known download hosts (@HOSTS@) show a warning. Download Windows only from Microsoft.
 
@@ -3086,19 +3092,20 @@ def help_sections():
 • A file that fails the checksum is deleted.
 
 ## Select existing ISO file...
-• The type of image (Windows or Linux) is detected from the contents of the ISO, not from its name. You can still change it on tab 2.
+• Picks an image you already have (.iso, .bin or .img; a ChromeOS Flex .zip is extracted for you). The card (Windows, Linux or Google Chrome) is chosen from the contents of the image, not from its name. You can still click another card.
+• If the file clearly does not match the card (for example a Linux ISO under "Windows 11"), the program asks before erasing anything; a file that is not a ChromeOS Flex image under "Google Chrome" is refused.
 
 ## Verify the selected ISO (SHA-256)
-• Appears after an ISO is selected. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
+• Appears under the file name after an image is selected. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
 • MATCH (green): the file is identical to the published one. MISMATCH (red): do not use it.
 • With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts)),
 
-        ("Tab 2: Create USB drive", f"""## Image type
-• Windows 11 (GPT + FAT32, files copied), Linux / other hybrid ISO (written directly) or ChromeOS Flex (disk image, written directly). It is preselected from the image contents; you can change it.
+        ("The drive and the Create button", f"""## The cards
+• Google Chrome (ChromeOS Flex, disk image written directly), Windows 11 (GPT + FAT32, files copied), Linux and Other ISO (the ISO is written directly). The card is chosen from the image contents when you select a file; you can change it.
 
 ## Dependencies
 • Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
-• Linux and ChromeOS Flex modes need nothing extra.
+• The Google Chrome, Linux and Other ISO cards need nothing extra.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
 ## The drive list
@@ -3109,7 +3116,7 @@ def help_sections():
 • Drives that do not look like a spare stick need you to type their identifier (for example disk4). That applies to drives larger than {large_gb} GB, with {used_gb} GB or more in use, with a name that suggests backups or personal data, that look like an external hard disk or SSD, with {MANY_VOLUMES} or more volumes, or whose contents could not be read.
 
 ## Administrator password
-• Needed on Linux, and on macOS for the direct-write modes (Linux and ChromeOS Flex). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
 • It is used only to run local disk commands. It is not stored, logged or sent anywhere.
 
 ## Progress, Cancel and the log
@@ -3185,10 +3192,10 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • Linux mode needs a hybrid image. Current Ubuntu, Debian, Fedora, Mint and Arch ISOs are. A Windows ISO needs the Windows mode.
 
 ## "This is the ZIP archive, not the disk image inside it"
-• You selected latest.bin.zip in a place that expects the .bin. On tab 3 (or with "Select existing ISO file...") choose the ZIP and the program extracts the .bin for you.
+• You selected latest.bin.zip in a place that expects the .bin. With the "Google Chrome" card (or "Select existing ISO file...") choose the ZIP and the program extracts the .bin for you.
 
 ## "This file is not a bootable disk image"
-• ChromeOS Flex mode needs the .bin from Google's official latest.bin.zip. Download it again from tab 3.
+• ChromeOS Flex mode needs the .bin from Google's official latest.bin.zip. Download it again with the "Google Chrome" card.
 
 ## "The image is larger than the drive"
 • Choose a bigger USB drive. Nothing was changed. For ChromeOS Flex Google asks for 16 GB or larger.
@@ -3221,7 +3228,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • {ENV_DISABLE_AUDIT_LOG} — set to 1 to turn the audit log off.
 • {ENV_TRUSTED_HOSTS} — comma-separated list of trusted download hosts (replaces the Microsoft list).
 • {ENV_ALLOW_ANY_HOST} — set to 1 to silence the unrecognised-server warning. This lowers security.
-• {ENV_EXPECTED_SHA256} — pre-fills the expected checksum field on tab 1.
+• {ENV_EXPECTED_SHA256} — pre-fills the expected checksum field of the Windows 11 card.
 • {ENV_LANG} — set to pt for a Brazilian Portuguese window. The default is US English whatever the system language.
 
 ## Privacy
@@ -3239,30 +3246,79 @@ The program has no third-party dependencies: it uses only the Python standard li
     ]
 
 
-class _Mirror:
-    """Stands for several widgets that must always show the same thing (the write controls
-    appear on tab 2 and on the ChromeOS Flex tab). config()/start()/stop() go to all of them;
-    cget() answers from the first."""
+_CanvasBase = tk.Canvas if tk else object  # the module must stay importable without Tkinter
 
-    def __init__(self, *widgets):
-        self.widgets = list(widgets)
 
-    def config(self, *args, **kw):
-        for w in self.widgets:
-            w.config(*args, **kw)
+class OptionCard(_CanvasBase):
+    """A square, clickable choice: one of the four image types at the top of the window.
 
-    configure = config
+    Drawn on a canvas so it looks the same on macOS and Linux and follows the light/dark
+    theme. It works from the keyboard too (Tab to focus, Space/Return to choose). The symbols
+    are plain shapes on purpose: no brand logos.
+    """
 
-    def start(self, *args):
-        for w in self.widgets:
-            w.start(*args)
+    WIDTH, HEIGHT = 156, 124
+    ACCENT = "#0a84ff"
 
-    def stop(self):
-        for w in self.widgets:
-            w.stop()
+    def __init__(self, parent, key, title, subtitle, command):
+        style = ttk.Style(parent)
+        self._bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        self._fg = style.lookup("TLabel", "foreground") or "#000000"
+        super().__init__(parent, width=self.WIDTH, height=self.HEIGHT, bg=self._bg, highlightthickness=0,
+                         takefocus=True, cursor="hand2")
+        self.key, self._title, self._subtitle, self._command = key, title, subtitle, command
+        self._selected = False
+        self._hover = False
+        base = tkfont.nametofont("TkDefaultFont")
+        self._title_font = (base.actual("family"), base.actual("size") + 2, "bold")
+        self._sub_font = (base.actual("family"), max(base.actual("size") - 2, 8))
+        self.bind("<Button-1>", lambda _e: self._choose())
+        self.bind("<Return>", lambda _e: self._choose())
+        self.bind("<space>", lambda _e: self._choose())
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<FocusIn>", lambda _e: self._draw())
+        self.bind("<FocusOut>", lambda _e: self._draw())
+        self._draw()
 
-    def cget(self, key):
-        return self.widgets[0].cget(key)
+    def _choose(self):
+        self.focus_set()
+        self._command(self.key)
+
+    def _set_hover(self, value):
+        self._hover = value
+        self._draw()
+
+    def set_selected(self, selected):
+        self._selected = bool(selected)
+        self._draw()
+
+    def _rounded(self, x1, y1, x2, y2, r, **kw):
+        points = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2, x1 + r, y2,
+                  x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+        return self.create_polygon(points, smooth=True, **kw)
+
+    def _draw(self):
+        self.delete("all")
+        focused = self.focus_get() is self
+        color = self.ACCENT if self._selected else ("#a0a0a8" if (self._hover or focused) else "#6e6e73")
+        width = 3 if self._selected else (2 if focused else 1)
+        self._rounded(3, 3, self.WIDTH - 3, self.HEIGHT - 3, 14, outline=color, fill="", width=width)
+        cx, cy = self.WIDTH / 2, 40
+        glyph = self.ACCENT if self._selected else self._fg
+        if self.key == CARD_WINDOWS:            # four tiles
+            for ox, oy in ((-17, -17), (2, -17), (-17, 2), (2, 2)):
+                self.create_rectangle(cx + ox, cy + oy, cx + ox + 15, cy + oy + 15, fill=glyph, outline=glyph)
+        elif self.key == CARD_CHROME:           # a ring with a dot
+            self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, outline=glyph, width=3)
+            self.create_oval(cx - 8, cy - 8, cx + 8, cy + 8, fill=glyph, outline=glyph)
+        elif self.key == CARD_LINUX:            # a terminal prompt
+            self.create_text(cx, cy, text=">_", fill=glyph, font=("Menlo", 26, "bold"))
+        else:                                   # a disc
+            self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, outline=glyph, width=3)
+            self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, outline=glyph, width=3)
+        self.create_text(cx, 82, text=self._title, fill=self._fg, font=self._title_font)
+        self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._sub_font)
 
 
 class App(_TkBase):
@@ -3272,7 +3328,7 @@ class App(_TkBase):
         set_macos_app_name(APP_NAME)  # must run before the first window exists
         super().__init__(className=APP_NAME)
         self.title("EPMA USB CREATOR")
-        self._window_size = (760, 700)  # grows when content needs more room (see _fit_window)
+        self._window_size = (780, 700)  # grows when content needs more room (see _fit_window)
         self.geometry("{}x{}".format(*self._window_size))
         self.iso_path = tk.StringVar(value="")
         self.cancel_event = threading.Event()
@@ -3290,260 +3346,216 @@ class App(_TkBase):
         self.after(LOG_FLUSH_MS, self._log_tick)
 
     # ---------- UI ----------
+    # ---------- the window: one page ----------
+    # Image type cards -> where the image comes from -> the drive -> the image file -> create.
     def _build_ui(self):
-        nb = ttk.Notebook(self)
-        self.nb = nb
-        nb.pack(fill="both", expand=True, padx=10, pady=10)
-        self.tab1 = ttk.Frame(nb)
-        self.tab2 = ttk.Frame(nb)
-        self.tab3 = ttk.Frame(nb)
-        nb.add(self.tab1, text=_("1. Download ISO"))
-        nb.add(self.tab2, text=_("2. Create USB drive"))
-        nb.add(self.tab3, text=_("ChromeOS Flex"))
-        self._build_tab1()
-        self._build_tab2()
-        self._build_tab3()
+        page = ttk.Frame(self)
+        page.pack(fill="both", expand=True, padx=14, pady=(12, 8))
+        self._build_cards(page)
+        self._build_sources(page)
+        self._build_drive(page)
+        self._build_image(page)
+        self._build_create(page)
+        self.select_card(CARD_WINDOWS)
 
-    def _build_tab1(self):
-        f = self.tab1
-        instructions = _(
-            "Microsoft only releases the direct ISO link after you pick the edition and "
-            "language on the official site. Steps:\n\n"
-            "1. Click 'Open Microsoft's official page' below.\n"
-            "2. Under 'Download Windows 11 Disk Image (ISO)', pick the\n"
-            "   'Windows 11 (multi-edition ISO)' edition and click Download.\n"
-            "3. Choose the language and confirm.\n"
-            "4. Right-click the blue 64-bit download button and choose\n"
-            "   'Copy Link Address' (do NOT click it to download directly in the browser).\n"
-            "5. Paste the link below and click 'Download ISO'."
-        )
-        ttk.Label(f, text=instructions, justify="left").pack(anchor="w", padx=10, pady=(10, 10))
-        ttk.Button(f, text=_("Open Microsoft's official page"), command=self.open_ms_page).pack(anchor="w", padx=10)
+    def _build_cards(self, page):
+        row = ttk.Frame(page)
+        row.pack(fill="x", pady=(0, 10))
+        self.card_var = tk.StringVar(value=CARD_WINDOWS)
+        self.mode_var = tk.StringVar(value=MODE_WINDOWS)
+        self.cards = {}
+        for key, title, subtitle in (
+            (CARD_CHROME, _("Google Chrome"), _("ChromeOS Flex")),
+            (CARD_WINDOWS, _("Windows 11"), _("Copies the files")),
+            (CARD_LINUX, _("Linux"), _("Ubuntu, Fedora...")),
+            (CARD_OTHER, _("Other ISO"), _("Any bootable image")),
+        ):
+            card = OptionCard(row, key, title, subtitle, self.select_card)
+            card.pack(side="left", padx=(0, 12))
+            self.cards[key] = card
 
-        url_frame = ttk.Frame(f)
-        url_frame.pack(fill="x", padx=10, pady=(15, 5))
-        ttk.Label(url_frame, text=_("Direct ISO link (HTTPS only):")).pack(anchor="w")
-        self.url_entry = ttk.Entry(url_frame)
-        self.url_entry.pack(fill="x", pady=(2, 0))
+    def _build_sources(self, page):
+        """One panel per card, stacked in the same cell: the tallest decides the height, so the
+        rest of the window never jumps when another card is chosen."""
+        holder = ttk.Frame(page)
+        holder.pack(fill="x")
+        holder.columnconfigure(0, weight=1)
+        self._panel_holder = holder
+        self.panels = {}
+        for key in CARD_ORDER:
+            panel = ttk.Frame(holder)
+            panel.grid(row=0, column=0, sticky="nsew")
+            self.panels[key] = panel
 
-        sha_frame = ttk.Frame(f)
-        sha_frame.pack(fill="x", padx=10, pady=(5, 0))
+        # --- Google Chrome (ChromeOS Flex) ---
+        f = self.panels[CARD_CHROME]
         ttk.Label(
-            sha_frame,
-            text=_("Expected SHA-256 checksum (optional — leave empty to skip verification):"),
-        ).pack(anchor="w")
-        self.sha_entry = ttk.Entry(sha_frame)
-        self.sha_entry.pack(fill="x", pady=(2, 0))
-        self.sha_entry.insert(0, os.environ.get(ENV_EXPECTED_SHA256, ""))
-
-        btn_frame = ttk.Frame(f)
-        btn_frame.pack(fill="x", padx=10, pady=5)
-        self.download_btn = ttk.Button(btn_frame, text=_("Download ISO"), command=self.start_download)
-        self.download_btn.pack(side="left")
-        self.cancel_btn = ttk.Button(btn_frame, text=_("Cancel"), command=self.cancel_download, state="disabled")
-        self.cancel_btn.pack(side="left", padx=5)
-
-        self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
-        self.progress.pack(fill="x", padx=10, pady=(10, 2))
-        self.progress_label = ttk.Label(f, text="")
-        self.progress_label.pack(anchor="w", padx=10)
-
-        ttk.Separator(f).pack(fill="x", padx=10, pady=15)
-        ttk.Label(f, text=_("Already downloaded the ISO manually in your browser?")).pack(anchor="w", padx=10)
-        ttk.Button(f, text=_("Select existing ISO file..."), command=self.pick_existing_iso).pack(
-            anchor="w", padx=10, pady=(2, 10)
-        )
-
-        self.iso_label = ttk.Label(f, text=_("No ISO selected yet."), foreground="blue")
-        self.iso_label.pack(anchor="w", padx=10, pady=(5, 10))
-
-        # Integrity check of the selected ISO; shown once an ISO is selected (see set_iso).
-        self.iso_check_frame = ttk.LabelFrame(f, text=_("Verify the selected ISO (SHA-256)"))
-        ttk.Label(
-            self.iso_check_frame,
-            text=_("Expected checksum (optional) — paste the hash or the whole line from SHA256SUMS:"),
-        ).pack(anchor="w", padx=8, pady=(6, 0))
-        self.iso_sha_entry = ttk.Entry(self.iso_check_frame)
-        self.iso_sha_entry.pack(fill="x", padx=8, pady=(2, 4))
-        sha_row = ttk.Frame(self.iso_check_frame)
-        sha_row.pack(fill="x", padx=8)
-        self.iso_sha_btn = ttk.Button(sha_row, text=_("Calculate SHA-256"), command=self.calculate_iso_sha256)
-        self.iso_sha_btn.pack(side="left")
-        self.iso_sha_progress = ttk.Progressbar(sha_row, orient="horizontal", mode="determinate")
-        self.iso_sha_progress.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.iso_sha_label = ttk.Label(self.iso_check_frame, text="", wraplength=610, justify="left")
-        self.iso_sha_label.pack(anchor="w", padx=8)
-        self.iso_sha_result = ttk.Label(self.iso_check_frame, text="", wraplength=610, justify="left")
-        self.iso_sha_result.pack(anchor="w", padx=8, pady=(0, 6))
-
-    def _build_tab3(self):
-        f = self.tab3
-        ttk.Label(
-            f, justify="left", wraplength=650,
-            text=_("ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs, and the official "
-                   "way to run ChromeOS on a computer you already own. Google does not publish regular "
-                   "ChromeOS for ordinary computers.\n\n"
-                   "The button below downloads Google's official image, extracts it, and prepares it for "
-                   "tab 2, where you choose the USB drive.")).pack(anchor="w", padx=10, pady=(12, 8))
-        ttk.Label(
-            f, justify="left", wraplength=650,
-            text=_("Before you start:\n"
-                   "\u2022 You need a USB drive of 16 GB or larger. Everything on it will be erased. "
-                   "Google notes that some drives (certain Sandisk models, for example) may not work as "
-                   "installers.\n"
-                   "\u2022 The computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM "
-                   "and 16 GB of internal storage, and it must be able to boot from USB.\n"
-                   "\u2022 Google only guarantees ChromeOS Flex on certified models; other computers may work "
-                   "without guarantees.")).pack(anchor="w", padx=10, pady=(0, 10))
-
+            f, justify="left", wraplength=720,
+            text=_("ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. Google does not publish "
+                   "regular ChromeOS for ordinary computers. It needs a USB drive of 16 GB or larger; the "
+                   "computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM and 16 GB "
+                   "of storage, and Google only guarantees certified models.")).pack(anchor="w", pady=(0, 6))
         row = ttk.Frame(f)
-        row.pack(fill="x", padx=10, pady=(0, 4))
+        row.pack(fill="x")
         self.flex_download_btn = ttk.Button(row, text=_("Download ChromeOS Flex from Google"),
                                             command=self.start_flex_download)
         self.flex_download_btn.pack(side="left")
         self.flex_cancel_btn = ttk.Button(row, text=_("Cancel"), command=self.cancel_flex, state="disabled")
         self.flex_cancel_btn.pack(side="left", padx=5)
-        self.flex_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
-        self.flex_progress.pack(fill="x", padx=10, pady=(8, 2))
-        self.flex_progress_label = ttk.Label(f, text="")
-        self.flex_progress_label.pack(anchor="w", padx=10)
-
-        ttk.Separator(f).pack(fill="x", padx=10, pady=12)
-        ttk.Label(f, text=_("Already have the image (latest.bin.zip from Google, or the .bin inside it)?")
-                  ).pack(anchor="w", padx=10)
-        ttk.Button(f, text=_("Select existing image..."), command=self.pick_existing_iso).pack(
-            anchor="w", padx=10, pady=(2, 8))
-        self.flex_status_label = ttk.Label(f, text=_("No image selected yet."), foreground="blue",
-                                           wraplength=650, justify="left")
-        self.flex_status_label.pack(anchor="w", padx=10, pady=(0, 10))
-
-        ttk.Separator(f).pack(fill="x", padx=10, pady=(0, 10))
-        ttk.Label(f, text=_("Write it to a USB drive (everything on the drive will be erased):")
-                  ).pack(anchor="w", padx=10)
-        pick = ttk.Frame(f)
-        pick.pack(fill="x", padx=10, pady=(4, 0))
-        ttk.Button(pick, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(side="left")
-        self.flex_disk_combo = ttk.Combobox(pick, state="readonly", width=60)
-        self.flex_disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.flex_disk_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_disk_selected(self.flex_disk_combo))
-        go = ttk.Frame(f)
-        go.pack(fill="x", padx=10, pady=(8, 0))
-        self.flex_create_btn = ttk.Button(go, text=_("Create Bootable ChromeOS Flex USB"),
-                                          command=self.start_flex_write, state="disabled")
-        self.flex_create_btn.pack(side="left")
-        self.flex_cancel_create_btn = ttk.Button(go, text=_("Cancel"), command=self.cancel_create_usb,
-                                                 state="disabled")
-        self.flex_cancel_create_btn.pack(side="left", padx=(8, 0))
-        self.flex_write_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
-        self.flex_write_progress.pack(fill="x", padx=10, pady=(8, 2))
-        self.flex_write_label = ttk.Label(f, text="")
-        self.flex_write_label.pack(anchor="w", padx=10)
-        ttk.Label(f, text=_("The step-by-step log is on tab 2."), foreground="gray").pack(anchor="w", padx=10)
-
-        links = ttk.Frame(f)
-        links.pack(fill="x", padx=10, pady=(10, 0))
-        ttk.Button(links, text=_("Google's installation guide"),
-                   command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left")
-        ttk.Button(links, text=_("Google's requirements page"),
+        ttk.Button(row, text=_("Google's installation guide"),
+                   command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left", padx=(12, 0))
+        ttk.Button(row, text=_("Google's requirements page"),
                    command=lambda: webbrowser.open(CHROMEOS_FLEX_REQUIREMENTS_URL)).pack(side="left", padx=5)
+        self.flex_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
+        self.flex_progress.pack(fill="x", pady=(8, 2))
+        self.flex_progress_label = ttk.Label(f, text="")
+        self.flex_progress_label.pack(anchor="w")
 
-        # From here on the write controls of tab 2 and of this tab behave as one.
-        self.create_btn = _Mirror(self.create_btn, self.flex_create_btn)
-        self.cancel_create_btn = _Mirror(self.cancel_create_btn, self.flex_cancel_create_btn)
-        self.create_progress = _Mirror(self.create_progress, self.flex_write_progress)
-        self.create_progress_label = _Mirror(self.create_progress_label, self.flex_write_label)
+        # --- Windows 11 ---
+        f = self.panels[CARD_WINDOWS]
+        ttk.Label(
+            f, justify="left", wraplength=720,
+            text=_("Microsoft only gives out the direct ISO link after you choose the edition and language: "
+                   "open the official page, pick 'Windows 11 (multi-edition ISO)', right-click the blue 64-bit "
+                   "button, choose 'Copy Link Address' (do NOT click it) and paste the link here.")
+        ).pack(anchor="w", pady=(0, 6))
+        grid = ttk.Frame(f)
+        grid.pack(fill="x")
+        grid.columnconfigure(1, weight=1)
+        ttk.Label(grid, text=_("Direct ISO link (HTTPS only):")).grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.url_entry = ttk.Entry(grid)
+        self.url_entry.grid(row=0, column=1, sticky="ew", pady=2)
+        ttk.Label(grid, text=_("Expected SHA-256 (optional):")).grid(row=1, column=0, sticky="w", padx=(0, 8))
+        self.sha_entry = ttk.Entry(grid)
+        self.sha_entry.grid(row=1, column=1, sticky="ew", pady=2)
+        self.sha_entry.insert(0, os.environ.get(ENV_EXPECTED_SHA256, ""))
+        btns = ttk.Frame(f)
+        btns.pack(fill="x", pady=(6, 0))
+        ttk.Button(btns, text=_("Open Microsoft's official page"), command=self.open_ms_page).pack(
+            side="left", padx=(0, 12))
+        self.download_btn = ttk.Button(btns, text=_("Download ISO"), command=self.start_download)
+        self.download_btn.pack(side="left")
+        self.cancel_btn = ttk.Button(btns, text=_("Cancel"), command=self.cancel_download, state="disabled")
+        self.cancel_btn.pack(side="left", padx=5)
+        self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
+        self.progress.pack(fill="x", pady=(8, 2))
+        self.progress_label = ttk.Label(f, text="")
+        self.progress_label.pack(anchor="w")
 
-    def _on_disk_selected(self, source):
-        """The drive list exists on tab 2 and on the ChromeOS Flex tab; keep both on the same drive."""
-        index = source.current()
-        for combo in (self.disk_combo, self.flex_disk_combo):
-            if combo is not source and index >= 0:
-                combo.current(index)
-        self.update_create_button_state()
+        # --- Linux and Other ISO: nothing to download here ---
+        ttk.Label(
+            self.panels[CARD_LINUX], justify="left", wraplength=720,
+            text=_("Download the ISO from your distribution's website (Ubuntu, Debian, Fedora, Mint, Arch...), "
+                   "then choose the file below. It is written to the drive as it is, so it must be a hybrid "
+                   "image; all current Linux ISOs are. Check its SHA-256 below if the site publishes one.")
+        ).pack(anchor="nw")
+        ttk.Label(
+            self.panels[CARD_OTHER], justify="left", wraplength=720,
+            text=_("Any bootable hybrid ISO or disk image is written to the drive exactly as it is. Choose the "
+                   "file below. Images that cannot boot from a USB drive are refused before anything is erased.")
+        ).pack(anchor="nw")
 
-    def start_flex_write(self):
-        """The "Create Bootable ChromeOS Flex USB" button: check the image, then use the normal write flow."""
-        image = self.iso_path.get()
-        if not image:
-            messagebox.showerror(_("ChromeOS Flex"), _("Download or select the ChromeOS Flex image first."))
-            return
-        if detect_iso_kind(image) != ISO_KIND_CHROMEOS:
-            messagebox.showerror(
-                _("ChromeOS Flex"),
-                _("The selected image is not a ChromeOS Flex disk image:\n{path}\n\n"
-                  "Download it with the button above, or select the .bin file from Google's "
-                  "latest.bin.zip.").format(path=image))
-            return
-        self.mode_var.set(MODE_CHROMEOS)
-        self.on_mode_change()
-        self.start_create_usb()
+        # Keep the height of the tallest panel so the window does not jump between cards, and
+        # hide the others properly (grid_remove) instead of just stacking them.
+        self.update_idletasks()
+        holder.configure(height=max(p.winfo_reqheight() for p in self.panels.values()))
+        holder.grid_propagate(False)
+        holder.pack_propagate(False)
+        for panel in self.panels.values():
+            panel.grid_remove()
 
-    def _build_tab2(self):
-        f = self.tab2
-        ttk.Label(f, text=_("Platform: {name}").format(name=platform_display_name()),
-                  foreground="gray").pack(anchor="w", padx=10, pady=(10, 0))
-        self.iso_label2 = ttk.Label(f, text=_("ISO: (none selected)"))
-        self.iso_label2.pack(anchor="w", padx=10, pady=(0, 5))
+    def _build_drive(self, page):
+        ttk.Separator(page).pack(fill="x", pady=(10, 8))
+        row = ttk.Frame(page)
+        row.pack(fill="x")
+        ttk.Button(row, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(side="left")
+        self.disk_combo = ttk.Combobox(row, state="readonly")
+        self.disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
+        self.disk_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_create_button_state())
+        warn = _("WARNING: ALL DATA on the selected drive will be PERMANENTLY erased. Only USB drives are "
+                 "listed; the system disk is never shown.")
+        warn += "\n" + (_("You'll be asked for your administrator (sudo) password to write the drive.") if IS_LINUX
+                        else _("Linux, ChromeOS and Other ISO modes on macOS ask for your administrator "
+                               "password to write the drive."))
+        ttk.Label(page, text=warn, foreground="#ff453a", justify="left", wraplength=720).pack(
+            anchor="w", pady=(6, 0))
 
-        mode_frame = ttk.Frame(f)
-        mode_frame.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Label(mode_frame, text=_("Image type:")).pack(side="left")
-        self.mode_var = tk.StringVar(value=MODE_WINDOWS)
-        ttk.Radiobutton(mode_frame, text=_("Windows 11 (GPT + FAT32, files copied)"), value=MODE_WINDOWS,
-                        variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(mode_frame, text=_("Linux / other hybrid ISO (written directly)"), value=MODE_LINUX,
-                        variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
-        flex_row = ttk.Frame(f)
-        flex_row.pack(fill="x", padx=(86, 10), pady=(0, 8))
-        ttk.Radiobutton(flex_row, text=_("ChromeOS Flex (disk image, written directly)"), value=MODE_CHROMEOS,
-                        variable=self.mode_var, command=self.on_mode_change).pack(side="left")
+    def _build_image(self, page):
+        ttk.Separator(page).pack(fill="x", pady=(10, 8))
+        row = ttk.Frame(page)
+        row.pack(fill="x")
+        ttk.Label(row, text=_("Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?")).pack(side="left")
+        ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso).pack(
+            side="left", padx=(8, 0))
+        self.iso_label = ttk.Label(page, text=_("No ISO selected yet."), foreground="#4da3ff",
+                                   wraplength=720, justify="left")
+        self.iso_label.pack(anchor="w", pady=(4, 4))
 
-        dep_frame = ttk.Frame(f)
-        dep_frame.pack(fill="x", padx=10, pady=(0, 10))
+        # Integrity check of the selected image; shown once an image is selected (see set_iso).
+        self.iso_check_frame = ttk.LabelFrame(
+            page, text=_("Verify the selected ISO (SHA-256): paste the published hash or SHA256SUMS line"))
+        sha_row = ttk.Frame(self.iso_check_frame)
+        sha_row.pack(fill="x", padx=8, pady=(4, 2))
+        self.iso_sha_entry = ttk.Entry(sha_row)
+        self.iso_sha_entry.pack(side="left", fill="x", expand=True)
+        self.iso_sha_btn = ttk.Button(sha_row, text=_("Calculate SHA-256"), command=self.calculate_iso_sha256)
+        self.iso_sha_btn.pack(side="left", padx=(8, 0))
+        self.iso_sha_progress = ttk.Progressbar(self.iso_check_frame, orient="horizontal", mode="determinate")
+        self.iso_sha_progress.pack(fill="x", padx=8, pady=(0, 2))
+        self.iso_sha_label = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
+        self.iso_sha_label.pack(anchor="w", padx=8)
+        self.iso_sha_result = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
+        self.iso_sha_result.pack(anchor="w", padx=8, pady=(0, 4))
+
+    def _build_create(self, page):
+        ttk.Separator(page).pack(fill="x", pady=(8, 8))
+        dep_frame = ttk.Frame(page)
+        dep_frame.pack(fill="x", pady=(0, 6))
         self.dep_label = ttk.Label(dep_frame, text="")
         self.dep_label.pack(side="left")
         self.install_deps_btn = ttk.Button(dep_frame, text=_("Install missing dependencies"),
                                            command=self.install_dependencies)
         self.check_dependencies()
 
-        ttk.Button(f, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(anchor="w", padx=10)
-        self.disk_combo = ttk.Combobox(f, state="readonly", width=90)
-        self.disk_combo.pack(fill="x", padx=10, pady=5)
-        self.disk_combo.bind("<<ComboboxSelected>>", lambda e: self._on_disk_selected(self.disk_combo))
-
-        warn_text = _(
-            "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
-            "Double-check that this is really your USB drive before continuing. Only USB "
-            "drives are listed — the system's internal disk is never shown."
-        )
-        if IS_LINUX:
-            warn_text += "\n" + _("You'll be asked for your administrator (sudo) password to format the drive.")
-        else:
-            warn_text += "\n" + _("Linux mode on macOS asks for your administrator password to write the drive.")
-        ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=650).pack(anchor="w", padx=10, pady=10)
-
-        create_row = ttk.Frame(f)
-        create_row.pack(anchor="w", padx=10, pady=10)
-        self.create_btn = ttk.Button(
-            create_row, text=_("Create Bootable USB Drive"), command=self.start_create_usb, state="disabled"
-        )
+        style = ttk.Style(self)
+        base = tkfont.nametofont("TkDefaultFont")
+        style.configure("Create.TButton", font=(base.actual("family"), base.actual("size") + 3, "bold"),
+                        padding=(22, 10))
+        create_row = ttk.Frame(page)
+        create_row.pack(fill="x")
+        self.create_btn = ttk.Button(create_row, text=_("Create Bootable USB Drive"), style="Create.TButton",
+                                     command=self.start_create_usb, state="disabled")
         self.create_btn.pack(side="left")
-        self.cancel_create_btn = ttk.Button(
-            create_row, text=_("Cancel"), command=self.cancel_create_usb, state="disabled"
-        )
-        self.cancel_create_btn.pack(side="left", padx=(8, 0))
+        self.cancel_create_btn = ttk.Button(create_row, text=_("Cancel"), command=self.cancel_create_usb,
+                                            state="disabled")
+        self.cancel_create_btn.pack(side="left", padx=(10, 0))
 
-        self.create_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
-        self.create_progress.pack(fill="x", padx=10, pady=(0, 2))
-        self.create_progress_label = ttk.Label(f, text="")
-        self.create_progress_label.pack(anchor="w", padx=10)
+        self.create_progress = ttk.Progressbar(page, orient="horizontal", mode="determinate")
+        self.create_progress.pack(fill="x", pady=(10, 2))
+        self.create_progress_label = ttk.Label(page, text="")
+        self.create_progress_label.pack(anchor="w")
         self._create_started = None
         self._create_last_ui = 0.0
         self._create_stage = None
         self._create_stage_base = 0
 
-        self.log_text = tk.Text(f, height=15, state="disabled", bg="black", fg="lightgreen")
-        self.log_text.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        self.log_text = tk.Text(page, height=6, state="disabled", bg="black", fg="lightgreen")
+        self.log_text.pack(fill="both", expand=True, pady=(6, 0))
+
+    def select_card(self, key):
+        """Choose the image type: shows its source panel and sets how the image will be written."""
+        if key not in CARD_MODE:
+            return
+        self.card_var.set(key)
+        self.mode_var.set(CARD_MODE[key])
+        for k, card in self.cards.items():
+            card.set_selected(k == key)
+        for k, panel in self.panels.items():
+            if k == key:
+                panel.grid()
+            else:
+                panel.grid_remove()
+        self.on_mode_change()
 
     # ---------- dependencies ----------
     def on_mode_change(self):
@@ -3604,12 +3616,12 @@ class App(_TkBase):
             return
         if path.lower().endswith(".zip"):
             # Google distributes ChromeOS Flex as latest.bin.zip: extract the .bin next to it.
-            self.nb.select(self.tab3)
+            self.select_card(CARD_CHROME)  # the extraction progress is shown in that card
             self._extract_flex_image(path, delete_zip=False)
         else:
             self.set_iso(path)
 
-    # ---------- ChromeOS Flex (download from Google, extract, hand over to tab 2) ----------
+    # ---------- ChromeOS Flex (download from Google, extract, then the normal write flow) ----------
     def start_flex_download(self):
         if not messagebox.askyesno(
             _("Download ChromeOS Flex"),
@@ -3706,13 +3718,12 @@ class App(_TkBase):
             except OSError:
                 pass
         self.set_iso(image)
-        self.flex_status_label.config(text=_("Selected image: {path}").format(path=image))
         self.refresh_disks()  # so a drive that is already plugged in shows up right away
         messagebox.showinfo(
             _("ChromeOS Flex is ready"),
             _("The disk image is ready:\n{path}\n\nNext: plug in a USB drive of 16 GB or larger, click "
               "\"Refresh USB drives list\", select the drive and click "
-              "\"Create Bootable ChromeOS Flex USB\" on this tab.").format(path=image))
+              "\"Create Bootable USB Drive\".").format(path=image))
 
     def _on_flex_error(self, msg):
         self.flex_download_btn.config(state="normal")
@@ -3828,8 +3839,35 @@ class App(_TkBase):
     def open_project_page(self):
         webbrowser.open(PROJECT_URL)
 
+    def _image_matches_choice(self, mode):
+        """Stop (or ask) when the selected file is clearly not what the chosen card writes.
+
+        A Linux image under "Windows 11" would otherwise be discovered only after the drive
+        was erased ("could not find install.wim"); a non-ChromeOS file under "Google Chrome"
+        is refused outright.
+        """
+        image = self.iso_path.get()
+        kind = detect_iso_kind(image)
+        if mode == MODE_CHROMEOS and kind != ISO_KIND_CHROMEOS:
+            messagebox.showerror(
+                _("ChromeOS Flex"),
+                _("The selected image is not a ChromeOS Flex disk image:\n{path}\n\n"
+                  "Download it with the button above, or select the .bin file from Google's "
+                  "latest.bin.zip.").format(path=image))
+            return False
+        if mode == MODE_WINDOWS and kind in (ISO_KIND_LINUX, ISO_KIND_CHROMEOS):
+            name = _("a Linux image") if kind == ISO_KIND_LINUX else _("a ChromeOS image")
+            return messagebox.askyesno(
+                _("This does not look like Windows"),
+                _("The selected file looks like {name}, but \"Windows 11\" is chosen. Windows mode would "
+                  "erase the drive and then fail to find the Windows installer.\n\n"
+                  "Choose the matching card instead, or continue only if you are sure.\n\n"
+                  "Continue anyway?").format(name=name),
+                icon="warning")
+        return True
+
     def _fit_window(self):
-        """Grow the window height (never shrink it) so everything on the current tab is visible.
+        """Grow the window height (never shrink it) so everything in the window is visible.
 
         The size used to be fixed, which clipped panels that appear later (the ISO checksum
         panel) on screens with larger fonts. It is capped to the screen.
@@ -3845,8 +3883,6 @@ class App(_TkBase):
     def set_iso(self, path):
         self.iso_path.set(path)
         self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
-        self.iso_label2.config(text=_("ISO: {path}").format(path=path))
-        self.flex_status_label.config(text=_("Selected image: {path}").format(path=path))
         # Only a default: the user can still switch the image type by hand. The content of
         # the ISO decides; the file name is only the fallback when it cannot be read.
         kind = detect_iso_kind(path)
@@ -3855,13 +3891,18 @@ class App(_TkBase):
             how = _("from the file name (the content could not be identified)")
         else:
             how = _("from the content of the ISO")
-        self.mode_var.set({ISO_KIND_WINDOWS: MODE_WINDOWS, ISO_KIND_CHROMEOS: MODE_CHROMEOS}.get(kind, MODE_LINUX))
+        if kind == ISO_KIND_CHROMEOS:
+            card = CARD_CHROME
+        elif kind == ISO_KIND_WINDOWS:
+            card = CARD_WINDOWS
+        else:  # a hybrid image: keep "Other ISO" if that is what was chosen, otherwise "Linux"
+            card = self.card_var.get() if self.card_var.get() in (CARD_LINUX, CARD_OTHER) else CARD_LINUX
         image = {ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_CHROMEOS: _("ChromeOS Flex")}.get(
             kind, _("Linux / other hybrid ISO"))
         self.log(_("Image type preselected {how}: {image}.").format(how=how, image=image))
-        self.on_mode_change()
+        self.select_card(card)
         self._reset_iso_sha()
-        self.iso_check_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.iso_label)
         self.after_idle(self._fit_window)
 
     def start_download(self):
@@ -3964,12 +4005,11 @@ class App(_TkBase):
             messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
             return
         labels = [d["label"] for d in self.disks]
-        for combo in (self.disk_combo, self.flex_disk_combo):
-            combo["values"] = labels
-            if labels:
-                combo.current(0)
-            else:
-                combo.set("")
+        self.disk_combo["values"] = labels
+        if labels:
+            self.disk_combo.current(0)
+        else:
+            self.disk_combo.set("")
         self.update_create_button_state()
 
     def selected_disk(self):
@@ -4127,6 +4167,8 @@ class App(_TkBase):
         if not disk:
             return
         mode = self.mode_var.get()
+        if not self._image_matches_choice(mode):
+            return
         what = {MODE_WINDOWS: _("Windows 11"), MODE_CHROMEOS: _("ChromeOS Flex")}.get(
             mode, _("the selected Linux image"))
         if mode in RAW_MODES:
