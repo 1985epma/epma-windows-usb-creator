@@ -21,10 +21,12 @@ Scenarios (each with its own loop device, always detached in `finally`):
   windows-split linux_build_usb with FAT32_MAX_FILE_SIZE patched tiny and a real WIM,
                 exercising `wimlib-imagex split` + `wimlib-imagex verify`.
   windows-hardening
-                linux_build_usb with hardening files (the privileged HARDENING_COPY_SCRIPT, run for
-                real through sudo onto the FAT32 volume): every extra file is present with the exact
-                bytes, including the literal sources/$OEM$/$$/... path, next to the ISO's files; and
-                a byte flipped on the drive after the copy must fail the verification.
+                linux_build_usb with hardening files (written by plain file I/O, as the user, onto the
+                FAT32 volume that the real prep script mounts with the user's uid/gid): every extra file
+                is present with the exact bytes, including the literal sources/$OEM$/$$/... path, next to
+                the ISO's files; a byte flipped on the drive after the copy must fail the verification;
+                and an image that already ships one of the files (spelled with other letter case) is
+                refused by refuse_hardening_clash (a real read-only loop mount) before any drive is touched.
   verify-diff   verify_windows_payload (no loop device needed) must reject a missing
                 file, a changed file and a changed install image.
   seed-drive    build_seed_usb (the hardening seed drive) on a 128 MiB loop device: refused when
@@ -386,11 +388,11 @@ def scenario_windows_hardening(app, workdir, priv, rec):
                 os.rmdir(mnt)
 
     # A byte that changes on the drive after the copy must be caught by the read-back.
-    original = app.copy_hardening_stage
+    original = app.write_hardening_files
 
-    def copy_then_corrupt(priv_, stage, mount_point, log, cancel_event=None):
-        original(priv_, stage, mount_point, log, cancel_event)
-        victim = os.path.join(mount_point, "sources", "$OEM$", "$$", "Setup", "Scripts", "harden.ps1")
+    def write_then_corrupt(root, files, cancel_event=None):
+        original(root, files, cancel_event)
+        victim = os.path.join(root, "sources", "$OEM$", "$$", "Setup", "Scripts", "harden.ps1")
         with open(victim, "r+b") as fh:
             fh.seek(10)
             first = fh.read(1)
@@ -398,14 +400,25 @@ def scenario_windows_hardening(app, workdir, priv, rec):
             fh.write(bytes([first[0] ^ 0xFF]))
 
     rec2 = Recorder()
-    app.copy_hardening_stage = copy_then_corrupt
+    app.write_hardening_files = write_then_corrupt
     try:
         with loop_device(workdir, "winhard2") as dev:
             expect_raises(RuntimeError, app.linux_build_usb, iso, os.path.basename(dev), rec2.log, priv,
                           rec2.progress, hardening_files=HARDENING_FILES, contains="Verification FAILED")
     finally:
-        app.copy_hardening_stage = original
+        app.write_hardening_files = original
     rec.lines.extend(rec2.lines)
+
+    # An image that already ships one of the files (any letter case) is refused before the drive is touched.
+    oem_tree = os.path.join(workdir, "tree-oem")
+    build_windows_tree(oem_tree)
+    write_random(os.path.join(oem_tree, "sources", "$oem$", "$$", "Setup", "Scripts", "SETUPCOMPLETE.CMD"), 300, 77)
+    oem_iso = os.path.join(workdir, "win-oem.iso")
+    make_iso(oem_tree, oem_iso)
+    err = expect_raises(ValueError, app.refuse_hardening_clash, oem_iso, HARDENING_FILES, rec.log, priv,
+                        contains="already contains")
+    assert "SetupComplete.cmd" in str(err), f"the refusal does not name the file: {err}"
+    app.refuse_hardening_clash(iso, HARDENING_FILES, rec.log, priv)  # the clean image passes
 
 
 def scenario_verify_diff(app, workdir, priv, rec):

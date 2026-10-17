@@ -121,33 +121,25 @@ CENARIOS = [
     ),
     # ===== hardening: engine-windows =====
     (
-        "Colar o caminho da pasta dentro do script que copia os arquivos de hardening",
+        "Build_usb deixa de conferir a imagem (arquivos de hardening que seriam substituídos) antes de apagar",
         lambda s: s.replace(
-            "'STAGE=\"$1\"; MNT=\"$2\"; STOP=\"$3\"\\n'",
-            "f'STAGE=\"{iso_path}\"; MNT=\"$2\"; STOP=\"$3\"\\n'",
+            "    refuse_hardening_clash(iso_path, hardening_files, log, priv)\n", ""),
+        "G14",
+    ),
+    (
+        "Colar o caminho da ISO dentro do script que lista a imagem antes de apagar",
+        lambda s: s.replace(
+            "'ISO=\"$1\"; ISO_MNT=\"$2\"; OWNER=\"$3\"\\n'",
+            "f'ISO=\"{iso_path}\"; ISO_MNT=\"$2\"; OWNER=\"$3\"\\n'",
         ),
-        "G14",
+        "G01",
     ),
     (
-        "Fazer a cópia dos arquivos de hardening seguir links simbólicos",
-        lambda s: s.replace("'cp -RP -- \"$STAGE\"/. \"$MNT\"/\\n'", "'cp -RL -- \"$STAGE\"/. \"$MNT\"/\\n'"),
-        "G14",
-    ),
-    (
-        "Deixar de recusar links simbólicos na pasta de hardening",
-        lambda s: s.replace('find "$STAGE" -type l', 'find "$STAGE" -type f'),
-        "G14",
-    ),
-    (
-        "Ignorar o arquivo de cancelamento na cópia dos arquivos de hardening",
+        "Tirar o 'trap INT' do script que lista a imagem antes de apagar",
         lambda s: s.replace(
-            "'if [ -e \"$STOP\" ]; then echo \"HARDENING_CANCELED\"; exit 0; fi\\n'\n", ""),
-        "G14",
-    ),
-    (
-        "Tirar o 'set -eu' só do script de cópia dos arquivos de hardening",
-        lambda s: s.replace(
-            "HARDENING_COPY_SCRIPT = (\n    'set -eu\\n'", "HARDENING_COPY_SCRIPT = (\n    '# sem set -eu\\n'"),
+            "LINUX_ISO_PEEK_SCRIPT = (\n    'set -eu\\n'\n    \"trap '' INT\\n\"\n",
+            "LINUX_ISO_PEEK_SCRIPT = (\n    'set -eu\\n'\n",
+        ),
         "G14",
     ),
     # ===== end hardening: engine-windows =====
@@ -185,8 +177,8 @@ CENARIOS = [
     (
         "Pendrive de sementes: build_seed_usb deixa de validar os arquivos",
         lambda s: s.replace(
-            "    files = validate_seed_files(files)\n    if expected_size and",
-            "    files = dict(files)\n    if expected_size and",
+            "    files = validate_seed_files(files)\n    check_seed_target_size(",
+            "    files = dict(files)\n    check_seed_target_size(",
         ),
         "G14",
     ),
@@ -195,6 +187,30 @@ CENARIOS = [
         lambda s: s.replace(
             "LINUX_SEED_REMOUNT_SCRIPT = (\n    'set -eu\\n'",
             "LINUX_SEED_REMOUNT_SCRIPT = ('{}'.format('x') + \n    'set -eu\\n'",
+        ),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: o script de preparo deixa de ignorar o Ctrl-C do terminal",
+        lambda s: s.replace(
+            "LINUX_SEED_PREP_SCRIPT = (\n    'set -eu\\n'\n    \"trap '' INT\\n\"\n",
+            "LINUX_SEED_PREP_SCRIPT = (\n    'set -eu\\n'\n",
+        ),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: o script de remontagem deixa de ignorar o Ctrl-C do terminal",
+        lambda s: s.replace(
+            "LINUX_SEED_REMOUNT_SCRIPT = (\n    'set -eu\\n'\n    \"trap '' INT\\n\"\n",
+            "LINUX_SEED_REMOUNT_SCRIPT = (\n    'set -eu\\n'\n",
+        ),
+        "G14",
+    ),
+    (
+        "Pendrive de sementes: o script de limpeza deixa de ignorar o Ctrl-C do terminal",
+        lambda s: s.replace(
+            "LINUX_SEED_CLEANUP_SCRIPT = (\n    'set -eu\\n'\n    \"trap '' INT\\n\"\n",
+            "LINUX_SEED_CLEANUP_SCRIPT = (\n    'set -eu\\n'\n",
         ),
         "G14",
     ),

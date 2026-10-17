@@ -217,6 +217,22 @@ class SeedModeTests(unittest.TestCase):
             self.assertIn(tool, app.LINUX_REQUIRED_TOOLS)
 
 
+class CheckSeedTargetSizeTests(unittest.TestCase):
+    def test_a_known_size_under_64_mib_is_refused_with_a_friendly_message(self):
+        for size in (1, 10 * MIB, app.SEED_MIN_DRIVE_BYTES - 1):
+            with self.subTest(size=size), self.assertRaisesRegex(
+                    ValueError, r"The drive \(.*\) is too small for a seed drive \(at least 64.*\)\. Nothing was changed\."):
+                app.check_seed_target_size(size)
+
+    def test_64_mib_and_more_pass(self):
+        for size in (app.SEED_MIN_DRIVE_BYTES, 16 * 1024 * MIB):
+            app.check_seed_target_size(size)
+
+    def test_an_unknown_size_passes(self):
+        for size in (None, 0):
+            app.check_seed_target_size(size)
+
+
 # ---------------------------------------------------------------------------
 # 3. The shell scripts
 # ---------------------------------------------------------------------------
@@ -229,6 +245,15 @@ class SeedScriptTests(TempDirTestCase):
             with self.subTest(script=name):
                 self.assertTrue(script.startswith("set -eu\n"))
                 self.assertNotIn("{label}", script)
+
+    def test_every_seed_script_ignores_the_terminals_ctrl_c_like_the_other_cancel_aware_scripts(self):
+        # A Ctrl-C in the terminal reaches the root script too (same process group); the app turns it into the
+        # cancel flag instead, so the script must not die half way (for example right after `mount`).
+        for name in self.SCRIPTS:
+            with self.subTest(script=name):
+                self.assertTrue(getattr(app, name).startswith("set -eu\ntrap '' INT\n"))
+        for other in (app.LINUX_RAW_SCRIPT, app.VERIFY_RAW_SCRIPT):
+            self.assertIn("trap '' INT\n", other)
 
     def test_the_label_reaches_mkfs_as_a_positional_argument(self):
         script = app.LINUX_SEED_PREP_SCRIPT
@@ -464,6 +489,13 @@ class BuildSeedUsbTests(TempDirTestCase):
                     self.build(**kw)
                 self.assertNothingTouched()
 
+    def test_the_size_check_is_a_public_function_that_build_seed_usb_uses_too(self):
+        with mock.patch.object(app, "check_seed_target_size", side_effect=ValueError("too small (stub)")) as check:
+            with self.assertRaisesRegex(ValueError, "too small"):
+                self.build(expected_size=10 * MIB)
+        check.assert_called_once_with(10 * MIB)
+        self.assertNothingTouched()
+
     def test_a_drive_of_exactly_64_mib_is_accepted_and_an_unknown_size_is_not_a_refusal(self):
         self.build(expected_size=64 * MIB)
         self.build(expected_size=None)
@@ -688,9 +720,25 @@ class LinuxSeedBackendTests(TempDirTestCase):
         priv = FakeSeedPriv(fail_on=app.LINUX_SEED_PREP_SCRIPT)
         with self.assertRaisesRegex(RuntimeError, "script failed"):
             self.run_backend(priv)
-        self.assertEqual(priv.names(), ["prep"])           # no retry, no cleanup of something never mounted
+        # No retry. The cleanup (`umount ... || true`, harmless when nothing is mounted) runs once because the
+        # volume is marked as mounted BEFORE the prep script runs: its last command is the mount, and an
+        # error or an interrupt right after it must not leave the volume mounted.
+        self.assertEqual(priv.names(), ["prep", "cleanup"])
         self.mocks["eject"].assert_not_called()
         self.assertEqual(self.drive_files(), {})
+
+    def test_an_interrupt_right_after_the_mount_still_unmounts(self):
+        class Interrupted(FakeSeedPriv):
+            def run_script(self, script, log, args=None, **kw):
+                super().run_script(script, log, args, **kw)
+                if script is app.LINUX_SEED_PREP_SCRIPT:
+                    raise KeyboardInterrupt  # Ctrl-C arrives after the script's last command, the mount
+
+        priv = Interrupted()
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_backend(priv)
+        self.assertEqual(priv.names(), ["prep", "cleanup"])
+        self.mocks["eject"].assert_not_called()
 
     def test_verification_mismatch_blocks_the_eject_and_still_unmounts(self):
         def corrupt(args):
@@ -726,7 +774,7 @@ class LinuxSeedBackendTests(TempDirTestCase):
         with self.assertRaises(app.OperationCanceled) as ctx:
             self.run_backend(priv)
         self.assertFalse(ctx.exception.drive_touched)
-        self.assertEqual(priv.names(), ["prep"])
+        self.assertEqual(priv.names(), ["prep"])  # stopped before the mount: nothing to unmount
         self.mocks["eject"].assert_not_called()
         self.assertFalse(any("unusable" in line for line in self.log.lines))
         self.assertEqual(self.drive_files(), {})
@@ -747,6 +795,7 @@ class LinuxSeedBackendTests(TempDirTestCase):
         self.assertTrue(ctx.exception.drive_touched)
         self.assertFalse(ctx.exception.written)
         self.assertTrue(any("incomplete and unusable" in line for line in self.log.lines))
+        self.assertEqual(priv.names(), ["prep"])  # stopped before mkfs and the mount
         self.mocks["eject"].assert_not_called()
 
     def test_cancel_while_copying_leaves_an_unusable_drive_and_unmounts(self):

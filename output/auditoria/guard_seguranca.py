@@ -460,7 +460,7 @@ if "hashlib.md5" not in FONTE and "hashlib.sha1" not in FONTE:
 # validar tudo ANTES de tocar na unidade, reconferir a identidade do disco
 # (reverify_target_disk) e registrar início e fim na auditoria; e os scripts de
 # administrador dele precisam ser texto fixo (sem f-string, sem concatenação),
-# começar com 'set -eu', receber o rótulo como parâmetro posicional ("$3") e
+# começar com 'set -eu' seguido de "trap '' INT", receber o rótulo como parâmetro posicional ("$3") e
 # olhar o arquivo-bandeira de cancelamento ANTES do primeiro comando destrutivo.
 # ============================================================
 print("\n=== G14 — Pendrive de sementes (hardening) ===")
@@ -507,11 +507,33 @@ else:
         erro("G14", "auditoria em build_seed_usb",
              "build_seed_usb() não registra mais o início e o fim da operação destrutiva.")
 
+# O pendrive do Windows com "hardening": a imagem é lida (somente leitura) ANTES de tocar na unidade, e a
+# gravação é recusada se ela já traz um dos arquivos que seriam substituídos.
+build_usb_fn = funcoes_modulo.get("build_usb")
+if build_usb_fn is None or "refuse_hardening_clash" not in funcoes_modulo:
+    erro("G14", "build_usb recusa imagem que já traz os arquivos de hardening",
+         "build_usb() ou refuse_hardening_clash() sumiu. Sem a checagem, os arquivos de hardening poderiam "
+         "substituir em silêncio arquivos que a própria imagem do Windows já traz.")
+else:
+    chamadas = {}
+    for no in ast.walk(build_usb_fn):
+        if isinstance(no, ast.Call):
+            alvo = ast.unparse(no.func)
+            chamadas[alvo] = min(no.lineno, chamadas.get(alvo, no.lineno))
+    if ("refuse_hardening_clash" in chamadas and "reverify_target_disk" in chamadas
+            and chamadas["refuse_hardening_clash"] < chamadas["reverify_target_disk"]):
+        ok("G14", "build_usb confere a imagem (somente leitura) antes de apagar a unidade")
+    else:
+        erro("G14", "build_usb confere a imagem antes de apagar",
+             "build_usb() precisa chamar refuse_hardening_clash() ANTES de reverify_target_disk() e de qualquer "
+             "gravação.", build_usb_fn.lineno)
+
 scripts_seed = []
 for no in ARVORE.body:
     if isinstance(no, ast.Assign):
         for alvo in no.targets:
-            if isinstance(alvo, ast.Name) and "SEED" in alvo.id and "script" in alvo.id.lower():
+            if (isinstance(alvo, ast.Name) and ("SEED" in alvo.id or "ISO_PEEK" in alvo.id)
+                    and "script" in alvo.id.lower()):
                 scripts_seed.append((alvo.id, no))
 if not scripts_seed:
     erro("G14", "scripts de administrador do pendrive de sementes",
@@ -529,6 +551,12 @@ for nome, no in scripts_seed:
         erro("G14", f"'{nome}' começa com 'set -eu'",
              f"O script '{nome}' precisa começar com 'set -eu'.", no.lineno)
         continue
+    if not corpo.startswith("set -eu\ntrap '' INT\n"):
+        erro("G14", f"'{nome}' ignora o Ctrl-C do terminal",
+             f"O script '{nome}' precisa ter \"trap '' INT\" logo depois de 'set -eu', como os demais scripts "
+             "de administrador que reagem ao cancelamento: sem isso, um Ctrl-C no terminal o interrompe no "
+             "meio (por exemplo, logo depois do 'mount', deixando o volume montado).", no.lineno)
+        continue
     if re.search(r"mkfs\.vfat[^\n]*\s-n\s+(?!\"\$[A-Za-z_0-9]+\")", corpo):
         erro("G14", f"'{nome}' recebe o rótulo por parâmetro",
              "O rótulo do volume precisa ser passado a mkfs.vfat como parâmetro posicional (\"$3\" ou uma "
@@ -545,80 +573,6 @@ for nome, no in scripts_seed:
             continue
     ok("G14", f"'{nome}' é texto fixo, começa com 'set -eu' e recebe valores por parâmetro")
 # ===== end hardening: engine-seed =====
-
-
-# ============================================================
-# G14 — Cópia dos arquivos de "hardening" para o pendrive (script privilegiado)
-#
-# HARDENING_COPY_SCRIPT roda como administrador e copia uma pasta preparada
-# pelo programa (os arquivos extras do Windows) para o pendrive montado. Ele
-# precisa ser texto literal (nada colado dentro), parar na primeira falha,
-# validar as duas pastas recebidas, recusar links simbólicos, copiar SEM
-# seguir links e respeitar o arquivo de cancelamento.
-# ============================================================
-print("\n=== G14 — Script privilegiado de cópia dos arquivos de hardening ===")
-
-
-def _so_literais(no):
-    """True se o valor é só texto fixo: constantes de string ligadas por '+'."""
-    if isinstance(no, ast.Constant):
-        return isinstance(no.value, str)
-    if isinstance(no, ast.BinOp) and isinstance(no.op, ast.Add):
-        return _so_literais(no.left) and _so_literais(no.right)
-    return False
-
-
-_script_hard = None
-for no in ARVORE.body:
-    if isinstance(no, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "HARDENING_COPY_SCRIPT"
-                                          for t in no.targets):
-        _script_hard = no
-
-if _script_hard is None:
-    erro("G14", "HARDENING_COPY_SCRIPT presente",
-         "O script de cópia dos arquivos de hardening sumiu ou foi renomeado. "
-         "Se a cópia mudou de forma, revise esta regra.")
-elif not _so_literais(_script_hard.value):
-    erro("G14", "HARDENING_COPY_SCRIPT é texto literal",
-         "O script privilegiado deixou de ser texto literal (f-string, format, "
-         "concatenação com variável). Valores só podem chegar como \"$1\", \"$2\", \"$3\".",
-         _script_hard.lineno)
-else:
-    _texto_hard = texto_literal(_script_hard.value)
-    _exigencias = [
-        (_texto_hard.lstrip().startswith("set -eu"), "começar com 'set -eu'"),
-        ('[ ! -d "$STAGE" ]' in _texto_hard and '[ ! -d "$MNT" ]' in _texto_hard,
-         "validar que a pasta preparada e o ponto de montagem são diretórios"),
-        ('find "$STAGE" -type l' in _texto_hard, "recusar links simbólicos na pasta preparada"),
-        ("cp -RP -- " in _texto_hard, "copiar sem seguir links ('cp -RP --')"),
-        ('[ -e "$STOP" ]' in _texto_hard and "HARDENING_CANCELED" in _texto_hard,
-         "respeitar o arquivo de cancelamento"),
-    ]
-    _faltando = [descricao for presente, descricao in _exigencias if not presente]
-    if _faltando:
-        for descricao in _faltando:
-            erro("G14", f"HARDENING_COPY_SCRIPT deve {descricao}",
-                 f"O script privilegiado de cópia dos arquivos de hardening deixou de {descricao}.",
-                 _script_hard.lineno)
-    else:
-        ok("G14", "script de cópia: literal, 'set -eu', valida pastas, recusa links, sem seguir links, cancelável")
-
-_chamadas_hard = [no for no in ast.walk(ARVORE)
-                  if isinstance(no, ast.Call) and getattr(no.func, "attr", None) == "run_script"
-                  and no.args and isinstance(no.args[0], ast.Name) and no.args[0].id == "HARDENING_COPY_SCRIPT"]
-if not _chamadas_hard:
-    erro("G14", "HARDENING_COPY_SCRIPT é executado com argumentos posicionais",
-         "Nenhuma chamada run_script(HARDENING_COPY_SCRIPT, ...) encontrada.")
-else:
-    for chamada in _chamadas_hard:
-        argumentos = [kw for kw in chamada.keywords if kw.arg == "args"]
-        if argumentos and isinstance(argumentos[0].value, ast.List) and len(argumentos[0].value.elts) == 3:
-            ok("G14", "HARDENING_COPY_SCRIPT recebe a pasta, o ponto de montagem e o arquivo de cancelamento "
-                      "por args=[...]")
-        else:
-            erro("G14", "HARDENING_COPY_SCRIPT recebe 3 argumentos posicionais",
-                 "run_script(HARDENING_COPY_SCRIPT, ...) precisa passar args=[pasta, ponto, cancelamento].",
-                 chamada.lineno)
 
 
 # ============================================================

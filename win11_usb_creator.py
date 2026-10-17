@@ -1173,21 +1173,18 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
 
     Every file is compared by checksum (rsync dry run), and the install image is
     either compared directly or checked with `wimlib-imagex verify` when it was split.
-    `extra_files` ({relative path: bytes}, the hardening files) are compared byte for byte too;
-    they may replace a file of the ISO, so the rsync comparison leaves exactly those paths out.
+    `extra_files` ({relative path: bytes}, the hardening files) are compared byte for byte too. They never
+    replace a file of the ISO (an image that already holds one is refused before anything is copied), so
+    the rsync comparison has no exemption: a hardening file that overwrote an ISO file shows up as a difference.
     """
     log("Verifying the copied files (reading them back from the drive)...")
     if progress:
         progress(0, 0, "Verifying the copied files...")
     bad = []
-    replaced = {rel.lower() for rel in (extra_files or {})}  # FAT32 ignores case
 
     def watch(line):
         log(line)
         if re.match(r"^(>f|cd|\*deleting)", line):
-            item = re.match(r"^\S+ (.*)$", line.strip())  # "<flags> <path>" (the flags field varies by rsync)
-            if item and item.group(1).lower() in replaced:
-                return  # a hardening file written over an ISO file; verify_hardening_files compares it
             bad.append(line.strip())
 
     run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
@@ -1240,14 +1237,18 @@ def find_case_insensitive(directory, name):
 
 
 def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=None, cancel_event=None,
-                         extra_files=None, write_extra=None):
+                         extra_files=None):
     """Copy the contents of a mounted Windows ISO to the drive, reporting progress.
 
     Everything except sources/install.wim|esd is copied with rsync; that file is
     copied directly, or split into <4 GB parts when it exceeds the FAT32 limit.
     Progress is counted in bytes over the whole payload. The "sources" folder and the
     install image are looked up ignoring case.
+    `extra_files` ({relative path: bytes}, the hardening files) are written after the ISO's files with
+    write_hardening_files (plain file I/O as the user: both mounts are user-owned) and read back with the rest.
     """
+    if extra_files:
+        check_image_for_hardening_clash(src_root, extra_files)  # before a single byte is copied
     sources_dir = find_case_insensitive(src_root, "sources")
     big_file = None
     for name in ("install.wim", "install.esd"):
@@ -1317,12 +1318,12 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
             cancel_event=cancel_event)
 
     if extra_files:
-        # Hardening files go on after the ISO's own files (they may replace one) and before the
-        # remount, so the read-back below covers them too. `write_extra(root)` does the writing.
+        # Hardening files go on after the ISO's own files and before the remount, so the read-back
+        # below covers them too.
         report(total, "Adding hardening files...")
         log("Adding hardening files...")
         check_canceled(cancel_event)
-        write_extra(dst_root)
+        write_hardening_files(dst_root, extra_files, cancel_event)
 
     report(total, "Flushing data to the drive...")
     check_canceled(cancel_event)
@@ -2361,9 +2362,7 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
             "wimlib-imagex not found. Install it with: brew install wimlib "
             "(or use the 'Install missing dependencies' button).",
             reopen=reopen, cancel_event=cancel_event,
-            **({"extra_files": hardening_files,
-                "write_extra": lambda root: write_hardening_files(root, hardening_files, cancel_event)}
-               if hardening_files else {}))
+            **({"extra_files": hardening_files} if hardening_files else {}))
     except OperationCanceled as e:
         if e.written:
             log("Canceled during verification. Unmounting the drive; the files were copied completely "
@@ -2790,14 +2789,8 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
     dev = f"/dev/{dev_name}"
     part = linux_partition_path(dev_name, 1)
     uid, gid = os.getuid(), os.getgid()
-    # The hardening files are staged (private 0700 folder) before the drive is touched.
-    stage = stage_hardening_files(hardening_files) if hardening_files else None
-    try:
-        iso_mount = tempfile.mkdtemp(prefix="win11iso_")
-        usb_mount = tempfile.mkdtemp(prefix="win11usb_")
-    except BaseException:
-        _silent_rmtree(stage)
-        raise
+    iso_mount = tempfile.mkdtemp(prefix="win11iso_")
+    usb_mount = tempfile.mkdtemp(prefix="win11usb_")
 
     log(f"Erasing and formatting {dev} as GPT + FAT32 (administrator privileges required)...")
     # Every value below arrives as a positional parameter ("$1".."$6"), never
@@ -2856,9 +2849,7 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
             "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
             "Arch/openSUSE) or use the 'Install missing dependencies' button.",
             reopen=reopen, cancel_event=cancel_event,
-            **({"extra_files": hardening_files,
-                "write_extra": lambda root: copy_hardening_stage(priv, stage, root, log, cancel_event)}
-               if hardening_files else {}))
+            **({"extra_files": hardening_files} if hardening_files else {}))
     except OperationCanceled as e:
         if e.written:
             log("Canceled during verification. The files were copied completely but NOT verified.")
@@ -2873,7 +2864,6 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
         except Exception as cleanup_err:
             log(f"Warning: cleanup failed: {cleanup_err}")
         _silent_rmdir(iso_mount, usb_mount)
-        _silent_rmtree(stage)
 
     ejected = linux_eject(dev_name, log, priv) if eject else None
     log("Done! The USB drive is ready to install Windows 11.")
@@ -2973,72 +2963,88 @@ def verify_hardening_files(root, files, log, cancel_event=None):
     log(f"Hardening files verified: {len(files)} file(s) identical.")
 
 
-def _silent_rmtree(path):
-    """Best-effort cleanup of a staging folder (None: nothing to do)."""
-    if path:
-        shutil.rmtree(path, ignore_errors=True)
+# --- the hardening files must never replace a file the image already ships -------------------------------
+# An image of its own (an OEM or custom build) may already carry e.g. sources/$OEM$/$$/Setup/Scripts/
+# SetupComplete.cmd. Writing ours over it would silently drop that content, so such an image is refused.
+# The check looks at the ISO's tree (read-only) BEFORE the drive is touched (refuse_hardening_clash, called
+# by build_usb); copy_windows_payload repeats it on the mounted tree as a last line of defence, and the
+# post-copy verification has no exemption for these paths either.
+def find_hardening_clashes(root, files):
+    """The paths of `files` ({relative posix path: bytes}) that already exist below `root`, ignoring case.
 
-
-def stage_hardening_files(files, cancel_event=None):
-    """Write `files` into a new private (0700) temporary folder and return its path.
-
-    The privileged copy script takes this folder as `$1`; staging it as the user keeps every name
-    out of the shell. The caller removes the folder (`_silent_rmtree`).
+    FAT32 (and a Windows setup) treat names case-insensitively, so "Sources/$OEM$/..." clashes with
+    "sources/$oem$/...". Returns the paths as spelled in `files`, sorted.
     """
-    stage = tempfile.mkdtemp(prefix="win11hard_")
-    try:
-        os.chmod(stage, 0o700)
-        write_hardening_files(stage, files, cancel_event)
-    except BaseException:
-        _silent_rmtree(stage)
-        raise
-    return stage
+    clashes = []
+    for rel in sorted(files):
+        path = root
+        for part in rel.split("/"):
+            path = find_case_insensitive(path, part)
+            if path is None:
+                break
+        if path is not None:
+            clashes.append(rel)
+    return clashes
 
 
-# Root script that puts a staged folder onto the mounted drive. Values arrive as "$1".."$3" (never
-# pasted into the text): the staged folder, the mount point, and "$3", the cancel flag file the app
-# creates to ask for a stop (HARDENING_CANCELED is printed when it appears). It never follows
-# symbolic links: a link anywhere in the staged folder is refused, and cp copies links as links.
-HARDENING_COPY_SCRIPT = (
+def check_image_for_hardening_clash(root, files):
+    """Raise ValueError (and audit the refusal) when the image tree at `root` already holds any of `files`."""
+    clashes = find_hardening_clashes(root, files)
+    if clashes:
+        audit(f"HARDENING REFUSED: the image already contains {clashes}; nothing was changed", logging.WARNING)
+        raise ValueError(f"This Windows image already contains {', '.join(clashes)}. Adding the hardening "
+                         "files would replace them, so nothing was changed. Untick the hardening option "
+                         "or use another image.")
+
+
+# Root script that mounts the ISO read-only so the app (as the user) can list it BEFORE the drive is
+# touched (the prep script of linux_build_usb mounts it only after wiping). Same mount calls as that script;
+# "$1" the ISO, "$2" an empty folder, "$3" uid:gid. Nothing is written anywhere and no drive is involved.
+LINUX_ISO_PEEK_SCRIPT = (
     'set -eu\n'
     "trap '' INT\n"
-    'STAGE="$1"; MNT="$2"; STOP="$3"\n'
-    'if [ ! -d "$STAGE" ] || [ -L "$STAGE" ]; then echo "The staged folder is not a plain directory." >&2; exit 1; fi\n'
-    'if [ ! -d "$MNT" ] || [ -L "$MNT" ]; then echo "The mount point is not a plain directory." >&2; exit 1; fi\n'
-    'if [ -n "$(find "$STAGE" -type l)" ]; then echo "Refusing to copy: the staged folder holds a symbolic link." >&2; exit 1; fi\n'
-    'if [ -e "$STOP" ]; then echo "HARDENING_CANCELED"; exit 0; fi\n'
-    'cp -RP -- "$STAGE"/. "$MNT"/\n'
-    'sync\n'
-    'echo "HARDENING_COPIED"\n'
+    'ISO="$1"; ISO_MNT="$2"; OWNER="$3"\n'
+    'if ! mount -t udf,iso9660 -o loop,ro,uid="${OWNER%%:*}",gid="${OWNER##*:}" "$ISO" "$ISO_MNT"; then\n'
+    'echo "Mounting the ISO as UDF/ISO 9660 failed; letting mount detect the type." >&2\n'
+    'mount -o loop,ro,uid="${OWNER%%:*}",gid="${OWNER##*:}" "$ISO" "$ISO_MNT"\n'
+    'fi\n'
+)
+LINUX_ISO_PEEK_CLEANUP_SCRIPT = (
+    'set -eu\n'
+    "trap '' INT\n"
+    'umount "$1" || true\n'
 )
 
 
-def copy_hardening_stage(priv, stage, mount_point, log, cancel_event=None):
-    """Copy the staged hardening folder onto the mounted drive with HARDENING_COPY_SCRIPT (Linux).
-
-    Both folders are checked here first. The script runs once and is never repeated on failure.
-    Raises OperationCanceled when a cancel was asked for (the drive then holds an incomplete payload).
-    """
-    for folder in (stage, mount_point):
-        if not os.path.isdir(folder) or os.path.islink(folder):
-            raise ValueError(f"Not a plain directory: {folder!r}")
-    check_canceled(cancel_event)
-    seen = set()
-
-    def watch(line):
-        line = line.strip()
-        if line in ("HARDENING_COPIED", "HARDENING_CANCELED"):
-            seen.add(line)
+def refuse_hardening_clash(iso_path, files, log, priv):
+    """Before the drive is touched: mount the ISO read-only, and refuse (ValueError) if it already holds any
+    of the hardening `files`. Does nothing when there are no files. The ISO is unmounted again either way."""
+    if not files:
+        return
+    log("Checking that the image does not already contain the hardening files...")
+    mount_dir = tempfile.mkdtemp(prefix="win11peek_")
+    attempted = False
+    try:
+        if IS_MAC:
+            attempted = True
+            run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log,
+                    timeout=300)
         else:
-            log(line)
+            attempted = True  # set first: an interrupt right after the mount must still reach the unmount
+            priv.run_script(LINUX_ISO_PEEK_SCRIPT, log,
+                            args=[iso_path, mount_dir, f"{os.getuid()}:{os.getgid()}"])
+        check_image_for_hardening_clash(mount_dir, files)
+    finally:
+        if attempted:
+            if IS_MAC:
+                run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False, timeout=DISKUTIL_TIMEOUT)
+            else:
+                try:
+                    priv.run_script(LINUX_ISO_PEEK_CLEANUP_SCRIPT, log, args=[mount_dir])
+                except Exception as cleanup_err:
+                    log(f"Warning: cleanup failed: {cleanup_err}")
+        _silent_rmdir(mount_dir)
 
-    with cancel_flag(cancel_event) as flag:
-        priv.run_script(HARDENING_COPY_SCRIPT, watch, args=[stage, mount_point, flag])
-    if "HARDENING_CANCELED" in seen:
-        raise OperationCanceled("Canceled by the user while the hardening files were being added.")
-    if "HARDENING_COPIED" not in seen:
-        raise RuntimeError("Could not confirm that the hardening files were copied. "
-                           "Do not trust this drive; run the creation again.")
 # ===== end hardening: engine-windows =====
 
 
@@ -3152,6 +3158,7 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
     hardening_files = collect_hardening_files(hardening)
     iso_path = validate_image_for_mode(iso_path, mode, expected_size)
     validate_device_name(dev)
+    refuse_hardening_clash(iso_path, hardening_files, log, priv)
     try:
         iso_sha = hash_iso_for_audit(iso_path, log, progress, cancel_event)
         reverify_target_disk(dev, expected_size, log)
@@ -5572,6 +5579,7 @@ def verify_seed_files(files, dst_root, log, progress=None, cancel_event=None):
 # the script looks at it between its steps. Nothing is printed on success.
 LINUX_SEED_PREP_SCRIPT = (
     'set -eu\n'
+    "trap '' INT\n"
     'DEV="$1"; PART="$2"; LABEL="$3"; USB_MNT="$4"; OWNER="$5"; FLAG="$6"\n'
     'umount_parts() { for p in "$DEV"[0-9]* "$DEV"p[0-9]*; do umount "$p" 2>/dev/null || true; done; }\n'
     'if [ -e "$FLAG" ]; then echo SEED_NOT_TOUCHED; exit 0; fi\n'
@@ -5597,6 +5605,7 @@ LINUX_SEED_PREP_SCRIPT = (
 # Remount the partition read-only so the check reads from the device and not from the cache.
 LINUX_SEED_REMOUNT_SCRIPT = (
     'set -eu\n'
+    "trap '' INT\n"
     'sync\n'
     'umount "$2"\n'
     '{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null || true\n'
@@ -5604,6 +5613,7 @@ LINUX_SEED_REMOUNT_SCRIPT = (
 )
 LINUX_SEED_CLEANUP_SCRIPT = (
     'set -eu\n'
+    "trap '' INT\n"
     'umount "$1" || true\n'
 )
 
@@ -5657,15 +5667,20 @@ def linux_build_seed_usb(label, files, stage_dir, dev_name, log, priv, progress=
 
     log(f"Erasing and formatting {dev} as GPT + FAT32 ('{label}') (administrator privileges required)...")
     try:
+        # Marked BEFORE the script runs: its last command is the mount, and an interrupt (or an error) that
+        # arrives right after it must still reach the unmount below. Unmounting a volume that was never
+        # mounted is harmless (`umount ... || true`).
+        mounted = True
         with cancel_flag(cancel_event) as flag:
             # Every value arrives as a positional parameter ("$1".."$6"), never pasted into the script.
             priv.run_script(LINUX_SEED_PREP_SCRIPT, watch, args=[dev, part, label, usb_mount, owner, flag])
         if state["untouched"]:
+            mounted = False  # the script stopped on request before the mount
             log("Canceled before the drive was touched; nothing was changed.")
             raise OperationCanceled("Canceled by the user before the drive was touched.", drive_touched=False)
         if state["canceled"]:
+            mounted = False  # stopped between the wipe and the format: nothing is mounted
             raise OperationCanceled("Canceled by the user.")
-        mounted = True
         check_canceled(cancel_event)
         copy_seed_files(stage_dir, usb_mount, files, log, progress, cancel_event)
         log("Remounting the drive read-only to read it back from the device...")
@@ -5692,6 +5707,17 @@ def linux_build_seed_usb(label, files, stage_dir, dev_name, log, priv, progress=
     return ejected
 
 
+def check_seed_target_size(size):
+    """Refuse a drive whose KNOWN size (bytes) is under SEED_MIN_DRIVE_BYTES; an unknown size (0/None) passes.
+
+    Pure and cheap: the window and the command line call it right after the drive is chosen, before any
+    dialog or password prompt; build_seed_usb calls it again. Raises ValueError with a friendly message.
+    """
+    if size and size < SEED_MIN_DRIVE_BYTES:
+        raise ValueError(f"The drive ({human_size(size)}) is too small for a seed drive "
+                         f"(at least {human_size(SEED_MIN_DRIVE_BYTES)}). Nothing was changed.")
+
+
 def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, cancel_event=None, eject=True,
                    profile=HARDENING_BASELINE):
     """Create a seed drive for `target` (ubuntu, fedora or debian): GPT + FAT32 with the label and the files
@@ -5709,9 +5735,7 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
     label, files = hardening_files_seed(target, profile)
     label = validate_seed_label(label)
     files = validate_seed_files(files)
-    if expected_size and expected_size < SEED_MIN_DRIVE_BYTES:
-        raise ValueError(f"The drive ({human_size(expected_size)}) is too small for a seed drive "
-                         f"(at least {human_size(SEED_MIN_DRIVE_BYTES)}). Nothing was changed.")
+    check_seed_target_size(expected_size)
     missing = get_missing_dependencies(MODE_SEED)
     if missing:
         raise ValueError(f"Cannot continue: required tool(s) not found: {', '.join(missing)}. "
