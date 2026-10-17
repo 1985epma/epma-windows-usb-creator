@@ -683,6 +683,10 @@ class HintLayoutTests(GuiTestCase):
 
     def page_order(self):
         win = self.win
+        # the bar and the log are on screen only after a write started / "Show details" was opened
+        win._reset_create_progress()
+        self.addCleanup(win.create_progress.stop)
+        win.details_toggle.set_open(True)
         page = win.create_hint.master
         slaves = page.pack_slaves()
         row = win.create_btn.master
@@ -731,9 +735,156 @@ class HintLayoutTests(GuiTestCase):
                 win._reset_iso_sha()
                 first.config(text="first")
                 second.config(text="second")
+                win._show_sha_bar()
                 order = win.iso_check_frame.pack_slaves()
                 self.assertLess(order.index(win.iso_sha_progress), order.index(win.iso_sha_label))
                 self.assertLess(order.index(win.iso_sha_label), order.index(win.iso_sha_result))
+
+
+class QuietLayoutTests(GuiTestCase):
+    """P1 of the GUI review: one Cancel, a highlighted Create, optional parts behind links, no idle bars."""
+
+    def manager(self, widget):
+        return str(widget.winfo_manager())
+
+    def test_there_is_a_single_cancel_button(self):
+        self.assertFalse(hasattr(self.win, "cancel_btn"))
+        self.assertFalse(hasattr(self.win, "flex_cancel_btn"))
+
+        def cancels(widget):
+            found = []
+            for child in widget.winfo_children():
+                if str(child.winfo_class()) == "TButton" and str(child.cget("text")) == "Cancel":
+                    found.append(child)
+                found += cancels(child)
+            return found
+
+        self.assertEqual(cancels(self.win), [self.win.cancel_create_btn])
+
+    def test_the_single_cancel_stops_whatever_is_running(self):
+        win = self.win
+        win._download_running = True
+        win._sync_controls()
+        self.assertEqual(self.state(win.cancel_create_btn), "normal")
+        win.cancel_current()
+        self.assertTrue(win.cancel_event.is_set())
+        win._download_running = False
+        win._flex_busy = True
+        win._sync_controls()
+        self.assertEqual(self.state(win.cancel_create_btn), "normal")
+        win.cancel_current()
+        self.assertTrue(win.flex_cancel_event.is_set())
+        win._flex_busy = False
+        win._sync_controls()
+        self.assertEqual(self.state(win.cancel_create_btn), "disabled")
+
+    def test_cancel_during_a_write_still_asks_first(self):
+        win = self.win
+        win._creating = True
+        win.cancel_create_btn.config(state="normal")
+        win.cancel_current()                          # the question is answered "no"
+        self.assertEqual(self.box.titles("question"), ["Cancel the operation?"])
+        self.assertFalse(win.create_cancel_event.is_set())
+        self.assertFalse(win.cancel_event.is_set() or win.flex_cancel_event.is_set())
+
+    def test_create_is_an_accent_button_that_acts_like_a_button(self):
+        win = self.win
+        self.assertIsInstance(win.create_btn, app.AccentButton)
+        self.assertEqual(self.state(win.create_btn), "disabled")
+        clicks = []
+        button = app.AccentButton(win, "Go", lambda: clicks.append(1) or "done", state="disabled")
+        self.addCleanup(button.destroy)
+        self.assertIsNone(button.invoke())
+        self.assertEqual(clicks, [])
+        button.config(state="normal")
+        self.assertEqual(self.state(button), "normal")
+        self.assertEqual(button.invoke(), "done")
+        self.assertEqual(clicks, [1])
+        button.config(text="Other")
+        self.assertEqual(button.cget("text"), "Other")
+        button.config(state="disabled")
+        self.assertIsNone(button.invoke())
+
+    def test_the_erase_warning_is_one_amber_line_right_above_the_create_row(self):
+        win = self.win
+        slaves = win.create_hint.master.pack_slaves()
+        text = "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased."
+        warning = [w for w in slaves if str(w.winfo_class()) == "TLabel" and str(w.cget("text")) == text]
+        self.assertEqual(len(warning), 1)
+        self.assertEqual(slaves.index(warning[0]) + 1, slaves.index(win.create_btn.master))
+        self.assertEqual(str(warning[0].cget("foreground")), "#ff9f0a")
+
+    def test_the_log_is_behind_a_link_and_opens_by_itself_on_failure(self):
+        win = self.win
+        self.assertFalse(win.details_toggle.is_open)
+        self.assertEqual(self.manager(win.log_text), "")
+        self.assertIn("Show details", str(win.details_toggle.cget("text")))
+        win.log("a line")                                   # logging works while the box is hidden
+        self.assertIn("a line", win.log_text.get("1.0", "end"))
+        win.details_toggle.toggle()
+        self.assertEqual(self.manager(win.log_text), "pack")
+        self.assertIn("Hide details", str(win.details_toggle.cget("text")))
+        win.details_toggle.toggle()
+        self.assertEqual(self.manager(win.log_text), "")
+        win._finish_create_progress(False, canceled=True)   # a cancel is not a failure
+        self.assertFalse(win.details_toggle.is_open)
+        win._finish_create_progress(False)
+        self.assertTrue(win.details_toggle.is_open)
+        self.assertEqual(self.manager(win.log_text), "pack")
+
+    def test_the_sha_panel_is_behind_a_link_that_appears_with_the_image(self):
+        win = self.win
+        self.assertEqual(self.manager(win.sha_toggle), "")
+        self.assertEqual(self.manager(win.iso_check_frame), "")
+        win.set_iso("/tmp/does-not-exist.iso")
+        self.assertEqual(self.manager(win.sha_toggle), "pack")
+        self.assertEqual(self.manager(win.iso_check_frame), "")
+        win.sha_toggle.toggle()
+        self.assertEqual(self.manager(win.iso_check_frame), "pack")
+        slaves = win.sha_toggle.master.pack_slaves()
+        self.assertLess(slaves.index(win.iso_label), slaves.index(win.sha_toggle))
+        self.assertLess(slaves.index(win.sha_toggle), slaves.index(win.iso_check_frame))
+        win.set_iso("/tmp/other.iso")                      # a new file keeps the panel as the user left it
+        self.assertEqual(self.manager(win.iso_check_frame), "pack")
+        win.sha_toggle.toggle()
+        self.assertEqual(self.manager(win.iso_check_frame), "")
+
+    def test_no_progress_bar_is_shown_while_idle(self):
+        win = self.win
+        for bar in (win.progress, win.flex_progress, win.create_progress, win.iso_sha_progress):
+            self.assertEqual(self.manager(bar), "", bar)
+
+    def test_the_create_bar_follows_the_write(self):
+        win = self.win
+        win._reset_create_progress()
+        self.addCleanup(win.create_progress.stop)
+        self.assertEqual(self.manager(win.create_progress), "pack")
+        win._finish_create_progress(True)
+        self.assertEqual(self.manager(win.create_progress), "pack")   # a finished write shows 100%
+        win._reset_create_progress()
+        win._finish_create_progress(False, canceled=True)
+        self.assertEqual(self.manager(win.create_progress), "")
+        self.assertEqual(str(win.create_progress_label.cget("text")), "Canceled.")
+
+    def test_download_bars_appear_with_the_download_and_go_with_a_failure(self):
+        win = self.win
+        win.windows_dl.start()
+        self.assertEqual(self.manager(win.progress), "pack")
+        win.windows_dl.finish("Download failed.", bar_value=0)
+        self.assertEqual(self.manager(win.progress), "")
+        win.flex_dl.show(50, "Downloading...")
+        self.assertEqual(self.manager(win.flex_progress), "pack")
+        win.flex_dl.finish("Ready.", bar_value=100)
+        self.assertEqual(self.manager(win.flex_progress), "pack")
+
+    def test_the_sha_bar_is_shown_by_a_calculation_and_sits_above_the_text(self):
+        win = self.win
+        win.iso_sha_label.config(text="Calculating...")
+        win._show_sha_bar()
+        order = win.iso_check_frame.pack_slaves()
+        self.assertLess(order.index(win.iso_sha_progress), order.index(win.iso_sha_label))
+        win._reset_iso_sha()
+        self.assertEqual(self.manager(win.iso_sha_progress), "")
 
 
 class CancelMessageTests(GuiTestCase):
@@ -784,7 +935,7 @@ class FlexBusyTests(GuiTestCase):
         self.assertTrue(self.win.flex_cancel_event.is_set())
         self.assertEqual(self.state(self.win.pick_btn), "disabled")
         self.assertEqual(self.state(self.win.flex_download_btn), "disabled")
-        self.assertEqual(self.state(self.win.flex_cancel_btn), "normal")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "normal")
 
     def test_a_second_extraction_cannot_start_and_never_clears_the_cancel(self):
         gate = threading.Event()
@@ -808,7 +959,7 @@ class FlexBusyTests(GuiTestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(self.state(self.win.pick_btn), "normal")
         self.assertEqual(self.state(self.win.flex_download_btn), "normal")
-        self.assertEqual(self.state(self.win.flex_cancel_btn), "disabled")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "disabled")
         self.assertEqual(self.box.titles("error"), ["ChromeOS Flex"])
 
     def test_a_cancel_that_arrives_as_the_download_ends_is_kept(self):
@@ -829,12 +980,12 @@ class FlexBusyTests(GuiTestCase):
         self.win._download_running = True
         self.win._sync_controls()
         self.assertEqual(self.state(self.win.download_btn), "disabled")
-        self.assertEqual(self.state(self.win.cancel_btn), "normal")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "normal")
         self.assertEqual(self.state(self.win.pick_btn), "normal")
         self.win._download_running = False
         self.win._sync_controls()
         self.assertEqual(self.state(self.win.download_btn), "normal")
-        self.assertEqual(self.state(self.win.cancel_btn), "disabled")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "disabled")
 
 
 class TypedConfirmationTests(GuiTestCase):

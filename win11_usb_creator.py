@@ -493,16 +493,17 @@ PT_BR = {
     "Choose the image file first (\"Select existing ISO file...\" or the download above).": "Escolha primeiro o arquivo da imagem (\"Select existing ISO file...\" ou o download acima).",
     "No USB drive found. Plug it in and click \"Refresh USB drives list\".": "Nenhum pendrive USB encontrado. Conecte-o e clique em \"Refresh USB drives list\".",
     "Select a USB drive in the list.": "Selecione um pendrive USB na lista.",
-    "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased. Only USB drives are listed; the system disk is never shown.": "AVISO: TODOS OS DADOS do pendrive selecionado serão apagados PERMANENTEMENTE. Só pendrives USB aparecem na lista; o disco do sistema nunca é mostrado.",
+    "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.": "AVISO: TODOS OS DADOS do pendrive selecionado serão apagados PERMANENTEMENTE.",
     "Google Chrome": "Google Chrome",
     "Copies the files": "Copia os arquivos",
     "Linux": "Linux",
     "Ubuntu, Fedora...": "Ubuntu, Fedora...",
     "Other ISO": "Outra ISO",
     "Any bootable image": "Qualquer imagem de boot",
-    "You'll be asked for your administrator (sudo) password to write the drive.": "A senha de administrador (sudo) será pedida para gravar o pendrive.",
-    "Linux, ChromeOS and Other ISO modes on macOS ask for your administrator password to write the drive.": "Os modos Linux, ChromeOS e Outra ISO no macOS pedem a senha de administrador para gravar o pendrive.",
-    "Verify the selected ISO (SHA-256): paste the published hash or SHA256SUMS line": "Verificar a ISO selecionada (SHA-256): cole o hash publicado ou a linha do SHA256SUMS",
+    "Verify the selected ISO (SHA-256)": "Verificar a ISO selecionada (SHA-256)",
+    "Paste the published hash or SHA256SUMS line, then calculate": "Cole o hash publicado ou a linha do SHA256SUMS e calcule",
+    "Show details": "Mostrar detalhes",
+    "Hide details": "Ocultar detalhes",
     "a Linux image": "uma imagem Linux",
     "a ChromeOS image": "uma imagem ChromeOS",
     "This does not look like Windows": "Isto não parece ser Windows",
@@ -3329,7 +3330,7 @@ def help_sections():
 • Four cards choose the type of image: Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO. The panel under the cards changes with the card and shows where to get that kind of image.
 • The list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Select existing ISO file...": the image you already have, with an optional SHA-256 check.
-• "Create Bootable USB Drive" with its progress bar and Cancel button, and the log below.
+• "Create Bootable USB Drive" (the blue button), the one "Cancel" button for whatever is running (a download, an extraction or the write), its progress bar, and "Show details", which opens the log.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
         ("Quick start: Windows 11", """## 1. Get the ISO (card "Windows 11")
@@ -3352,7 +3353,7 @@ def help_sections():
 
         ("Quick start: Linux and other ISOs", """## 1. Choose the ISO (card "Linux" or "Other ISO")
 • Download the ISO from your distribution's website, then click "Select existing ISO file...". "Linux" and "Other ISO" write the image the same way; "Other ISO" is for any other bootable image.
-• Optional but recommended: in "Verify the selected ISO (SHA-256)" paste the checksum published by the distribution (or the whole line from its SHA256SUMS file) and click "Calculate SHA-256". Continue only on MATCH.
+• Optional but recommended: click "Verify the selected ISO (SHA-256)" under the file name, paste the checksum published by the distribution (or the whole line from its SHA256SUMS file) and click "Calculate SHA-256". Continue only on MATCH.
 
 ## 2. Write the drive
 • The "Linux" card is chosen for you when the contents are a bootable ISO that is not a Windows installer.
@@ -3409,7 +3410,7 @@ def help_sections():
 • If the file clearly does not match the card (for example a Linux ISO under "Windows 11"), the program asks before erasing anything; a file that is not a ChromeOS Flex image under "Google Chrome" is refused.
 
 ## Verify the selected ISO (SHA-256)
-• Appears under the file name after an image is selected. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
+• A link under the file name, shown once an image is selected; click it to open the panel. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
 • MATCH (green): the file is identical to the published one. MISMATCH (red): do not use it.
 • With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts).replace(
             "@RETRIES@", str(retries)).replace("@ATTEMPTS@", str(DOWNLOAD_MAX_ATTEMPTS))),
@@ -3436,9 +3437,9 @@ def help_sections():
 
 ## Progress, Cancel and the log
 • The bar shows the percentage, speed and time left while writing and while verifying. Some steps (comparing files) show a moving bar without a percentage.
-• "Cancel" stops the operation. If it is pressed before the drive is touched, the log says so and nothing changed; otherwise the drive is left unusable until it is written again.
+• "Cancel" stops the running operation (a download, an extraction or the write). If it is pressed during the write before the drive is touched, the log says so and nothing changed; otherwise the drive is left unusable until it is written again.
 • Closing the window while a drive is being written asks you first, because stopping halfway leaves the drive unusable.
-• The black box shows every command that runs. Keep it if you need to report a problem."""),
+• "Show details" opens a box with every command that runs; it opens by itself when a write fails. Keep its text if you need to report a problem."""),
 
         ("Safety", f"""## What protects you
 • Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed.
@@ -3711,28 +3712,160 @@ class OptionCard(_CanvasBase):
         self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._sub_font)
 
 
-class _DownloadWidgets:
-    """The four widgets of a download card (download button, Cancel, progress bar and its label) and the
-    state changes the Windows ISO card and the ChromeOS Flex card share. The window keeps one per card and
-    still exposes the widgets under their own names (download_btn, progress, flex_progress_label, ...)."""
+class AccentButton(_CanvasBase):
+    """The one primary action of the window ("Create Bootable USB Drive"): a filled, rounded button in the
+    accent colour. Native macOS buttons cannot be coloured, so it is drawn on a canvas (like OptionCard).
 
-    def __init__(self, btn, cancel_btn, bar, label):
-        self.btn, self.cancel_btn, self.bar, self.label = btn, cancel_btn, bar, label
+    It answers `config(state=...)`, `config(text=...)`, `cget("state")` and `invoke()` like a button, and
+    works from the keyboard (Tab to focus, Space/Return to press).
+    """
+
+    HEIGHT = 46
+    ACCENT, ACCENT_HOVER = "#0a84ff", "#409cff"
+    _rounded = OptionCard._rounded
+
+    def __init__(self, parent, text, command, state="normal"):
+        style = ttk.Style(parent)
+        bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        base = tkfont.nametofont("TkDefaultFont")
+        font = tkfont.Font(family=base.actual("family"), size=base.actual("size") + 3, weight="bold")
+        super().__init__(parent, width=max(260, font.measure(text) + 64), height=self.HEIGHT, bg=bg,
+                         highlightthickness=0, takefocus=True)
+        self._font, self._text, self._command = font, text, command
+        self._state = "disabled" if state == "disabled" else "normal"
+        self._hover = False
+        r, g, b = self.winfo_rgb(bg)
+        self._dark = (r + g + b) / 3 < 32768  # follows the light/dark theme through the window background
+        self.bind("<Button-1>", lambda _e: self.invoke())
+        self.bind("<Return>", lambda _e: self.invoke())
+        self.bind("<space>", lambda _e: self.invoke())
+        self.bind("<Enter>", lambda _e: self._set_hover(True))
+        self.bind("<Leave>", lambda _e: self._set_hover(False))
+        self.bind("<FocusIn>", lambda _e: self._draw())
+        self.bind("<FocusOut>", lambda _e: self._draw())
+        self._apply_state()
+
+    def _apply_state(self):
+        super().configure(cursor="hand2" if self._state == "normal" else "arrow", takefocus=self._state == "normal")
+        self._draw()
+
+    def _set_hover(self, value):
+        self._hover = value and self._state == "normal"
+        self._draw()
+
+    def invoke(self):
+        """Press the button (does nothing while it is disabled)."""
+        if self._state != "normal":
+            return None
+        self.focus_set()
+        return self._command()
+
+    def cget(self, key):
+        if key == "state":
+            return self._state
+        if key == "text":
+            return self._text
+        return super().cget(key)
+
+    def configure(self, cnf=None, **kw):
+        if "state" in kw:
+            self._state = "disabled" if kw.pop("state") == "disabled" else "normal"
+            self._hover = self._hover and self._state == "normal"
+        if "text" in kw:
+            self._text = kw.pop("text")
+        result = super().configure(cnf, **kw) if (cnf or kw) else None
+        self._apply_state()
+        return result
+
+    config = configure
+
+    def _draw(self):
+        self.delete("all")
+        w, h = int(self.cget("width")), self.HEIGHT
+        enabled = self._state == "normal"
+        if enabled:
+            fill, text = (self.ACCENT_HOVER if self._hover else self.ACCENT), "#ffffff"
+        else:
+            fill, text = ("#3a3a3c" if self._dark else "#d8d8dc"), "#8e8e93"
+        self._rounded(2, 2, w - 2, h - 2, 10, fill=fill, outline=fill)
+        try:
+            focused = enabled and self.focus_get() is self
+        except (KeyError, tk.TclError):
+            focused = False
+        if focused:  # keyboard focus ring
+            self._rounded(2, 2, w - 2, h - 2, 10, fill="", outline="#ffffff" if self._dark else "#003d99", width=2)
+        self.create_text(w / 2, h / 2, text=self._text, fill=text, font=self._font)
+
+
+class _Disclosure(_LabelBase):
+    """A link-like row that opens and closes a section: "▸ Show details" / "▾ Hide details".
+
+    `on_toggle(is_open)` runs when the state changes. Works from the keyboard (Tab, Space/Return).
+    """
+
+    def __init__(self, parent, closed_text, open_text, on_toggle):
+        super().__init__(parent, text="", foreground="#4da3ff", cursor="hand2", takefocus=True)
+        self._texts = (closed_text, open_text)
+        self._on_toggle = on_toggle
+        self.is_open = False
+        self._show()
+        self.bind("<Button-1>", lambda _e: self.toggle())
+        self.bind("<Return>", lambda _e: self.toggle())
+        self.bind("<space>", lambda _e: self.toggle())
+
+    def _show(self):
+        self.config(text=("▾ " if self.is_open else "▸ ") + self._texts[1 if self.is_open else 0])
+
+    def set_open(self, value):
+        value = bool(value)
+        if value != self.is_open:
+            self.is_open = value
+            self._show()
+            self._on_toggle(value)
+
+    def toggle(self):
+        self.set_open(not self.is_open)
+
+
+def _pack_bar(bar, *followers, pady=(8, 2)):
+    """Show a progress bar that was hidden with pack_forget(), just above the first of `followers`
+    that is on screen (so it keeps its place in the page)."""
+    if str(bar.winfo_manager()) == "pack":
+        return
+    options = {"fill": "x", "pady": pady}
+    for follower in followers:
+        if follower is not None and str(follower.winfo_manager()) == "pack":
+            options["before"] = follower
+            break
+    bar.pack(**options)
+
+
+class _DownloadWidgets:
+    """The three widgets of a download card (download button, progress bar and its label) and the
+    state changes the Windows ISO card and the ChromeOS Flex card share. The window keeps one per card and
+    still exposes the widgets under their own names (download_btn, progress, flex_progress_label, ...).
+    Cancel is the window's single Cancel button. The bar is on screen only while it has something to show."""
+
+    def __init__(self, btn, bar, label):
+        self.btn, self.bar, self.label = btn, bar, label
 
     def sync(self, running, creating):
-        """Download off while a write (`creating`) or this card's own operation (`running`) is going;
-        Cancel on only while `running`."""
+        """Download off while a write (`creating`) or this card's own operation (`running`) is going."""
         self.btn.config(state="disabled" if (creating or running) else "normal")
-        self.cancel_btn.config(state="normal" if running else "disabled")
+
+    def hide_bar(self):
+        self.bar.pack_forget()
 
     def start(self, text=None):
         """A new operation: an empty determinate bar (and `text` in the label, if given)."""
+        _pack_bar(self.bar, self.label)
         self.bar.config(mode="determinate", value=0)
         if text is not None:
             self.label.config(text=text)
 
     def show(self, pct, text):
         """Progress: `pct` percent on the bar, or None when the length is unknown (a moving bar)."""
+        _pack_bar(self.bar, self.label)
         if pct is None:
             self.bar.config(mode="indeterminate")
         else:
@@ -3740,9 +3873,14 @@ class _DownloadWidgets:
         self.label.config(text=text)
 
     def finish(self, text, bar_value=None):
-        """The operation ended (done or failed): the final `text`, and the bar set to `bar_value` if given."""
+        """The operation ended (done or failed): the final `text`, and the bar set to `bar_value` if given
+        (a bar left empty is hidden)."""
         if bar_value is not None:
             self.bar.config(mode="determinate", value=bar_value)
+            if bar_value:
+                _pack_bar(self.bar, self.label)
+            else:
+                self.hide_bar()
         self.label.config(text=text)
 
 
@@ -3843,8 +3981,6 @@ class App(_TkBase):
         self.flex_download_btn = ttk.Button(row, text=_("Download ChromeOS Flex from Google"),
                                             command=self.start_flex_download)
         self.flex_download_btn.pack(side="left")
-        self.flex_cancel_btn = ttk.Button(row, text=_("Cancel"), command=self.cancel_flex, state="disabled")
-        self.flex_cancel_btn.pack(side="left", padx=5)
         links = ttk.Frame(f)
         links.pack(fill="x", pady=(6, 0))
         ttk.Button(links, text=_("Google's installation guide"),
@@ -3855,8 +3991,7 @@ class App(_TkBase):
         self.flex_progress.pack(fill="x", pady=(8, 2))
         self.flex_progress_label = ttk.Label(f, text="")
         self.flex_progress_label.pack(anchor="w")
-        self.flex_dl = _DownloadWidgets(self.flex_download_btn, self.flex_cancel_btn,
-                                        self.flex_progress, self.flex_progress_label)
+        self.flex_dl = _DownloadWidgets(self.flex_download_btn, self.flex_progress, self.flex_progress_label)
 
         # --- Windows 11 ---
         f = self.panels[CARD_WINDOWS]
@@ -3882,13 +4017,11 @@ class App(_TkBase):
             side="left", padx=(0, 12))
         self.download_btn = ttk.Button(btns, text=_("Download ISO"), command=self.start_download)
         self.download_btn.pack(side="left")
-        self.cancel_btn = ttk.Button(btns, text=_("Cancel"), command=self.cancel_download, state="disabled")
-        self.cancel_btn.pack(side="left", padx=5)
         self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
         self.progress_label = ttk.Label(f, text="")
         self.progress_label.pack(anchor="w")
-        self.windows_dl = _DownloadWidgets(self.download_btn, self.cancel_btn, self.progress, self.progress_label)
+        self.windows_dl = _DownloadWidgets(self.download_btn, self.progress, self.progress_label)
 
         # --- Linux and Other ISO: nothing to download here ---
         ttk.Label(
@@ -3911,6 +4044,9 @@ class App(_TkBase):
         holder.pack_propagate(False)
         for panel in self.panels.values():
             panel.grid_remove()
+        # The height above allowed for the progress bars; they appear only when a download runs.
+        self.windows_dl.hide_bar()
+        self.flex_dl.hide_bar()
 
     def _build_drive(self, page):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
@@ -3921,13 +4057,6 @@ class App(_TkBase):
         self.disk_combo = ttk.Combobox(row, state="readonly")
         self.disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.disk_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_create_button_state())
-        warn = _("WARNING: ALL DATA on the selected drive will be PERMANENTLY erased. Only USB drives are "
-                 "listed; the system disk is never shown.")
-        warn += "\n" + (_("You'll be asked for your administrator (sudo) password to write the drive.") if IS_LINUX
-                        else _("Linux, ChromeOS and Other ISO modes on macOS ask for your administrator "
-                               "password to write the drive."))
-        ttk.Label(page, text=warn, foreground="#ff453a", justify="left", wraplength=PANEL_WRAP).pack(
-            anchor="w", pady=(6, 0))
 
     def _build_image(self, page):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
@@ -3940,9 +4069,12 @@ class App(_TkBase):
                                    wraplength=PANEL_WRAP, justify="left")
         self.iso_label.pack(anchor="w", pady=(4, 4))
 
-        # Integrity check of the selected image; shown once an image is selected (see set_iso).
+        # Integrity check of the selected image: a link that appears once an image is selected (see
+        # set_iso) and opens this panel (progressive disclosure: most people skip the check).
+        self.sha_toggle = _Disclosure(page, _("Verify the selected ISO (SHA-256)"),
+                                      _("Verify the selected ISO (SHA-256)"), self._on_sha_toggled)
         self.iso_check_frame = ttk.LabelFrame(
-            page, text=_("Verify the selected ISO (SHA-256): paste the published hash or SHA256SUMS line"))
+            page, text=_("Paste the published hash or SHA256SUMS line, then calculate"))
         sha_row = ttk.Frame(self.iso_check_frame)
         sha_row.pack(fill="x", padx=8, pady=(4, 2))
         self.iso_sha_entry = ttk.Entry(sha_row)
@@ -3950,7 +4082,7 @@ class App(_TkBase):
         self.iso_sha_btn = ttk.Button(sha_row, text=_("Calculate SHA-256"), command=self.calculate_iso_sha256)
         self.iso_sha_btn.pack(side="left", padx=(8, 0))
         self.iso_sha_progress = ttk.Progressbar(self.iso_check_frame, orient="horizontal", mode="determinate")
-        self.iso_sha_progress.pack(fill="x", padx=8, pady=(0, 2))
+        # The bar is packed only while a calculation has run (see _show_sha_bar).
         # Each label is placed relative to the other, whichever gets its text first: the progress text
         # always sits above the verdict.
         self.iso_sha_label = _LazyLabel(self.iso_check_frame, anchor="w", padx=8,
@@ -3968,33 +4100,57 @@ class App(_TkBase):
                                            command=self.install_dependencies)
         self.check_dependencies()
 
-        style = ttk.Style(self)
-        base = tkfont.nametofont("TkDefaultFont")
-        style.configure("Create.TButton", font=(base.actual("family"), base.actual("size") + 3, "bold"),
-                        padding=(22, 10))
+        # One short warning right above the button that does the damage, in the warning colour.
+        ttk.Label(page, text=_("WARNING: ALL DATA on the selected drive will be PERMANENTLY erased."),
+                  foreground="#ff9f0a", justify="left", wraplength=PANEL_WRAP).pack(anchor="w", pady=(0, 6))
         create_row = ttk.Frame(page)
         create_row.pack(fill="x")
-        self.create_btn = ttk.Button(create_row, text=_("Create Bootable USB Drive"), style="Create.TButton",
-                                     command=self.start_create_usb, state="disabled")
+        self.create_btn = AccentButton(create_row, _("Create Bootable USB Drive"), self.start_create_usb,
+                                       state="disabled")
         self.create_btn.pack(side="left")
-        self.cancel_create_btn = ttk.Button(create_row, text=_("Cancel"), command=self.cancel_create_usb,
+        # The window's single Cancel: it stops whatever is running (a download, an extraction or the write).
+        self.cancel_create_btn = ttk.Button(create_row, text=_("Cancel"), command=self.cancel_current,
                                             state="disabled")
         self.cancel_create_btn.pack(side="left", padx=(10, 0))
+        # The bar is on screen only while an operation has run (see _reset_create_progress).
         self.create_progress = ttk.Progressbar(page, orient="horizontal", mode="determinate")
-        self.create_progress.pack(fill="x", pady=(10, 2))
-        # The hint is packed only when it has text; `before=` keeps it right under the Create row
-        # instead of at the very end of the page (below the log).
-        self.create_hint = _LazyLabel(page, anchor="w", pady=(6, 0), before=self.create_progress)
-        self.create_hint.config(foreground="#ff9f0a")
         self.create_progress_label = ttk.Label(page, text="")
         self.create_progress_label.pack(anchor="w")
+        # The hint is packed only when it has text; `before=` keeps it right under the Create row
+        # (above the bar when that is on screen) instead of at the very end of the page.
+        self.create_hint = _LazyLabel(
+            page, anchor="w", pady=(6, 0),
+            before=lambda: self.create_progress if str(self.create_progress.winfo_manager()) == "pack"
+            else self.create_progress_label)
+        self.create_hint.config(foreground="#8e8e93")
         self._create_started = None
         self._create_last_ui = 0.0
         self._create_stage = None
         self._create_stage_base = 0
 
+        # The log is behind a link: it is for problems, not for everyone.
+        self.details_toggle = _Disclosure(page, _("Show details"), _("Hide details"), self._on_details_toggled)
+        self.details_toggle.pack(anchor="w", pady=(6, 0))
         self.log_text = tk.Text(page, height=6, state="disabled", bg="black", fg="lightgreen")
-        self.log_text.pack(fill="both", expand=True, pady=(6, 0))
+
+    def _on_details_toggled(self, is_open):
+        if is_open:
+            self.log_text.pack(fill="both", expand=True, pady=(6, 0), after=self.details_toggle)
+            self.log_text.see("end")
+        else:
+            self.log_text.pack_forget()
+        self.after_idle(self._fit_window)
+
+    def _on_sha_toggled(self, is_open):
+        if is_open:
+            if str(self.sha_toggle.winfo_manager()) == "pack":  # the link shows once an image is chosen
+                self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.sha_toggle)
+        else:
+            self.iso_check_frame.pack_forget()
+        self.after_idle(self._fit_window)
+
+    def _show_sha_bar(self):
+        _pack_bar(self.iso_sha_progress, self.iso_sha_label, self.iso_sha_result, pady=(0, 2))
 
     def select_card(self, key):
         """Choose the image type: shows its source panel and sets how the image will be written."""
@@ -4400,7 +4556,9 @@ class App(_TkBase):
                 how=_("from the content of the ISO"), image=image))
         self.select_card(card)
         self._reset_iso_sha()
-        self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.iso_label)
+        self.sha_toggle.pack(anchor="w", pady=(0, 6), after=self.iso_label)
+        if self.sha_toggle.is_open:
+            self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.sha_toggle)
         self.after_idle(self._fit_window)
 
     def start_download(self):
@@ -4488,7 +4646,7 @@ class App(_TkBase):
         self._sync_controls()
         if self._closing:
             return
-        self.windows_dl.finish(_("Download failed."))
+        self.windows_dl.finish(_("Download failed."), bar_value=0)
         messagebox.showerror(_("Download error"), msg)
 
     # ---------- USB drive ----------
@@ -4604,6 +4762,9 @@ class App(_TkBase):
         self.refresh_btn.config(state=busy if creating else "normal")
         self.windows_dl.sync(self._download_running, creating)
         self.flex_dl.sync(self._flex_busy, creating)
+        if not creating:  # during a write the Cancel button follows the write itself (see start_create_usb)
+            self.cancel_create_btn.config(state="normal" if (self._download_running or self._flex_busy)
+                                          else "disabled")
         self.pick_btn.config(state=busy if (creating or self._flex_busy) else "normal")
         self.install_deps_btn.config(state=busy if (creating or self._installing) else "normal")
 
@@ -4674,6 +4835,7 @@ class App(_TkBase):
         self._sha_job += 1  # invalidates any calculation still running for the previous file
         self.iso_sha_btn.config(state="normal")
         self.iso_sha_progress.config(value=0)
+        self.iso_sha_progress.pack_forget()
         self.iso_sha_label.config(text="")
         self.iso_sha_result.config(text="", foreground="")
 
@@ -4693,6 +4855,7 @@ class App(_TkBase):
         self.iso_sha_progress.config(value=0)
         self.iso_sha_result.config(text="", foreground="")
         self.iso_sha_label.config(text=_("Calculating..."))
+        self._show_sha_bar()
         self.log(_("Calculating SHA-256 of {name}...").format(name=os.path.basename(path)))
         last = [0.0]
 
@@ -4914,6 +5077,15 @@ class App(_TkBase):
         self.update_create_button_state()
         self.refresh_disks(quiet=True)
 
+    def cancel_current(self):
+        """The single Cancel button: stop whatever is running (the write, else a download or extraction)."""
+        if self._creating:
+            self.cancel_create_usb()
+        elif self._download_running:
+            self.cancel_download()
+        elif self._flex_busy:
+            self.cancel_flex()
+
     def cancel_create_usb(self):
         """Ask the running USB creation to stop (after a warning). Safe to call at any time."""
         if self.create_cancel_event.is_set() or str(self.cancel_create_btn.cget("state")) == "disabled":
@@ -4936,6 +5108,7 @@ class App(_TkBase):
         self._create_last_ui = 0.0
         self._create_stage = None
         self._create_stage_base = 0
+        _pack_bar(self.create_progress, self.create_progress_label, pady=(10, 2))
         self.create_progress.config(mode="indeterminate", value=0)
         self.create_progress.start(12)
         self.create_progress_label.config(text=_("Preparing the drive..."))
@@ -4979,6 +5152,10 @@ class App(_TkBase):
         self._flush_log()  # show the worker's last lines before the result dialog appears
         self.create_progress.stop()
         self.create_progress.config(mode="determinate", value=100 if ok else 0)
+        if not ok:
+            self.create_progress.pack_forget()  # an empty bar says nothing; the label below says what happened
+            if not canceled:
+                self.details_toggle.set_open(True)  # a failure: the log is what the user will want to read
         self.create_progress_label.config(
             text=_("Done — 100%") if ok else (_("Canceled.") if canceled else _("Failed.")))
 

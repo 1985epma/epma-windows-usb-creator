@@ -11,6 +11,15 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ## [Unreleased]
 
+### Changed
+
+- **Quieter window.** *Create Bootable USB Drive* is now a filled accent-colour button and the
+  only highlighted element; there is a single *Cancel* button that stops whatever is running
+  (a download, an extraction or the write) instead of three. The erase warning is one amber
+  line right above the Create button. The SHA-256 panel and the log are behind links
+  (*Verify the selected ISO (SHA-256)*, *Show details*; the log opens by itself when a write
+  fails), and progress bars appear only while there is something to show.
+
 ## [1.1.0] - 2026-10-17
 
 ### Added

@@ -455,16 +455,15 @@ class DownloadWidgetsTests(unittest.TestCase):
     """The shared state changes of a download card, on stand-in widgets (no window needed)."""
 
     def setUp(self):
-        self.btn, self.cancel, self.bar, self.label = (mock.MagicMock() for _ in range(4))
-        self.card = app._DownloadWidgets(self.btn, self.cancel, self.bar, self.label)
+        self.btn, self.bar, self.label = (mock.MagicMock() for _ in range(3))
+        self.card = app._DownloadWidgets(self.btn, self.bar, self.label)
 
-    def test_sync_locks_the_download_button_and_arms_cancel_only_while_running(self):
-        for running, creating, btn_state, cancel_state in (
-                (False, False, "normal", "disabled"), (True, False, "disabled", "normal"),
-                (False, True, "disabled", "disabled"), (True, True, "disabled", "normal")):
+    def test_sync_locks_the_download_button_while_something_runs(self):
+        for running, creating, btn_state in (
+                (False, False, "normal"), (True, False, "disabled"),
+                (False, True, "disabled"), (True, True, "disabled")):
             self.card.sync(running, creating)
             self.btn.config.assert_called_with(state=btn_state)
-            self.cancel.config.assert_called_with(state=cancel_state)
 
     def test_start_show_finish(self):
         self.card.start()
@@ -485,6 +484,16 @@ class DownloadWidgetsTests(unittest.TestCase):
         self.card.finish("Ready.", bar_value=100)
         self.bar.config.assert_called_with(mode="determinate", value=100)
         self.label.config.assert_called_with(text="Ready.")
+
+    def test_the_bar_is_on_screen_only_while_it_has_something_to_show(self):
+        self.card.start()
+        self.bar.pack.assert_called()
+        self.bar.pack_forget.assert_not_called()
+        self.card.finish("Failed.", bar_value=0)
+        self.bar.pack_forget.assert_called_once()
+        self.bar.pack.reset_mock()
+        self.card.finish("Ready.", bar_value=100)
+        self.bar.pack.assert_called()
 
 
 class DownloadCardWiringTests(gui_tests.GuiTestCase):
@@ -534,7 +543,7 @@ class DownloadCardWiringTests(gui_tests.GuiTestCase):
         self.assertIs(self.captured["cancel_event"], self.win.cancel_event)
         self.assertTrue(self.win._download_running)
         self.assertEqual(self.state(self.win.download_btn), "disabled")
-        self.assertEqual(self.state(self.win.cancel_btn), "normal")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "normal")
         self.captured["progress_cb"](500, 1000, 250.0)
         self.pump(lambda: "50.0%" in str(self.win.progress_label.cget("text")))
         with mock.patch.object(self.win, "set_iso") as set_iso:
@@ -543,7 +552,7 @@ class DownloadCardWiringTests(gui_tests.GuiTestCase):
         set_iso.assert_called_once_with("/tmp/Win11.iso")
         self.assertEqual(str(self.win.progress_label.cget("text")), "Download complete.")
         self.assertEqual(self.state(self.win.download_btn), "normal")
-        self.assertEqual(self.state(self.win.cancel_btn), "disabled")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "disabled")
 
     def test_flex_download_start_and_failure(self):
         self.box.yes = True
@@ -555,7 +564,7 @@ class DownloadCardWiringTests(gui_tests.GuiTestCase):
         self.assertIs(self.captured["cancel_event"], self.win.flex_cancel_event)
         self.assertNotIn("expected_sha256", self.captured)
         self.assertTrue(self.win._flex_busy)
-        self.assertEqual(self.state(self.win.flex_cancel_btn), "normal")
+        self.assertEqual(self.state(self.win.cancel_create_btn), "normal")
         self.captured["progress_cb"](500, 1000, 250.0)
         self.pump(lambda: "Downloading..." in str(self.win.flex_progress_label.cget("text")))
         self.captured["error_cb"]("network down")

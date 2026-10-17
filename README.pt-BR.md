@@ -59,7 +59,7 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
 - **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos quatro cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
-- **Log em tempo real** de todos os comandos executados, dentro da própria janela.
+- **Log em tempo real** de todos os comandos executados, dentro da própria janela: abra **Show details** para lê-lo (ele abre sozinho quando uma gravação falha).
 
 ## Novidades da 1.1.0
 
@@ -180,7 +180,7 @@ Uma janela só, de cima para baixo: **quatro cartões**, **o pendrive**, **o arq
    - **Windows 11** — clique em **"Open Microsoft's official page"**, escolha *Windows 11 (multi-edition ISO)* e o idioma, **clique com o botão direito** no botão azul de 64 bits e escolha **"Copiar endereço do link"** (não clique nele). Cole o link, opcionalmente cole o SHA-256 da Microsoft e clique em **"Download ISO"**.
    - **Google Chrome (ChromeOS Flex)** — clique em **"Download ChromeOS Flex from Google"**; o ZIP é baixado (com retomada), extraído e selecionado para você. Detalhes abaixo.
    - **Linux / Other ISO** — baixe a ISO no site da sua distribuição.
-3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o painel **"Verify the selected ISO (SHA-256)"**: cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
+3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o link **"Verify the selected ISO (SHA-256)"** sob o nome do arquivo: clique nele, cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
 4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex) e selecione-o na lista. A lista é lida ao abrir o programa e sempre que você volta à janela; clique em **"Refresh USB drives list"** se o pendrive não aparecer. Enquanto o **Create** está desativado, uma dica abaixo dele diz o motivo.
 5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo.
 

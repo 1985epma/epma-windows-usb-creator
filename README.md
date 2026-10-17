@@ -56,7 +56,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
 - **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its four cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
-- **Real-time log** of every command executed, inside the application window.
+- **Real-time log** of every command executed, inside the application window: open **Show details** to read it (it opens by itself when a write fails).
 
 ## New in 1.1.0
 
@@ -177,7 +177,7 @@ One window, from top to bottom: **four cards**, **the USB drive**, **the image f
    - **Windows 11** — click **"Open Microsoft's official page"**, choose *Windows 11 (multi-edition ISO)* and your language, **right-click** the blue 64-bit button and choose **"Copy Link Address"** (do not click it). Paste the link, optionally paste Microsoft's SHA-256, and click **"Download ISO"**.
    - **Google Chrome (ChromeOS Flex)** — click **"Download ChromeOS Flex from Google"**; the ZIP is downloaded (resumable), extracted and selected for you. Details below.
    - **Linux / Other ISO** — download the ISO from your distribution's website.
-3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** panel appears: paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
+3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** link appears under the file name: click it, paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
 4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex) and select it in the list. The list is read when the program starts and whenever you return to its window; click **"Refresh USB drives list"** if the drive does not show up. While **Create** is disabled, a hint under it says why.
 5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again.
 

@@ -39,13 +39,13 @@ import win11_usb_creator as app  # noqa: E402
 # Elementos que o restante do código referencia. Se algum for renomeado ou
 # esquecido, o programa quebra em tempo de execução — e este teste pega isso.
 WIDGETS_OBRIGATORIOS = [
-    "url_entry", "sha_entry", "download_btn", "cancel_btn",
+    "url_entry", "sha_entry", "download_btn",
     "progress", "progress_label", "iso_label",
     "dep_label", "install_deps_btn", "disk_combo",
-    "flex_download_btn", "flex_cancel_btn", "flex_progress", "flex_progress_label",
+    "flex_download_btn", "flex_progress", "flex_progress_label",
     "card_var", "cards", "panels", "mode_var",
     "create_btn", "cancel_create_btn", "create_hint", "create_progress", "create_progress_label", "log_text",
-    "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
+    "sha_toggle", "details_toggle", "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
     "refresh_btn", "pick_btn", "card_titles",
 ]
 
@@ -55,7 +55,7 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change", "select_card", "_image_matches_choice", "_auto_refresh_disks", "_creation_ended",
-    "start_flex_download", "cancel_flex", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
+    "start_flex_download", "cancel_flex", "cancel_current", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
     "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about",
     "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
@@ -301,6 +301,9 @@ try:
         # a dica fica logo abaixo do botão Criar, acima da barra de progresso e do log
         janela.iso_path.set("")
         janela.update_create_button_state()
+        janela._reset_create_progress()   # a barra e o log só aparecem quando há o que mostrar
+        janela.create_progress.stop()
+        janela.details_toggle.set_open(True)
         janela.update_idletasks()
         # A ordem é conferida pela ordem de EMPACOTAMENTO, que não depende de a janela ser desenhada: num
         # servidor de CI a janela nunca aparece e todas as coordenadas na tela ficam iguais.
