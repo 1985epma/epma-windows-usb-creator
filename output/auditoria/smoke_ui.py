@@ -47,6 +47,7 @@ WIDGETS_OBRIGATORIOS = [
     "create_btn", "cancel_create_btn", "create_hint", "create_progress", "create_progress_label", "log_text",
     "sha_toggle", "details_toggle", "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
     "refresh_btn", "pick_btn", "card_titles",
+    "error_banner", "success_panel", "help_link",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -61,6 +62,7 @@ METODOS_OBRIGATORIOS = [
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
     "_on_close", "_sync_controls", "_write_running", "_wait_for_write", "_notify", "_canceled_texts", "_post",
     "_listing_finished", "_on_disks", "_on_disks_error", "_installation_ended",
+    "show_error", "clear_error", "show_success", "clear_success", "make_another", "_show_create_success",
 ]
 
 print("Teste de fumaça da interface gráfica")

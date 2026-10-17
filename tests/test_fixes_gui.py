@@ -530,8 +530,10 @@ class DriveListingTests(GuiTestCase):
             self.win._flush_log()
             self.assertIn("diskutil hung", self.win.log_text.get("1.0", "end"))
             self.win.refresh_disks()
-            self.pump(lambda: not self.win._disk_listing and bool(self.box.calls))
-        self.assertEqual(self.box.titles("error"), ["Error"])
+            self.pump(lambda: not self.win._disk_listing and self.win.error_banner.shown)
+        self.assertEqual(self.box.calls, [], "a listing failure is a banner, not a dialog")
+        self.assertEqual(self.win.error_banner.title_text, "Error")
+        self.assertIn("diskutil hung", self.win.error_banner.message_text)
 
     def test_sync_mode_lists_on_the_calling_thread(self):
         self.listed = [USB_DISK]
@@ -960,7 +962,9 @@ class FlexBusyTests(GuiTestCase):
         self.assertEqual(self.state(self.win.pick_btn), "normal")
         self.assertEqual(self.state(self.win.flex_download_btn), "normal")
         self.assertEqual(self.state(self.win.cancel_create_btn), "disabled")
-        self.assertEqual(self.box.titles("error"), ["ChromeOS Flex"])
+        self.assertEqual(self.box.calls, [])
+        self.assertEqual(self.win.error_banner.title_text, "ChromeOS Flex")
+        self.assertEqual(self.win.error_banner.message_text, "Canceled.")
 
     def test_a_cancel_that_arrives_as_the_download_ends_is_kept(self):
         self.win._flex_busy = True
@@ -1062,6 +1066,236 @@ class ProgressTextTests(GuiTestCase):
         self.win._on_create_progress(500, 1000, "Writing the image...")
         self.assertRegex(str(self.win.create_progress_label.cget("text")), r"~\d+m\d\ds left")
         self.win._finish_create_progress(False)
+
+
+class InlineFeedbackTests(GuiTestCase):
+    """P2/P3 of the GUI review: inline error banner, success panel and the header with the dependency chip."""
+
+    def manager(self, widget):
+        return str(widget.winfo_manager())
+
+    def page_order(self):
+        return self.win.create_hint.master.pack_slaves()
+
+    @staticmethod
+    def link_texts(banner):
+        return [str(w.cget("text")) for w in banner._links.winfo_children()]
+
+    # ----- the error banner -----
+    def test_banner_is_lazy_and_sits_right_under_the_create_row(self):
+        win = self.win
+        self.assertEqual(self.manager(win.error_banner), "")
+        self.assertFalse(win.error_banner.shown)
+        win.show_error("Download error", "The server refused the download.")
+        self.assertEqual(self.manager(win.error_banner), "pack")
+        order = self.page_order()
+        self.assertEqual(order.index(win.error_banner), order.index(win.create_btn.master) + 1)
+        self.assertEqual(win.error_banner.title_text, "Download error")
+        self.assertEqual(win.error_banner.message_text, "The server refused the download.")
+        win.clear_error()
+        self.assertEqual(self.manager(win.error_banner), "")
+        self.assertEqual(win.error_banner.message_text, "")
+
+    def test_banner_stays_above_the_hint_and_the_bar(self):
+        win = self.win
+        win.create_hint.config(text="Choose the image file first.")
+        win._reset_create_progress()
+        self.addCleanup(win.create_progress.stop)
+        win.show_error("Error", "boom")
+        order = self.page_order()
+        self.assertLess(order.index(win.error_banner), order.index(win.create_hint))
+        self.assertLess(order.index(win.create_hint), order.index(win.create_progress))
+        win.clear_error()
+        win.show_error("Error", "again")                   # shown twice: still one banner, same place
+        self.assertEqual(order, self.page_order())
+
+    def test_try_again_runs_the_action_and_closes_the_banner(self):
+        win = self.win
+        calls = []
+        win.show_error("Error", "x", retry=lambda: calls.append(1))
+        self.assertEqual(self.link_texts(win.error_banner), ["Try again", "Dismiss"])
+        win.error_banner._links.winfo_children()[0].event_generate("<Button-1>")
+        win.update()
+        self.assertEqual(calls, [1])
+        self.assertFalse(win.error_banner.shown)
+        win.show_error("Error", "no retry here")
+        self.assertEqual(self.link_texts(win.error_banner), ["Dismiss"])
+
+    def test_non_write_failures_use_the_banner_and_no_dialog(self):
+        win = self.win
+        win._on_download_error("The server refused the download (HTTP 403).")
+        self.assertEqual(self.box.calls, [])
+        self.assertEqual(win.error_banner.title_text, "Download error")
+        self.assertIn("HTTP 403", win.error_banner.message_text)
+        self.assertEqual(str(win.windows_dl.label.cget("text")), "Download failed.")
+        win.clear_error()
+        win._on_disks_error(win._disk_job, RuntimeError("diskutil hung"), quiet=False)
+        self.assertEqual(self.box.calls, [])
+        self.assertIn("Could not list disks: diskutil hung", win.error_banner.message_text)
+
+    def test_a_new_operation_clears_the_banner(self):
+        win = self.win
+        win.show_error("Error", "old")
+        win.refresh_disks(quiet=True, sync=True)           # automatic refreshes never hide a message
+        self.assertTrue(win.error_banner.shown)
+        win.refresh_disks(sync=True)                       # an explicit one starts over
+        self.assertFalse(win.error_banner.shown)
+
+    def test_install_failure_is_a_banner_with_try_again(self):
+        win = self.win
+        with mock.patch.object(app, "IS_MAC", True), mock.patch.object(app.shutil, "which", return_value=None):
+            win.install_dependencies()
+            self.assertTrue(self.pump(lambda: win.error_banner.shown and not win._installing))
+        self.assertEqual(self.box.calls, [])
+        self.assertIn("Homebrew not found", win.error_banner.message_text)
+        self.assertEqual(self.link_texts(win.error_banner), ["Try again", "Dismiss"])
+
+    def test_a_write_failure_keeps_the_dialog_and_adds_the_banner(self):
+        win = self.win
+        win._report_error("Error", "Verification failed: the drive does not match the ISO.")
+        self.assertEqual(self.box.titles("error"), ["Error"])
+        self.assertIn("does not match", win.error_banner.message_text)
+        win.clear_error()
+        win._report_error("Unexpected error", None, ValueError("x"))
+        self.assertEqual(self.box.titles("error"), ["Error", "Unexpected error"])
+        self.assertTrue(win.error_banner.shown)
+
+    def test_no_banner_while_closing(self):
+        self.win._closing = True
+        self.win._report_error("Error", "boom", modal=False)
+        self.assertFalse(self.win.error_banner.shown)
+
+    # ----- the success panel -----
+    def run_write(self, ejected=True, exc=None):
+        win = self.win
+        win.iso_path.set("/tmp/exemplo.iso")
+        self.listed = [USB_DISK]
+        win.refresh_disks(sync=True)
+        win.confirm_erase = mock.Mock(return_value=True)
+        win._image_matches_choice = mock.Mock(return_value=True)
+        win.priv.authenticate = mock.Mock(return_value=True)
+        with mock.patch.object(app, "build_usb", return_value=ejected, side_effect=exc):
+            win.start_create_usb()
+            self.assertTrue(self.pump(lambda: not win._creating))
+            win.update()
+
+    def test_verified_and_ejected_shows_the_green_panel_without_a_dialog(self):
+        win = self.win
+        self.assertEqual(self.manager(win.success_panel), "")
+        self.run_write(ejected=True)
+        self.assertEqual(self.box.calls, [])
+        panel = win.success_panel
+        self.assertTrue(panel.shown)
+        self.assertEqual(panel.kind, "success")
+        self.assertEqual(panel.title_text, "Bootable USB drive created successfully!")
+        self.assertIn("verified against the ISO and ejected", panel.message_text)
+        self.assertIn("unplug it now", panel.message_text)
+        order = self.page_order()
+        self.assertEqual(order.index(panel), order.index(win.create_btn.master) + 1)
+        self.assertEqual(self.link_texts(panel), ["Make another"])
+
+    def test_eject_failure_gets_the_amber_variant_with_the_manual_eject_message(self):
+        self.run_write(ejected=False)
+        panel = self.win.success_panel
+        self.assertEqual(self.box.calls, [])
+        self.assertEqual(panel.kind, "warning")
+        self.assertIn("could not be ejected automatically", panel.message_text)
+        self.assertIn("Eject it from the file manager", panel.message_text)
+        self.assertNotIn("you can unplug it now", panel.message_text)
+
+    def test_make_another_clears_the_panel_and_reenables_the_flow(self):
+        win = self.win
+        self.run_write(ejected=True)
+        self.assertTrue(win.success_panel.shown)
+        self.assertEqual(self.manager(win.create_progress), "pack")
+        win.make_another()
+        self.pump(lambda: not win._disk_listing)
+        self.assertFalse(win.success_panel.shown)
+        self.assertEqual(self.manager(win.create_progress), "")
+        self.assertEqual(str(win.create_progress_label.cget("text")), "")
+        self.assertFalse(win._creating)
+        self.assertEqual(self.state(win.create_btn), "normal")      # same image, drive listed again
+        self.assertEqual(self.state(win.refresh_btn), "normal")
+
+    def test_a_new_write_hides_the_old_result(self):
+        win = self.win
+        self.run_write(ejected=True)
+        self.assertTrue(win.success_panel.shown)
+        win.show_error("Error", "stale")
+        self.run_write(exc=app.OperationCanceled("stopped"), ejected=False)
+        self.assertFalse(win.success_panel.shown)
+        self.assertNotEqual(win.error_banner.message_text, "stale")
+
+    def test_a_failed_write_never_shows_the_success_panel(self):
+        self.run_write(exc=RuntimeError("Verification failed: the drive does not match the ISO."))
+        self.assertFalse(self.win.success_panel.shown)
+        self.assertEqual(self.box.titles("error"), ["Error"])
+        self.assertTrue(self.win.error_banner.shown)
+
+    def test_a_cancel_that_left_the_drive_unusable_keeps_its_dialog_and_adds_the_banner(self):
+        exc = app.OperationCanceled("stopped")
+        exc.drive_touched = True
+        self.run_write(exc=exc)
+        self.assertEqual(self.box.titles("info"), ["Canceled"])
+        self.assertIn("unusable", self.win.error_banner.message_text)
+        self.assertFalse(self.win.success_panel.shown)
+        untouched = app.OperationCanceled("stopped")
+        untouched.drive_touched = False
+        self.run_write(exc=untouched)
+        self.assertFalse(self.win.error_banner.shown)               # nothing to warn about
+        self.assertEqual(self.box.titles("info"), ["Canceled", "Canceled"])
+
+    # ----- the header -----
+    def test_header_is_the_first_row_with_name_version_chip_and_help(self):
+        win = self.win
+        header = win.dep_label.master
+        self.assertIs(header.master.pack_slaves()[0], header)
+        self.assertIs(win.install_deps_btn.master, header)
+        self.assertIs(win.help_link.master, header)
+        texts = [str(w.cget("text")) for w in header.winfo_children() if str(w.winfo_class()) == "TLabel"]
+        self.assertIn("EPMA USB CREATOR", texts)
+        self.assertIn(f"v{app.__version__}", texts)
+        self.assertIn("Help", texts)
+
+    def test_chip_says_ready_in_green_when_nothing_is_missing(self):
+        win = self.win
+        win.check_dependencies()
+        self.assertEqual(str(win.dep_label.cget("text")), "● Ready")
+        self.assertEqual(str(win.dep_label.cget("foreground")), "#2ea043")
+        self.assertEqual(self.manager(win.install_deps_btn), "")
+
+    def test_chip_says_missing_tools_in_amber_and_shows_the_install_button(self):
+        win = self.win
+        with mock.patch.object(app, "get_missing_dependencies", return_value=["wimlib-imagex"]):
+            win.check_dependencies()
+        self.assertEqual(str(win.dep_label.cget("text")), "● Missing tools")
+        self.assertEqual(str(win.dep_label.cget("foreground")), "#ff9f0a")
+        self.assertEqual(self.manager(win.install_deps_btn), "pack")
+        order = win.dep_label.master.pack_slaves()
+        self.assertGreater(order.index(win.install_deps_btn), order.index(win.dep_label))   # packed after = left of it
+        self.assertEqual(str(win.install_deps_btn.cget("text")), "Install missing dependencies")
+        win.check_dependencies()                                                         # fixed again
+        self.assertEqual(str(win.dep_label.cget("text")), "● Ready")
+        self.assertEqual(self.manager(win.install_deps_btn), "")
+
+    def test_help_link_opens_the_same_window_as_f1(self):
+        win = self.win
+        with mock.patch.object(win, "show_help") as show:
+            win.help_link.event_generate("<Button-1>")
+            win.update()
+        show.assert_called_once_with()
+        self.assertEqual(str(win.help_link.cget("text")), "Help")
+
+    def test_the_old_dependency_line_is_gone(self):
+        texts = []
+
+        def walk(widget):
+            for child in widget.winfo_children():
+                if child is not self.win.dep_label and str(child.winfo_class()) == "TLabel":
+                    texts.append(str(child.cget("text")))
+                walk(child)
+        walk(self.win)
+        self.assertNotIn("All dependencies OK", texts)
 
 
 if __name__ == "__main__":

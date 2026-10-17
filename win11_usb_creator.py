@@ -353,8 +353,11 @@ PT_BR = {
     "Could not read the file ({reason}).": "Não foi possível ler o arquivo ({reason}).",
 
     # ----- the drive and the Create button -----
-    "All dependencies OK": "Todas as dependências estão OK",
-    "Missing: {tools}": "Faltando: {tools}",
+    "● Ready": "● Pronto",
+    "● Missing tools": "● Faltam ferramentas",
+    "Dismiss": "Fechar",
+    "Try again": "Tentar de novo",
+    "Make another": "Criar outro",
     "Install missing dependencies": "Instalar as dependências que faltam",
     "Refresh USB drives list": "Atualizar a lista de pendrives",
     "USB drive": "Pendrive USB",
@@ -3335,10 +3338,12 @@ def help_sections():
 • After writing, the drive is read back and compared with the ISO. Only a drive that passes is ejected.
 
 ## The window, from top to bottom
+• The top row shows the program name and version, a status chip for the tools it needs ("Ready" in green, "Missing tools" in amber with "Install missing dependencies" next to it) and "Help", which opens this documentation (F1 does the same).
 • Four cards choose the type of image: Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO. The panel under the cards changes with the card and shows where to get that kind of image.
 • The list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Select existing ISO file...": the image you already have, with an optional SHA-256 check.
 • "Create Bootable USB Drive" (the blue button), the one "Cancel" button for whatever is running (a download, an extraction or the write), its progress bar, and "Show details", which opens the log.
+• Results appear under the Create button instead of in pop-up windows: a red box for a failed download, extraction, drive listing or tool installation (with "Try again" where it makes sense, and "Dismiss"), and a green box when the drive was written, verified and ejected, with "Make another" to start over. A failed or canceled write also keeps its pop-up, because the state of the drive matters.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
         ("Quick start: Windows 11", """## 1. Get the ISO (card "Windows 11")
@@ -3349,7 +3354,7 @@ def help_sections():
 • Already have the ISO? Click "Select existing ISO file..." instead.
 
 ## 2. Write the drive
-• The dependency line above the Create button must say "All dependencies OK". If something is missing, click "Install missing dependencies".
+• The chip at the top right must say "Ready". If it says "Missing tools", click "Install missing dependencies" next to it.
 • Plug in the USB drive (8 GB or more) and click "Refresh USB drives list". Select your drive.
 • The "Windows 11" card is chosen for you when the ISO is a Windows installer.
 • Click "Create Bootable USB Drive", read the confirmation (model, size, volumes) and confirm.
@@ -3471,6 +3476,7 @@ def help_sections():
 
 ## Eject
 • After a successful verification the drive is ejected. If it is busy, the program unmounts it by force and tries again.
+• The green box under the Create button says the drive was verified and ejected. If the eject failed the box is amber and tells you to eject the drive from Finder or your file manager before unplugging.
 • The log ends with "Drive ejected — you can unplug it now." When it says the drive could not be ejected, eject it from Finder or your file manager before unplugging.
 • Always wait for that message before pulling the drive out."""),
 
@@ -4115,6 +4121,84 @@ def _pack_bar(bar, *followers, pady=(8, 2)):
     bar.pack(**options)
 
 
+class _LinkLabel(_LabelBase):
+    """A link-like label that runs `command` when clicked (or on Space/Return after Tab)."""
+
+    def __init__(self, parent, text, command):
+        super().__init__(parent, text=text, foreground="#4da3ff", cursor="hand2", takefocus=True)
+        self._command = command
+        self.bind("<Button-1>", lambda _e: self._command())
+        self.bind("<Return>", lambda _e: self._command())
+        self.bind("<space>", lambda _e: self._command())
+
+
+_FrameBase = tk.Frame if tk else object
+
+
+class _Banner(_FrameBase):
+    """An inline message box with a soft coloured border: a failure ("error"), a finished write
+    ("success") or something that needs attention ("warning"). It holds a title, the message and links
+    (e.g. "Try again", "Make another", and "Dismiss"), and takes no space until `show()` packs it.
+
+    `before=` / `after=` (a widget, or a function returning one) say where it goes when shown, as for
+    `_LazyLabel`; without them it would land at the end of the page.
+    """
+
+    COLORS = {"error": "#e5534b", "success": "#2ea043", "warning": "#ff9f0a"}
+    _pack_now = _LazyLabel._pack_now
+
+    def __init__(self, parent, kind, **pack_options):
+        style = ttk.Style(parent)
+        bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        super().__init__(parent, bg=bg, highlightthickness=1, highlightbackground=self.COLORS[kind],
+                         highlightcolor=self.COLORS[kind], bd=0)
+        self.kind = kind
+        self._pack_options = {"fill": "x", "pady": (8, 0), **pack_options}
+        base = tkfont.nametofont("TkDefaultFont")
+        bold = tkfont.Font(family=base.actual("family"), size=base.actual("size"), weight="bold")
+        head = ttk.Frame(self)
+        head.pack(fill="x", padx=10, pady=(6, 0))
+        self._title = ttk.Label(head, font=bold)
+        self._title.pack(side="left")
+        self._links = ttk.Frame(head)
+        self._links.pack(side="right")
+        self._message = ttk.Label(self, justify="left", wraplength=PANEL_WRAP - 60)
+        self._message.pack(anchor="w", padx=10, pady=(2, 8))
+        self.title_text = self.message_text = ""
+
+    @property
+    def shown(self):
+        return str(self.winfo_manager()) == "pack"
+
+    def show(self, title, message, actions=(), dismiss=True, kind=None):
+        """Show the box. `actions` are (text, command) links; each one closes the box first.
+        `dismiss` adds the "Dismiss" link. `kind` changes the colour (default: the one it was made with)."""
+        self.kind = kind or self.kind
+        color = self.COLORS[self.kind]
+        self.config(highlightbackground=color, highlightcolor=color)
+        self._title.config(text=title, foreground=color)
+        self._message.config(text=message)
+        self.title_text, self.message_text = title, message
+        for child in self._links.winfo_children():
+            child.destroy()
+        links = list(actions)
+        if dismiss:
+            links.append((_("Dismiss"), None))
+        for text, command in links:
+            _LinkLabel(self._links, text, lambda c=command: self._run(c)).pack(side="left", padx=(12, 0))
+        if not self.shown:
+            self._pack_now()
+
+    def _run(self, command):
+        self.clear()
+        if command is not None:
+            command()
+
+    def clear(self):
+        self.pack_forget()
+        self.title_text = self.message_text = ""
+
+
 class _DownloadWidgets:
     """The three widgets of a download card (download button, progress bar and its label) and the
     state changes the Windows ISO card and the ChromeOS Flex card share. The window keeps one per card and
@@ -4205,12 +4289,30 @@ class App(_TkBase):
     def _build_ui(self):
         page = ttk.Frame(self)
         page.pack(fill="both", expand=True, padx=14, pady=(12, 8))
+        self._build_header(page)
         self._build_cards(page)
         self._build_sources(page)
         self._build_drive(page)
         self._build_image(page)
         self._build_create(page)
         self.select_card(CARD_WINDOWS)
+
+    def _build_header(self, page):
+        """The slim top row: name and version, the dependency chip (with the install button) and Help."""
+        row = ttk.Frame(page)
+        row.pack(fill="x", pady=(0, 10))
+        base = tkfont.nametofont("TkDefaultFont")
+        bold = tkfont.Font(family=base.actual("family"), size=base.actual("size") + 1, weight="bold")
+        ttk.Label(row, text="EPMA USB CREATOR", font=bold).pack(side="left")
+        ttk.Label(row, text=f"v{__version__}", foreground="#8e8e93").pack(side="left", padx=(6, 0))
+        self.help_link = _LinkLabel(row, _("Help"), lambda: self.show_help())  # the same window as F1
+        self.help_link.pack(side="right")
+        # The chip: "● Ready" (green) or "● Missing tools" (amber). The install button sits to its left
+        # and is shown only while something is missing (see check_dependencies).
+        self.dep_label = ttk.Label(row, text="")
+        self.dep_label.pack(side="right", padx=(0, 14))
+        self.install_deps_btn = ttk.Button(row, text=_("Install missing dependencies"),
+                                           command=self.install_dependencies)
 
     def _build_cards(self, page):
         row = ttk.Frame(page)
@@ -4367,12 +4469,6 @@ class App(_TkBase):
 
     def _build_create(self, page):
         ttk.Separator(page).pack(fill="x", pady=(8, 8))
-        dep_frame = ttk.Frame(page)
-        dep_frame.pack(fill="x", pady=(0, 6))
-        self.dep_label = ttk.Label(dep_frame, text="")
-        self.dep_label.pack(side="left")
-        self.install_deps_btn = ttk.Button(dep_frame, text=_("Install missing dependencies"),
-                                           command=self.install_dependencies)
         self.check_dependencies()
 
         # One short warning right above the button that does the damage, in the warning colour.
@@ -4398,6 +4494,12 @@ class App(_TkBase):
             before=lambda: self.create_progress if str(self.create_progress.winfo_manager()) == "pack"
             else self.create_progress_label)
         self.create_hint.config(foreground="#8e8e93")
+        # Inline results under the Create row: a failure (soft red) and a finished write (green). Each is
+        # packed only when shown, above the hint and the bar, so nothing else moves while they are hidden.
+        self.error_banner = _Banner(page, "error", before=lambda: self._first_on_screen(
+            self.success_panel, self.create_hint, self.create_progress, self.create_progress_label))
+        self.success_panel = _Banner(page, "success", before=lambda: self._first_on_screen(
+            self.create_hint, self.create_progress, self.create_progress_label))
         self._create_started = None
         self._create_last_ui = 0.0
         self._create_stage = None
@@ -4407,6 +4509,37 @@ class App(_TkBase):
         self.details_toggle = _Disclosure(page, _("Show details"), _("Hide details"), self._on_details_toggled)
         self.details_toggle.pack(anchor="w", pady=(6, 0))
         self.log_text = tk.Text(page, height=6, state="disabled", bg="black", fg="lightgreen")
+
+    @staticmethod
+    def _first_on_screen(*widgets):
+        """The first of `widgets` that is packed (the anchor for `before=`), or None."""
+        return next((w for w in widgets if str(w.winfo_manager()) == "pack"), None)
+
+    # ---------- inline messages ----------
+    def show_error(self, title, message, retry=None):
+        """Show the red banner under the Create row. `retry` (optional) adds a "Try again" link."""
+        self.error_banner.show(title, message, actions=[(_("Try again"), retry)] if retry else ())
+        self.after_idle(self._fit_window)
+
+    def clear_error(self):
+        self.error_banner.clear()
+
+    def show_success(self, title, message, verified_and_ejected=True):
+        """Show the finished-write panel (green; amber when the drive still has to be ejected by hand)."""
+        self.success_panel.show(title, message, actions=[(_("Make another"), self.make_another)], dismiss=False,
+                                kind="success" if verified_and_ejected else "warning")
+        self.after_idle(self._fit_window)
+
+    def clear_success(self):
+        self.success_panel.clear()
+
+    def make_another(self):
+        """Back to the start of the flow after a finished write: the panel and the old result go away."""
+        self.clear_success()
+        self.create_progress.pack_forget()
+        self.create_progress_label.config(text="")
+        self.refresh_disks(quiet=True)  # the drive that was ejected is no longer there
+        self.update_create_button_state()
 
     def _on_details_toggled(self, is_open):
         if is_open:
@@ -4450,16 +4583,17 @@ class App(_TkBase):
     def check_dependencies(self):
         missing = get_missing_dependencies(self.mode_var.get())
         if not missing:
-            self.dep_label.config(text=_("All dependencies OK"), foreground="green")
+            self.dep_label.config(text=_("● Ready"), foreground="#2ea043")
             self.install_deps_btn.pack_forget()
         else:
-            self.dep_label.config(text=_("Missing: {tools}").format(tools=", ".join(missing)), foreground="orange")
-            self.install_deps_btn.pack(side="left", padx=5)
+            self.dep_label.config(text=_("● Missing tools"), foreground="#ff9f0a")
+            self.install_deps_btn.pack(side="right", padx=(0, 10))
 
     def install_dependencies(self):
         if self._creating or self._installing:
             return  # installing clears the cached administrator password the running write may be using
         self._installing = True
+        self.clear_error()
         self._sync_controls()
         self.update_create_button_state()
 
@@ -4485,10 +4619,10 @@ class App(_TkBase):
                     # linux_build_install_command() builds only from the fixed package allow-list.
                     script = "set -eu\n" + install_command
                     self.priv.run_script(script, self.log_threadsafe)
-            except (ValueError, RuntimeError) as e:
-                self.after(0, self._report_error, "Error", str(e))
+            except (ValueError, RuntimeError) as e:  # shown as a banner (not a dialog), with "Try again"
+                self.after(0, self._report_error, "Error", str(e), None, False, self.install_dependencies)
             except Exception as e:
-                self.after(0, self._report_error, "Unexpected error", None, e)
+                self.after(0, self._report_error, "Unexpected error", None, e, False, self.install_dependencies)
             finally:
                 self.priv.clear_cached_password()
                 self.after(0, self._installation_ended)
@@ -4569,6 +4703,7 @@ class App(_TkBase):
         audit("ChromeOS Flex download started (dl.google.com)")
         self.flex_cancel_event.clear()
         self._flex_busy = True
+        self.clear_error()
         self._sync_controls()
         self.flex_dl.start()
         self._launch_download(
@@ -4607,6 +4742,7 @@ class App(_TkBase):
             return
         self._flex_extracting = True
         self._flex_busy = True
+        self.clear_error()
         self._sync_controls()
         self.flex_dl.start(_("Extracting..."))
         folder = os.path.dirname(os.path.abspath(zip_path))
@@ -4645,12 +4781,15 @@ class App(_TkBase):
               "\"Create Bootable USB Drive\".").format(path=image))
 
     def _on_flex_error(self, msg):
+        was_extracting = self._flex_extracting
         self._flex_busy = self._flex_extracting = False
         self._sync_controls()
         if self._closing:
             return
         self.flex_dl.finish(_("Failed."), bar_value=0)
-        messagebox.showerror(_("ChromeOS Flex"), msg)
+        # "Try again" repeats the download; a failed extraction of a file the user chose has nothing to repeat.
+        self._report_error("ChromeOS Flex", msg, modal=False,
+                           retry=None if was_extracting else self.start_flex_download)
 
     # ---------- Help menu and built-in documentation ----------
     def _build_menu(self):
@@ -4878,6 +5017,7 @@ class App(_TkBase):
             return  # something started while the dialogs were open
         self.cancel_event.clear()
         self._download_running = True
+        self.clear_error()
         self._sync_controls()
         self.windows_dl.start()
         self._launch_download(url, dest, self.cancel_event, self._on_progress, self._on_download_done,
@@ -4922,7 +5062,7 @@ class App(_TkBase):
         if self._closing:
             return
         self.windows_dl.finish(_("Download failed."), bar_value=0)
-        messagebox.showerror(_("Download error"), msg)
+        self._report_error("Download error", msg, modal=False, retry=self.start_download)
 
     # ---------- USB drive ----------
     def refresh_disks(self, quiet=False, sync=False):
@@ -4936,6 +5076,8 @@ class App(_TkBase):
         """
         if self._closing:
             return
+        if not quiet:
+            self.clear_error()  # an explicit refresh starts over; automatic ones never hide a message
         if sync:
             self._disk_job += 1
             job = self._disk_job
@@ -4994,7 +5136,8 @@ class App(_TkBase):
         if quiet:
             self.log(_("Could not list disks: {error}").format(error=error))
         else:
-            messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=error))
+            self._report_error("Error", _("Could not list disks: {error}").format(error=error), modal=False,
+                               retry=self.refresh_disks)
 
     def _on_disks(self, job, disks):
         if job != self._disk_job or self._closing or self._creating:
@@ -5273,6 +5416,8 @@ class App(_TkBase):
         self.create_cancel_event.clear()
         self.update_create_button_state()
         self.cancel_create_btn.config(state="normal")
+        self.clear_error()
+        self.clear_success()
         self._reset_create_progress()
         iso = self.iso_path.get()
         dev = disk["id"]
@@ -5285,17 +5430,15 @@ class App(_TkBase):
                                     progress=lambda d, t, s: self._post(self._on_create_progress, d, t, s),
                                     cancel_event=self.create_cancel_event)
                 self._post(self._finish_create_progress, True)
-                note = (_("It was verified against the ISO and ejected — you can unplug it now.") if ejected else
-                        _("It was verified against the ISO, but could not be ejected automatically. "
-                          "Eject it from the file manager before unplugging."))
-                self._post(self._notify, "info", _("Done"),
-                           _("Bootable USB drive created successfully!") + f"\n\n{note}")
+                self._post(self._show_create_success, ejected)
             except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
                 log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True), getattr(e, "written", False))
                 self._post(self._finish_create_progress, False, True)
                 self._post(self.log, log_text)
                 self._post(self._notify, "info", title, body)
+                if getattr(e, "drive_touched", True):  # the warning that the drive is not usable stays on screen
+                    self._post(self.show_error, title, body)
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
                 self._post(self._finish_create_progress, False)
@@ -5333,6 +5476,16 @@ class App(_TkBase):
         return (_("Canceled. The drive was not modified."),
                 _("Canceled"),
                 _("The operation was canceled.\n\nThe USB drive was NOT modified."))
+
+    def _show_create_success(self, ejected):
+        """The write was verified: the inline panel replaces the old "Done" dialog. Without the eject the
+        panel is amber and says the drive must be ejected by hand before it is unplugged."""
+        if self._closing:
+            return
+        note = (_("It was verified against the ISO and ejected — you can unplug it now.") if ejected else
+                _("It was verified against the ISO, but could not be ejected automatically. "
+                  "Eject it from the file manager before unplugging."))
+        self.show_success(_("Bootable USB drive created successfully!"), note, verified_and_ejected=bool(ejected))
 
     def _notify(self, kind, title, message):
         """An information dialog from a worker's result; skipped while the window is closing."""
@@ -5494,11 +5647,15 @@ class App(_TkBase):
         Show them, so a broken button never looks like "nothing happened"."""
         self._report_error("Unexpected error", None, val)
 
-    def _report_error(self, title, message, exc=None):
+    def _report_error(self, title, message, exc=None, modal=True, retry=None):
         """Show a user-facing error without leaking internals into the dialog.
 
         `title` is the English text (it also goes to the audit log); the dialog shows it translated.
         A `message` given by the caller (an engine error) is shown as it is.
+
+        The red banner under the Create row always shows it (with "Try again" when `retry` is given).
+        The modal dialog is also shown unless `modal=False`: a failed write or verification keeps it (the
+        drive's state matters); downloads, extractions, drive listings and tool installs use the banner only.
         """
         if self._closing:  # no dialog while the window is going away; the log and the audit trail keep it
             self.log(f"ERROR: {message}" if exc is None else f"ERROR [{type(exc).__name__}]: {exc}")
@@ -5514,7 +5671,9 @@ class App(_TkBase):
             ).format(reason=type(exc).__name__, path=audit_log_path())
         else:
             self.log(f"ERROR: {message}")
-        messagebox.showerror(_(title), message)
+        self.show_error(_(title), message, retry=retry)
+        if modal:
+            messagebox.showerror(_(title), message)
 
 
 # ============================================================
