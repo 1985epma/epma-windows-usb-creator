@@ -214,5 +214,35 @@ class ModeTableTests(unittest.TestCase):
         self.assertEqual(list(mode_action.choices), [app.MODE_AUTO, *app.ALL_MODES])
 
 
+class PackageTableTests(unittest.TestCase):
+    def test_map_equals_the_original_per_manager_tables(self):
+        base = {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
+                "partprobe": "parted", "rsync": "rsync"}
+        expected = {
+            "apt-get": dict(base, **{"wimlib-imagex": "wimtools"}),
+            "dnf": dict(base, **{"wimlib-imagex": "wimlib-utils"}),
+            "yum": dict(base, **{"wimlib-imagex": "wimlib-utils"}),
+            "pacman": dict(base, **{"wimlib-imagex": "wimlib"}),
+            "zypper": dict(base, **{"wimlib-imagex": "wimlib"}),
+            "apk": dict(base, wipefs="util-linux-misc", **{"wimlib-imagex": "wimlib"}),
+        }
+        self.assertEqual(app.LINUX_PKG_MAP, expected)
+
+    def test_every_manager_covers_every_required_tool_with_its_own_dict(self):
+        for mgr, table in app.LINUX_PKG_MAP.items():
+            self.assertEqual(set(table), set(app.LINUX_REQUIRED_TOOLS), mgr)
+        tables = list(app.LINUX_PKG_MAP.values())
+        self.assertEqual(len({id(t) for t in tables}), len(tables))  # patching one never changes another
+
+    def test_detection_follows_the_template_order(self):
+        self.assertEqual(list(app.LINUX_INSTALL_CMD_TEMPLATE), ["apt-get", "dnf", "yum", "pacman", "zypper", "apk"])
+        self.assertEqual(set(app.LINUX_PKG_MAP), set(app.LINUX_INSTALL_CMD_TEMPLATE))
+        available = {"dnf", "apk"}
+        with mock.patch.object(app.shutil, "which", side_effect=lambda m: "/bin/" + m if m in available else None):
+            self.assertEqual(app.linux_detect_pkg_manager(), "dnf")
+        with mock.patch.object(app.shutil, "which", return_value=None):
+            self.assertIsNone(app.linux_detect_pkg_manager())
+
+
 if __name__ == "__main__":
     unittest.main()

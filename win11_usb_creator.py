@@ -173,19 +173,18 @@ VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw wr
 RAW_WRITE_BLOCK = {"mac": "4m", "linux": "4M"}  # BSD dd and GNU dd spell the unit differently
 
 LINUX_REQUIRED_TOOLS = ["parted", "mkfs.vfat", "wipefs", "partprobe", "rsync", "wimlib-imagex"]
+# Package that provides each tool, for every package manager. Most names are the same everywhere; the
+# managers differ only in the package for wimlib-imagex (and Alpine's wipefs). tests/e2e/distro_probe.py
+# checks these names against the real distributions with its own, independent table.
+_LINUX_PKG_COMMON = {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
+                     "partprobe": "parted", "rsync": "rsync"}
 LINUX_PKG_MAP = {
-    "apt-get": {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimtools"},
-    "dnf":     {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimlib-utils"},
-    "yum":     {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimlib-utils"},
-    "pacman":  {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimlib"},
-    "zypper":  {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimlib"},
-    "apk":     {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux-misc",
-                "partprobe": "parted", "rsync": "rsync", "wimlib-imagex": "wimlib"},
+    "apt-get": {**_LINUX_PKG_COMMON, "wimlib-imagex": "wimtools"},
+    "dnf":     {**_LINUX_PKG_COMMON, "wimlib-imagex": "wimlib-utils"},
+    "yum":     {**_LINUX_PKG_COMMON, "wimlib-imagex": "wimlib-utils"},
+    "pacman":  {**_LINUX_PKG_COMMON, "wimlib-imagex": "wimlib"},
+    "zypper":  {**_LINUX_PKG_COMMON, "wimlib-imagex": "wimlib"},
+    "apk":     {**_LINUX_PKG_COMMON, "wipefs": "util-linux-misc", "wimlib-imagex": "wimlib"},
 }
 LINUX_INSTALL_CMD_TEMPLATE = {
     "apt-get": "apt-get update && apt-get install -y {pkgs}",
@@ -2603,7 +2602,7 @@ def linux_partition_path(dev_name, n):
 
 
 def linux_detect_pkg_manager():
-    for mgr in ("apt-get", "dnf", "yum", "pacman", "zypper", "apk"):
+    for mgr in LINUX_INSTALL_CMD_TEMPLATE:  # in the order the managers are listed there
         if shutil.which(mgr):
             return mgr
     return None
