@@ -915,12 +915,12 @@ class StepLayoutTests(GuiTestCase, TempDirTestCase):
     def settle(self):
         self.win.update_idletasks()
 
-    def test_the_four_cards_are_equal_columns_that_share_the_row(self):
+    def test_the_five_cards_are_equal_columns_that_share_the_row(self):
         win = self.win
         row = win.cards_row
-        self.assertEqual(len(win.cards), 4)
+        self.assertEqual(len(win.cards), 5)
         uniform = set()
-        for column in range(4):
+        for column in range(5):
             info = row.grid_columnconfigure(column)
             self.assertEqual(int(info["weight"]), 1)
             uniform.add(info["uniform"])
@@ -931,7 +931,7 @@ class StepLayoutTests(GuiTestCase, TempDirTestCase):
             self.assertEqual(card.winfo_manager(), "grid")
             self.assertEqual(card.grid_info()["sticky"], "ew")
             columns.append(int(card.grid_info()["column"]))
-        self.assertEqual(sorted(columns), [0, 1, 2, 3])
+        self.assertEqual(sorted(columns), [0, 1, 2, 3, 4])
 
     def test_a_card_draws_itself_with_the_width_it_is_given(self):
         card = self.win.cards[app.CARD_WINDOWS]

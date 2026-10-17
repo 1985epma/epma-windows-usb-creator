@@ -179,7 +179,8 @@ class HelpNumbersTests(unittest.TestCase):
         self.assertRegex(overview, r"Four image types")
         for card in ("Google Chrome", "Windows 11", "Linux", "Other ISO"):
             self.assertIn(card, overview)
-        self.assertEqual(len(app.CARD_ORDER), 4)
+        self.assertEqual([c for c in app.CARD_ORDER if c != app.CARD_SEED],
+                         [app.CARD_CHROME, app.CARD_WINDOWS, app.CARD_LINUX, app.CARD_OTHER])  # the four image types
         # Linux and Other ISO are two cards that write the same way
         self.assertEqual(app.CARD_MODE[app.CARD_LINUX], app.CARD_MODE[app.CARD_OTHER])
 

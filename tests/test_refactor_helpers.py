@@ -207,7 +207,7 @@ class ModeTableTests(unittest.TestCase):
 
     def test_every_card_has_a_mode(self):
         self.assertEqual(set(app.CARD_MODE), set(app.CARD_ORDER))
-        self.assertTrue(set(app.CARD_MODE.values()) <= set(app.ALL_MODES))
+        self.assertTrue(set(app.CARD_MODE.values()) <= set(app.ALL_MODES) | {app.MODE_SEED})
 
     def test_cli_mode_choices_come_from_the_table(self):
         parser = app.build_cli_parser()

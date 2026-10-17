@@ -48,6 +48,8 @@ WIDGETS_OBRIGATORIOS = [
     "sha_toggle", "details_toggle", "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
     "refresh_btn", "pick_btn", "card_titles",
     "error_banner", "success_panel", "help_link",
+    "hardening_var", "hardening_check", "hardening_toggle", "hardening_details",
+    "seed_target_var", "seed_radios", "seed_note", "image_row", "cards_row",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -63,6 +65,9 @@ METODOS_OBRIGATORIOS = [
     "_on_close", "_sync_controls", "_write_running", "_wait_for_write", "_notify", "_canceled_texts", "_post",
     "_listing_finished", "_on_disks", "_on_disks_error", "_installation_ended",
     "show_error", "clear_error", "show_success", "clear_success", "make_another", "_show_create_success",
+    "hardening_selected", "_build_hardening_option", "_build_seed_panel", "_apply_card_layout",
+    "_hardening_details_text", "_on_hardening_details_toggled", "seed_target_texts", "seed_target_note",
+    "_on_seed_target_changed",
 ]
 
 print("Teste de fumaça da interface gráfica")
@@ -209,7 +214,7 @@ try:
     try:
         # cartões do topo: cada um mostra o seu painel e define como o pendrive é gravado
         esperado = {app.CARD_CHROME: app.MODE_CHROMEOS, app.CARD_WINDOWS: app.MODE_WINDOWS,
-                    app.CARD_LINUX: app.MODE_LINUX, app.CARD_OTHER: app.MODE_LINUX}
+                    app.CARD_LINUX: app.MODE_LINUX, app.CARD_OTHER: app.MODE_LINUX, app.CARD_SEED: app.MODE_SEED}
         for chave, modo in esperado.items():
             janela.select_card(chave)
             janela.update_idletasks()
@@ -223,6 +228,16 @@ try:
         # sem imagem escolhida, o conferidor de compatibilidade não deve quebrar
         janela.iso_path.set("")
         assert janela._image_matches_choice(app.MODE_LINUX) is True
+        # cartão do kit de reforço: não precisa de imagem (a linha do arquivo some) e a caixa de reforço só existe no Windows
+        janela.select_card(app.CARD_SEED)
+        janela.update_idletasks()
+        assert janela.image_row.winfo_manager() == "" and janela.iso_card.winfo_manager() == "", \
+            "o cartão do kit não deveria mostrar a escolha da imagem"
+        assert janela.hardening_selected() == app.HARDENING_NONE
+        janela.select_card(app.CARD_WINDOWS)
+        janela.update_idletasks()
+        assert janela.image_row.winfo_manager() == "pack" and janela.iso_card.winfo_manager() == "pack"
+        assert not janela.hardening_var.get(), "o reforço do Windows deve começar desmarcado"
         print("  [OK]    cartões, painéis e painel do ChromeOS Flex")
     except Exception as e:
         print(f"  [FALHA] cartões e painéis: {type(e).__name__}: {e}")
@@ -290,6 +305,17 @@ try:
             esperar_lista()
             assert janela.selected_disk() is None and not janela._creating
             assert janela.disk_list.is_enabled() and str(janela.pick_btn.cget("state")) == "normal"
+            # cartão do kit de reforço: sem imagem, o botão só depende do pendrive
+            janela.iso_path.set("")
+            janela.select_card(app.CARD_SEED)
+            discos.append({"id": "disk9", "size": 32_000_000_000, "label": "/dev/disk9 - Teste", "identity": ()})
+            janela._last_disk_refresh = 0.0
+            janela._auto_refresh_disks()
+            esperar_lista()
+            assert str(janela.create_btn.cget("state")) == "normal", "o kit não precisa de imagem: o botão deveria habilitar"
+            assert "image" not in str(janela.create_hint.cget("text")).lower()
+            janela.select_card(app.CARD_WINDOWS)
+            assert str(janela.create_btn.cget("state")) == "disabled", "o Windows precisa de imagem"
         finally:
             app.get_external_disks = original
             app.get_missing_dependencies = original_deps
