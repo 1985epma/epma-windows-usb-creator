@@ -44,7 +44,7 @@ WIDGETS_OBRIGATORIOS = [
     "dep_label", "install_deps_btn", "disk_combo",
     "flex_download_btn", "flex_cancel_btn", "flex_progress", "flex_progress_label",
     "card_var", "cards", "panels", "mode_var",
-    "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
+    "create_btn", "cancel_create_btn", "create_hint", "create_progress", "create_progress_label", "log_text",
     "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
 ]
 
@@ -53,7 +53,7 @@ METODOS_OBRIGATORIOS = [
     "refresh_disks", "selected_disk", "update_create_button_state",
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
-    "install_dependencies", "open_ms_page", "on_mode_change", "select_card", "_image_matches_choice",
+    "install_dependencies", "open_ms_page", "on_mode_change", "select_card", "_image_matches_choice", "_auto_refresh_disks", "_creation_ended",
     "start_flex_download", "cancel_flex", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
     "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about",
     "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
@@ -222,6 +222,37 @@ try:
     except Exception as e:
         print(f"  [FALHA] cartões e painéis: {type(e).__name__}: {e}")
         falhas.append("cartões e painéis")
+
+    try:
+        # lista de pendrives: atualização automática e dica de por que o botão Criar está desabilitado
+        discos = []
+        original = app.get_external_disks
+        app.get_external_disks = lambda: [dict(d) for d in discos]
+        try:
+            janela.iso_path.set("/tmp/exemplo.iso")
+            janela._last_disk_refresh = 0.0
+            janela._auto_refresh_disks()
+            assert str(janela.create_btn.cget("state")) == "disabled"
+            assert "No USB drive found" in str(janela.create_hint.cget("text")), "a dica sobre o pendrive não apareceu"
+            discos.append({"id": "disk9", "size": 32_000_000_000, "label": "/dev/disk9 - Teste", "identity": ()})
+            janela._last_disk_refresh = 0.0
+            janela._auto_refresh_disks()
+            assert str(janela.create_btn.cget("state")) == "normal", "o botão deveria habilitar com imagem e pendrive"
+            assert not str(janela.create_hint.cget("text")), "a dica deveria sumir"
+            janela._creating = True
+            janela._last_disk_refresh = 0.0
+            discos.clear()
+            janela._auto_refresh_disks()             # durante uma gravação a lista não pode mudar
+            assert janela.selected_disk() is not None, "a lista foi atualizada durante uma gravação"
+            janela._creation_ended()                 # ao terminar, lê a lista de novo
+            assert janela.selected_disk() is None and not janela._creating
+        finally:
+            app.get_external_disks = original
+            janela.iso_path.set("")
+        print("  [OK]    lista de pendrives automática e dicas do botão Criar")
+    except Exception as e:
+        print(f"  [FALHA] lista de pendrives automática: {type(e).__name__}: {e}")
+        falhas.append("lista de pendrives automática")
 
     try:
         assert str(janela.cget("menu")), "a barra de menus (Help) não foi criada"

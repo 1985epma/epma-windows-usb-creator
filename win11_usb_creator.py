@@ -482,6 +482,9 @@ PT_BR = {
     "The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. Nothing was changed.": "A imagem ({image}) é maior que este pendrive ({drive}). Escolha um pendrive maior. Nada foi alterado.",
     "Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. It may not work as an installer.\n\nContinue anyway?": "O Google pede um pendrive de 16 GB ou maior para o ChromeOS Flex, e este tem {size}. Ele pode não funcionar como instalador.\n\nContinuar mesmo assim?",
     "Downloading...": "Baixando...",
+    "Choose the image file first (\"Select existing ISO file...\" or the download above).": "Escolha primeiro o arquivo da imagem (\"Select existing ISO file...\" ou o download acima).",
+    "No USB drive found. Plug it in and click \"Refresh USB drives list\".": "Nenhum pendrive USB encontrado. Conecte-o e clique em \"Refresh USB drives list\".",
+    "Select a USB drive in the list.": "Selecione um pendrive USB na lista.",
     "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased. Only USB drives are listed; the system disk is never shown.": "AVISO: TODOS OS DADOS do pendrive selecionado serão apagados PERMANENTEMENTE. Só pendrives USB aparecem na lista; o disco do sistema nunca é mostrado.",
     "Google Chrome": "Google Chrome",
     "Copies the files": "Copia os arquivos",
@@ -3249,6 +3252,29 @@ The program has no third-party dependencies: it uses only the Python standard li
 _CanvasBase = tk.Canvas if tk else object  # the module must stay importable without Tkinter
 
 
+_LabelBase = ttk.Label if ttk else object
+
+
+class _LazyLabel(_LabelBase):
+    """A label that occupies no space while its text is empty (it is packed when it gets text)."""
+
+    def __init__(self, parent, **pack_options):
+        super().__init__(parent, text="", justify="left", wraplength=680)
+        self._pack_options = pack_options
+
+    def config(self, cnf=None, **kw):
+        result = super().config(cnf, **kw)
+        if "text" in kw:
+            if kw["text"]:
+                if not self.winfo_manager():
+                    self.pack(**self._pack_options)
+            else:
+                self.pack_forget()
+        return result
+
+    configure = config
+
+
 class OptionCard(_CanvasBase):
     """A square, clickable choice: one of the four image types at the top of the window.
 
@@ -3339,10 +3365,14 @@ class App(_TkBase):
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
         self._help_win = None
+        self._creating = False          # True from the click on "Create" until the write has ended
+        self._last_disk_refresh = 0.0
         self.flex_cancel_event = threading.Event()
         self._build_menu()
         self._build_ui()
         self._fit_window()
+        self.bind("<FocusIn>", self._auto_refresh_disks)
+        self.after(300, self._auto_refresh_disks)
         self.after(LOG_FLUSH_MS, self._log_tick)
 
     # ---------- UI ----------
@@ -3402,9 +3432,11 @@ class App(_TkBase):
         self.flex_download_btn.pack(side="left")
         self.flex_cancel_btn = ttk.Button(row, text=_("Cancel"), command=self.cancel_flex, state="disabled")
         self.flex_cancel_btn.pack(side="left", padx=5)
-        ttk.Button(row, text=_("Google's installation guide"),
-                   command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left", padx=(12, 0))
-        ttk.Button(row, text=_("Google's requirements page"),
+        links = ttk.Frame(f)
+        links.pack(fill="x", pady=(6, 0))
+        ttk.Button(links, text=_("Google's installation guide"),
+                   command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left")
+        ttk.Button(links, text=_("Google's requirements page"),
                    command=lambda: webbrowser.open(CHROMEOS_FLEX_REQUIREMENTS_URL)).pack(side="left", padx=5)
         self.flex_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.flex_progress.pack(fill="x", pady=(8, 2))
@@ -3502,10 +3534,8 @@ class App(_TkBase):
         self.iso_sha_btn.pack(side="left", padx=(8, 0))
         self.iso_sha_progress = ttk.Progressbar(self.iso_check_frame, orient="horizontal", mode="determinate")
         self.iso_sha_progress.pack(fill="x", padx=8, pady=(0, 2))
-        self.iso_sha_label = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
-        self.iso_sha_label.pack(anchor="w", padx=8)
-        self.iso_sha_result = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
-        self.iso_sha_result.pack(anchor="w", padx=8, pady=(0, 4))
+        self.iso_sha_label = _LazyLabel(self.iso_check_frame, anchor="w", padx=8)
+        self.iso_sha_result = _LazyLabel(self.iso_check_frame, anchor="w", padx=8, pady=(0, 4))
 
     def _build_create(self, page):
         ttk.Separator(page).pack(fill="x", pady=(8, 8))
@@ -3529,6 +3559,8 @@ class App(_TkBase):
         self.cancel_create_btn = ttk.Button(create_row, text=_("Cancel"), command=self.cancel_create_usb,
                                             state="disabled")
         self.cancel_create_btn.pack(side="left", padx=(10, 0))
+        self.create_hint = _LazyLabel(page, anchor="w", pady=(6, 0))
+        self.create_hint.config(foreground="#ff9f0a")
 
         self.create_progress = ttk.Progressbar(page, orient="horizontal", mode="determinate")
         self.create_progress.pack(fill="x", pady=(10, 2))
@@ -3998,19 +4030,36 @@ class App(_TkBase):
         messagebox.showerror(_("Download error"), msg)
 
     # ---------- USB drive ----------
-    def refresh_disks(self):
+    def refresh_disks(self, quiet=False):
+        """Read the list of USB drives. `quiet` (automatic refreshes) logs a failure instead of
+        opening a dialog. The drive that was selected stays selected if it is still there."""
+        previous = self.selected_disk()
         try:
             self.disks = get_external_disks()
         except Exception as e:
-            messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
+            if quiet:
+                self.log(_("Could not list disks: {error}").format(error=e))
+            else:
+                messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
             return
+        self._last_disk_refresh = time.monotonic()
         labels = [d["label"] for d in self.disks]
         self.disk_combo["values"] = labels
         if labels:
-            self.disk_combo.current(0)
+            keep = next((i for i, d in enumerate(self.disks) if previous and d["id"] == previous["id"]), 0)
+            self.disk_combo.current(keep)
         else:
             self.disk_combo.set("")
         self.update_create_button_state()
+
+    def _auto_refresh_disks(self, _event=None):
+        """Look for newly plugged drives when the program starts and whenever its window gets
+        focus again, so the user does not have to remember to click "Refresh"."""
+        if _event is not None and _event.widget is not self:
+            return  # focus moved between widgets inside the window
+        if self._creating or time.monotonic() - self._last_disk_refresh < 3.0:
+            return
+        self.refresh_disks(quiet=True)
 
     def selected_disk(self):
         idx = self.disk_combo.current()
@@ -4020,11 +4069,20 @@ class App(_TkBase):
 
     def update_create_button_state(self):
         disk = self.selected_disk()
-        ok = (
-            bool(self.iso_path.get())
-            and disk is not None
-        )
+        has_image = bool(self.iso_path.get())
+        ok = has_image and disk is not None
         self.create_btn.config(state="normal" if ok else "disabled")
+        if self._creating:
+            hint = ""
+        elif not has_image:
+            hint = _("Choose the image file first (\"Select existing ISO file...\" or the download above).")
+        elif disk is None and not self.disks:
+            hint = _("No USB drive found. Plug it in and click \"Refresh USB drives list\".")
+        elif disk is None:
+            hint = _("Select a USB drive in the list.")
+        else:
+            hint = ""
+        self.create_hint.config(text=hint)
 
     # ---------- log box ----------
     # Workers can emit thousands of lines (rsync -v); inserting each one through after(0)
@@ -4163,6 +4221,16 @@ class App(_TkBase):
         return ok
 
     def start_create_usb(self):
+        self._creating = True
+        started = False
+        try:
+            started = bool(self._start_create_usb())
+        finally:
+            if not started:  # canceled or refused before the worker began
+                self._creating = False
+                self.update_create_button_state()
+
+    def _start_create_usb(self):
         disk = self.selected_disk()
         if not disk:
             return
@@ -4239,10 +4307,17 @@ class App(_TkBase):
             finally:
                 # The administrator password is no longer needed once the operation ends.
                 self.priv.clear_cached_password()
-                self.after(0, lambda: self.create_btn.config(state="normal"))
-                self.after(0, lambda: self.cancel_create_btn.config(state="disabled"))
+                self.after(0, self._creation_ended)
 
         threading.Thread(target=worker, daemon=True).start()
+        return True
+
+    def _creation_ended(self):
+        """The write finished (or failed or was canceled): unlock the window and look at the drives
+        again, because a drive that was ejected is no longer there."""
+        self._creating = False
+        self.cancel_create_btn.config(state="disabled")
+        self.refresh_disks(quiet=True)
 
     def cancel_create_usb(self):
         """Ask the running USB creation to stop (after a warning). Safe to call at any time."""
