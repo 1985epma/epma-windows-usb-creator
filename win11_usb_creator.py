@@ -22,7 +22,7 @@ command line). Windows 11 gets a UEFI GPT + FAT32 drive; Linux, other hybrid ISO
 and ChromeOS Flex are written byte for byte. Every write is read back and verified.
 
 macOS requirements:
-  brew install python-tk@<version matching your Python, e.g. 3.13> wimlib
+  brew install python-tk@<version matching your Python, e.g. 3.15> wimlib
 
 Linux requirements (package names vary by distro; the app can install them
 for you via apt/dnf/yum/pacman/zypper/apk):
@@ -3528,7 +3528,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • Install sudo, or run the program as root.
 
 ## "Tkinter is not available for this Python installation"
-• Install Tk for your Python (macOS: brew install python-tk@<version matching your Python>, for example python-tk@3.13; Debian/Ubuntu: sudo apt install python3-tk).
+• Install Tk for your Python (macOS: brew install python-tk@<version matching your Python>, for example python-tk@3.15; Debian/Ubuntu: sudo apt install python3-tk).
 
 ## The computer does not boot from the drive
 • Windows drives are UEFI + GPT only: choose the UEFI entry in the boot menu and make sure Legacy/CSM is off.

@@ -31,8 +31,8 @@ class EpmaWindowsUsbCreator < Formula
 
   # Tkinter is required for the graphical interface. On macOS, Homebrew ships it
   # as a separate formula from Python itself.
-  depends_on "python-tk@3.13"
-  depends_on "python@3.13"
+  depends_on "python-tk@3.15"
+  depends_on "python@3.15"
 
   # Required to split install.wim/install.esd when it exceeds the FAT32 4 GB
   # single-file limit, which is the case for every current Windows 11 image.
@@ -46,7 +46,7 @@ class EpmaWindowsUsbCreator < Formula
     # under the Python that Homebrew installed Tkinter for.
     (bin/"epma-windows-usb-creator").write <<~SHELL
       #!/bin/bash
-      exec "#{formula_opt_bin("python@3.13")}/python3.13" "#{libexec}/win11_usb_creator.py" "$@"
+      exec "#{formula_opt_bin("python@3.15")}/python3.15" "#{libexec}/win11_usb_creator.py" "$@"
     SHELL
     chmod 0755, bin/"epma-windows-usb-creator"
     # Short name that matches the application name shown in the macOS menu bar.
@@ -104,7 +104,7 @@ class EpmaWindowsUsbCreator < Formula
     #
     # `compile()` is used instead of `py_compile` because the latter writes a
     # __pycache__ directory next to the source, and the Cellar is read-only here.
-    system formula_opt_bin("python@3.13")/"python3.13", "-c",
+    system formula_opt_bin("python@3.15")/"python3.15", "-c",
            "import sys, pathlib; p = pathlib.Path(sys.argv[1]); " \
            "compile(p.read_text(encoding='utf-8'), str(p), 'exec')",
            libexec/"win11_usb_creator.py"
@@ -112,6 +112,6 @@ class EpmaWindowsUsbCreator < Formula
 
     # Confirm Tkinter is importable under the Python this formula depends on --
     # this is the single most common installation failure for the application.
-    system formula_opt_bin("python@3.13")/"python3.13", "-c", "import tkinter"
+    system formula_opt_bin("python@3.15")/"python3.15", "-c", "import tkinter"
   end
 end

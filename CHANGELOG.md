@@ -75,7 +75,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 - The product and window title is now **EPMA USB CREATOR** (it was "EPMA Windows 11 Creator USB"; the tool also writes Linux images).
 - The application name shown in the macOS menu bar and Dock is now `epma-usb-creator`
   instead of `Python`; the Linux window class matches.
-- Minimum supported Python is now 3.10 (CI covers 3.10 through 3.14).
+- Minimum supported Python is now 3.10 (CI covers 3.10 through 3.15, the latest stable release).
 - GitHub Actions are pinned by full commit SHA and run on Node 24; CI runs on a pinned
   `ubuntu-24.04` image.
 - The Homebrew caveats now describe the current safeguards (USB-only listing, final

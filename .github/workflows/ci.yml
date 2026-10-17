@@ -14,7 +14,7 @@
 #
 # CONFERÊNCIAS DESTE ARQUIVO
 #   qualidade      estilo e erros (Ruff) e sintaxe
-#   testes         auditoria + testes unitários, Python 3.10–3.14, Linux e macOS
+#   testes         auditoria + testes unitários, Python 3.10–3.15, Linux e macOS
 #   shellcheck     os scripts de shell embutidos no programa (rodam como ROOT)
 #   e2e-loopback   gravação de verdade em loop devices (Linux): o caminho
 #                  privilegiado real, sem tocar em nenhum disco físico
@@ -65,13 +65,13 @@ jobs:
       - name: Preparar o Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.13'
+          python-version: '3.15'
 
       - name: Conferir se o código é sintaticamente válido
         run: python -m compileall -q win11_usb_creator.py output/auditoria/ tests/ .github/scripts/
 
       - name: Instalar o Ruff (verificador de estilo e erros)
-        run: pip install --disable-pip-version-check ruff==0.16.0
+        run: pip install --disable-pip-version-check ruff==0.17.1
 
       - name: Rodar o Ruff
         # A configuração e as justificativas de cada exceção estão em
@@ -95,16 +95,18 @@ jobs:
         # que o usuário tiver instalado — não só no da máquina do desenvolvedor.
         # O mínimo suportado é o Python 3.10.
         os: [ubuntu-24.04]
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14', '3.15']
         include:
           # O programa suporta macOS e Linux; ambos precisam ser testados.
           - os: macos-latest
             python: '3.13'
           - os: macos-latest
             python: '3.14'
+          - os: macos-latest
+            python: '3.15'
           # Ubuntu 26.04 é o próximo "ubuntu-latest": descobrir problemas agora.
           - os: ubuntu-26.04
-            python: '3.13'
+            python: '3.15'
             experimental: true
     steps:
       - name: Baixar o código
