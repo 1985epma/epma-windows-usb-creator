@@ -80,6 +80,13 @@ FAT32_MAX_FILE_SIZE = 4_294_967_295  # 4GB - 1 byte
 CHUNK_SIZE = 1024 * 1024
 VOL_NAME = "WIN11USB"
 
+# What kind of image is being written.
+#   windows: format GPT + FAT32 and copy the ISO contents (splitting install.wim)
+#   linux:   write the ISO byte-for-byte to the drive (hybrid ISO, like `dd`)
+MODE_WINDOWS = "windows"
+MODE_LINUX = "linux"
+RAW_WRITE_BLOCK = {"mac": "4m", "linux": "4M"}  # BSD dd and GNU dd spell the unit differently
+
 LINUX_REQUIRED_TOOLS = ["parted", "mkfs.vfat", "wipefs", "partprobe", "rsync", "wimlib-imagex"]
 LINUX_PKG_MAP = {
     "apt-get": {"parted": "parted", "mkfs.vfat": "dosfstools", "wipefs": "util-linux",
@@ -240,6 +247,39 @@ def validate_iso_path(path):
     return resolved
 
 
+def validate_hybrid_iso(path):
+    """Raise unless `path` carries an MBR boot signature (isohybrid).
+
+    Writing a non-hybrid ISO byte-for-byte produces a drive that will not boot, so
+    refuse up front instead of erasing the drive for nothing. Windows ISOs are not
+    hybrid; they must use the Windows mode.
+    """
+    with open(path, "rb") as fh:
+        head = fh.read(512)
+    if len(head) < 512 or head[510:512] != b"\x55\xaa":
+        raise ValueError(
+            "This ISO is not a bootable hybrid image, so it cannot be written directly to a USB drive.\n\n"
+            "If this is a Windows ISO, choose 'Windows 11' as the image type. Otherwise use an "
+            "ISO that is provided as a hybrid/USB-ready image (all current Ubuntu, Debian, Fedora, "
+            "Mint and Arch ISOs are)."
+        )
+
+
+def make_progress_log(log, interval=5.0):
+    """Wrap `log` so dd's frequent progress lines are shown at most every `interval` seconds."""
+    last = [0.0]
+
+    def wrapped(line):
+        if re.search(r"\d+ bytes", line):
+            now = time.time()
+            if now - last[0] < interval:
+                return
+            last[0] = now
+        log(line)
+
+    return wrapped
+
+
 def validate_download_url(raw_url):
     """Return a normalised URL, or raise ValueError explaining why it was rejected."""
     url = (raw_url or "").strip()
@@ -293,8 +333,8 @@ def platform_display_name():
 
 
 # ============================================================
-# Privilege escalation (Linux only — macOS doesn't need root
-# for external disk operations via diskutil/hdiutil)
+# Privilege escalation (Linux always; macOS only for raw writes —
+# diskutil/hdiutil need no root, but writing /dev/rdiskN does)
 # ============================================================
 class PrivilegeHelper:
     def __init__(self, app):
@@ -386,7 +426,7 @@ class PrivilegeHelper:
 # macOS backend
 # ============================================================
 def macos_get_external_disks():
-    """List only EXTERNAL physical disks (never the Mac's internal disk)."""
+    """List only EXTERNAL physical disks attached over USB (never the Mac's internal disk)."""
     out = subprocess.check_output(["diskutil", "list", "-plist", "external", "physical"])
     data = plistlib.loads(out)
     disks = []
@@ -407,6 +447,8 @@ def macos_get_external_disks():
             continue  # extra safety: never list the internal disk
         if not info.get("Removable", True) and not info.get("Ejectable", True):
             continue
+        if str(info.get("BusProtocol", "")).upper() != "USB":
+            continue  # only USB drives are offered (no SD cards, Thunderbolt/NVMe enclosures, disk images)
         label = f"/dev/{dev} — {human_size(size)}"
         disks.append({"id": dev, "size": size, "label": label})
     return disks
@@ -487,6 +529,21 @@ def macos_build_usb(iso_path, dev, log, priv=None):
     log("Done! The USB drive is ready to install Windows 11.")
 
 
+def macos_write_raw(iso_path, dev, log, priv):
+    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
+    validate_hybrid_iso(iso_path)
+    log(f"Unmounting /dev/{dev}...")
+    run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log)
+    log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
+        "This can take several minutes and shows no progress until it finishes...")
+    # /dev/rdiskN (raw node) is several times faster than /dev/diskN.
+    script = f'set -eu\ndd if="$1" of="$2" bs={RAW_WRITE_BLOCK["mac"]}\nsync\n'
+    priv.run_script(script, log, args=[iso_path, f"/dev/r{dev}"])
+    log("Safely ejecting the USB drive...")
+    run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False)
+    log("Done! The USB drive is ready to boot.")
+
+
 # ============================================================
 # Linux backend
 # ============================================================
@@ -552,10 +609,8 @@ def linux_get_external_disks():
                     continue
                 if name.startswith(("loop", "zram", "dm-")):
                     continue
-                removable = str(dev.get("rm")).lower() in ("1", "true")
-                tran = (dev.get("tran") or "").lower()
-                if not (removable or tran in ("usb", "mmc")):
-                    continue
+                if (dev.get("tran") or "").lower() != "usb":
+                    continue  # only USB drives are offered
                 size = int(dev.get("size") or 0)
                 disks.append({"id": name, "size": size, "label": f"/dev/{name} — {human_size(size)}"})
             return disks
@@ -579,6 +634,9 @@ def linux_get_external_disks():
         except Exception:
             removable = False  # fail closed
         if not removable:
+            continue
+        # The sysfs device path of a USB drive passes through a "usb" bus node.
+        if "/usb" not in os.path.realpath(f"/sys/block/{name}"):
             continue
         try:
             with open(size_path) as fh:
@@ -622,6 +680,22 @@ def linux_build_install_command(mgr, missing_tools):
         if not re.fullmatch(r"[A-Za-z0-9._+-]{1,64}", pkg):
             raise ValueError(f"Refusing to install suspicious package name: {pkg!r}")
     return LINUX_INSTALL_CMD_TEMPLATE[mgr].format(pkgs=" ".join(pkgs))
+
+
+def linux_write_raw(iso_path, dev_name, log, priv):
+    """Write the ISO byte-for-byte to the whole disk (Linux and other hybrid ISOs)."""
+    validate_hybrid_iso(iso_path)
+    dev = f"/dev/{dev_name}"
+    log(f"Writing the ISO to {dev} (administrator privileges required)...")
+    # Values arrive as "$1"/"$2"; the glob expands only after the quoted device prefix.
+    script = (
+        'set -eu\n'
+        'for p in "$2"*; do umount "$p" 2>/dev/null || true; done\n'
+        f'dd if="$1" of="$2" bs={RAW_WRITE_BLOCK["linux"]} conv=fsync status=progress\n'
+        'sync\n'
+    )
+    priv.run_script(script, make_progress_log(log), args=[iso_path, dev])
+    log("Done! The USB drive is ready to boot. It's safe to unplug it now.")
 
 
 def linux_build_usb(iso_path, dev_name, log, priv):
@@ -722,7 +796,7 @@ def reverify_target_disk(dev, expected_size, log):
         raise RuntimeError(
             f"Aborted for safety: /dev/{dev} is no longer listed as an external drive.\n\n"
             "It may have been unplugged, or the name may now refer to a different disk. "
-            "Click 'Refresh external drives list' and select the drive again."
+            "Click 'Refresh USB drives list' and select the drive again."
         )
     actual_size = current[dev]["size"]
     if expected_size and actual_size != expected_size:
@@ -737,13 +811,22 @@ def reverify_target_disk(dev, expected_size, log):
         f"({human_size(actual_size)}).")
 
 
-def build_usb(iso_path, dev, log, priv, expected_size=None):
+def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS):
+    if mode not in (MODE_WINDOWS, MODE_LINUX):
+        raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
     validate_device_name(dev)
+    if mode == MODE_LINUX:
+        validate_hybrid_iso(iso_path)  # fail before anything is touched
     reverify_target_disk(dev, expected_size, log)
-    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing Windows image")
+    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image")
     try:
-        if IS_MAC:
+        if mode == MODE_LINUX:
+            if IS_MAC:
+                macos_write_raw(iso_path, dev, log, priv)
+            else:
+                linux_write_raw(iso_path, dev, log, priv)
+        elif IS_MAC:
             macos_build_usb(iso_path, dev, log)
         else:
             linux_build_usb(iso_path, dev, log, priv)
@@ -753,7 +836,9 @@ def build_usb(iso_path, dev, log, priv, expected_size=None):
     audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev}")
 
 
-def get_missing_dependencies():
+def get_missing_dependencies(mode=MODE_WINDOWS):
+    if mode == MODE_LINUX:
+        return [] if shutil.which("dd") else ["dd"]  # raw write needs nothing else
     if IS_MAC:
         return [] if shutil.which("wimlib-imagex") else ["wimlib-imagex"]
     return [t for t in LINUX_REQUIRED_TOOLS if not shutil.which(t)]
@@ -920,6 +1005,15 @@ class App(tk.Tk):
         self.iso_label2 = ttk.Label(f, text="ISO: (none selected)")
         self.iso_label2.pack(anchor="w", padx=10, pady=(0, 5))
 
+        mode_frame = ttk.Frame(f)
+        mode_frame.pack(fill="x", padx=10, pady=(0, 8))
+        ttk.Label(mode_frame, text="Image type:").pack(side="left")
+        self.mode_var = tk.StringVar(value=MODE_WINDOWS)
+        ttk.Radiobutton(mode_frame, text="Windows 11 (GPT + FAT32, files copied)", value=MODE_WINDOWS,
+                        variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
+        ttk.Radiobutton(mode_frame, text="Linux / other hybrid ISO (written directly)", value=MODE_LINUX,
+                        variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
+
         dep_frame = ttk.Frame(f)
         dep_frame.pack(fill="x", padx=10, pady=(0, 10))
         self.dep_label = ttk.Label(dep_frame, text="")
@@ -927,34 +1021,21 @@ class App(tk.Tk):
         self.install_deps_btn = ttk.Button(dep_frame, text="Install missing dependencies", command=self.install_dependencies)
         self.check_dependencies()
 
-        ttk.Button(f, text="Refresh external drives list", command=self.refresh_disks).pack(anchor="w", padx=10)
+        ttk.Button(f, text="Refresh USB drives list", command=self.refresh_disks).pack(anchor="w", padx=10)
         self.disk_combo = ttk.Combobox(f, state="readonly", width=90)
         self.disk_combo.pack(fill="x", padx=10, pady=5)
         self.disk_combo.bind("<<ComboboxSelected>>", lambda e: self.update_create_button_state())
 
         warn_text = (
             "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
-            "Double-check that this is really your USB drive before continuing. Only external "
+            "Double-check that this is really your USB drive before continuing. Only USB "
             "drives are listed — the system's internal disk is never shown."
         )
         if IS_LINUX:
             warn_text += "\nYou'll be asked for your administrator (sudo) password to format the drive."
+        else:
+            warn_text += "\nLinux mode on macOS asks for your administrator password to write the drive."
         ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=720).pack(anchor="w", padx=10, pady=10)
-
-        self.confirm_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(
-            f,
-            text="I understand all data on the selected drive will be erased",
-            variable=self.confirm_var,
-            command=self.update_create_button_state,
-        ).pack(anchor="w", padx=10)
-
-        confirm_frame = ttk.Frame(f)
-        confirm_frame.pack(fill="x", padx=10, pady=5)
-        ttk.Label(confirm_frame, text="Type the disk identifier to confirm (e.g. disk4 / sdb):").pack(anchor="w")
-        self.confirm_entry = ttk.Entry(confirm_frame)
-        self.confirm_entry.pack(fill="x")
-        self.confirm_entry.bind("<KeyRelease>", lambda e: self.update_create_button_state())
 
         self.create_btn = ttk.Button(
             f, text="Create Bootable USB Drive", command=self.start_create_usb, state="disabled"
@@ -965,8 +1046,12 @@ class App(tk.Tk):
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(5, 10))
 
     # ---------- dependencies ----------
+    def on_mode_change(self):
+        self.check_dependencies()
+        self.update_create_button_state()
+
     def check_dependencies(self):
-        missing = get_missing_dependencies()
+        missing = get_missing_dependencies(self.mode_var.get())
         if not missing:
             self.dep_label.config(text="All dependencies OK", foreground="green")
             self.install_deps_btn.pack_forget()
@@ -984,7 +1069,7 @@ class App(tk.Tk):
                         raise RuntimeError("Homebrew not found. Install it from https://brew.sh")
                     run_cmd(["brew", "install", "wimlib"], lambda m: self.after(0, self.log, m))
                 else:
-                    missing = get_missing_dependencies()
+                    missing = get_missing_dependencies(MODE_WINDOWS)
                     mgr = linux_detect_pkg_manager()
                     if not mgr:
                         raise RuntimeError(
@@ -1020,7 +1105,9 @@ class App(tk.Tk):
         self.iso_path.set(path)
         self.iso_label.config(text=f"Selected ISO: {path}")
         self.iso_label2.config(text=f"ISO: {path}")
-        self.update_create_button_state()
+        # Only a default: the user can still switch the image type by hand.
+        self.mode_var.set(MODE_WINDOWS if "win" in os.path.basename(path).lower() else MODE_LINUX)
+        self.on_mode_change()
 
     def start_download(self):
         try:
@@ -1138,8 +1225,6 @@ class App(tk.Tk):
         ok = (
             bool(self.iso_path.get())
             and disk is not None
-            and self.confirm_var.get()
-            and self.confirm_entry.get().strip() == disk["id"]
         )
         self.create_btn.config(state="normal" if ok else "disabled")
 
@@ -1153,10 +1238,12 @@ class App(tk.Tk):
         disk = self.selected_disk()
         if not disk:
             return
+        mode = self.mode_var.get()
+        what = "Windows 11" if mode == MODE_WINDOWS else "the selected Linux image"
         if not messagebox.askyesno(
             "Final confirmation",
             f"This will PERMANENTLY ERASE all data on /dev/{disk['id']} "
-            f"({disk['label']}) and write Windows 11 to it.\n\nContinue?",
+            f"({disk['label']}) and write {what} to it.\n\nContinue?",
         ):
             return
         self.create_btn.config(state="disabled")
@@ -1167,7 +1254,7 @@ class App(tk.Tk):
         def worker():
             try:
                 build_usb(iso, dev, lambda m: self.after(0, self.log, m), self.priv,
-                          expected_size=expected_size)
+                          expected_size=expected_size, mode=mode)
                 self.after(0, lambda: messagebox.showinfo("Done", "Bootable USB drive created successfully!"))
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.

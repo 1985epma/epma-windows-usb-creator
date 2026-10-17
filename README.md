@@ -34,7 +34,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
 - **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
-- **Protection against erasing the wrong disk**: only external/removable drives are listed, the system disk is never shown, and three separate confirmations are required before writing.
+- **Protection against erasing the wrong disk**: only USB drives are listed, the system disk is never shown, and a final confirmation dialog is required before writing.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
 - **Real-time log** of every command executed, inside the application window.
 
@@ -139,11 +139,14 @@ If you already downloaded the ISO manually, use **"Select existing ISO file..."*
 ### Tab 2 — Create the USB drive
 
 1. Check the dependency status at the top (install anything missing, if needed).
-2. Plug in the USB drive (**8 GB minimum**) and click **"Refresh external drives list"**.
+2. Plug in the USB drive (**8 GB minimum**) and click **"Refresh USB drives list"**.
 3. Select your drive from the list.
-4. Tick the checkbox confirming that all data will be erased.
-5. **Type the disk identifier** (e.g. `disk4` on macOS, `sdb` on Linux) into the confirmation field.
-6. Click **"Create Bootable USB Drive"** and confirm in the final dialog.
+4. Choose the **image type** (it is suggested from the ISO file name):
+   - **Windows 11** — GPT + FAT32, ISO files copied (`install.wim` split when over 4 GB).
+   - **Linux / other hybrid ISO** — the ISO is written byte-for-byte to the drive (like `dd`). Use this for Ubuntu, Debian, Fedora, Mint, Arch, etc. Select the ISO with *Select existing ISO file...* on tab 1. ISOs without a boot signature are refused before anything is erased.
+5. Click **"Create Bootable USB Drive"** and confirm (**Yes**) in the final dialog. The drive is then erased and the image is written to it.
+
+> Linux mode needs administrator rights on both systems (you are asked for your password); on macOS it shows no progress until the write finishes.
 
 The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
 
@@ -153,11 +156,9 @@ This application **completely erases** the selected disk and executes privileged
 
 ### Preventing the wrong disk from being erased
 
-- Only **external/removable** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check); on Linux the disk holding the root filesystem is excluded and only removable or USB/MMC-attached devices are shown.
+- Only **USB** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check) and the bus protocol must be `USB`; on Linux the disk holding the root filesystem is excluded and only devices with USB transport are shown (SD cards and internal disks are not).
 - **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. Disks holding `/`, `/boot`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
 - **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
-- You must explicitly tick the confirmation checkbox.
-- You must **manually type** the exact disk identifier.
 - A final confirmation dialog appears before any write occurs.
 
 > Even so: **double-check the selected disk before confirming.**
@@ -224,7 +225,7 @@ The download link must start with `https://`. An unencrypted link can be modifie
 Install `sudo` or run the application as root.
 
 **"Aborted for safety: /dev/sdX is no longer listed as an external drive"**
-The device changed between selection and writing. Click *Refresh external drives list* and select the drive again — this check exists precisely to prevent the wrong disk from being erased.
+The device changed between selection and writing. Click *Refresh USB drives list* and select the drive again — this check exists precisely to prevent the wrong disk from being erased.
 
 **No drives appear in the list**
 Check that the USB drive is plugged in and click *Refresh*. On Linux, some USB-SATA adapters report as non-removable and are deliberately hidden for safety.

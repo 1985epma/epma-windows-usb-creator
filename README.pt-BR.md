@@ -109,11 +109,14 @@ Se você já baixou a ISO manualmente, use **"Select existing ISO file..."** e p
 ### Aba 2 — Criar o pendrive
 
 1. Confira o status das dependências no topo (instale as que faltarem, se necessário).
-2. Conecte o pendrive (mínimo **8 GB**) e clique em **"Refresh external drives list"**.
+2. Conecte o pendrive (mínimo **8 GB**) e clique em **"Refresh USB drives list"**.
 3. Selecione o pendrive na lista.
-4. Marque a caixa de confirmação de que todos os dados serão apagados.
-5. **Digite o identificador do disco** (ex.: `disk4` no macOS, `sdb` no Linux) no campo de confirmação.
-6. Clique em **"Create Bootable USB Drive"** e confirme no diálogo final.
+4. Escolha o **tipo de imagem** (é sugerido pelo nome do arquivo ISO):
+   - **Windows 11** — GPT + FAT32, arquivos da ISO copiados (`install.wim` dividido quando passa de 4 GB).
+   - **Linux / outra ISO híbrida** — a ISO é gravada byte a byte no pendrive (como o `dd`). Use para Ubuntu, Debian, Fedora, Mint, Arch etc. Selecione a ISO em *Select existing ISO file...* na aba 1. ISOs sem assinatura de boot são recusadas antes de apagar qualquer coisa.
+5. Clique em **"Create Bootable USB Drive"** e confirme (**Sim**) no diálogo final. O pendrive é então apagado e a imagem é gravada nele.
+
+> O modo Linux exige senha de administrador nos dois sistemas; no macOS não mostra progresso até terminar a gravação.
 
 O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe pelo log na parte inferior da janela.
 
@@ -121,9 +124,7 @@ O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe
 
 Esta aplicação **apaga completamente** o disco selecionado. As proteções implementadas são:
 
-- Apenas discos **externos/removíveis** são listados. No macOS o disco interno é filtrado duas vezes (`diskutil list external physical` + verificação da flag `Internal`); no Linux o disco que contém a raiz `/` é excluído e apenas dispositivos removíveis ou com transporte USB/MMC são exibidos.
-- É preciso marcar explicitamente a caixa de confirmação.
-- É preciso **digitar manualmente** o identificador exato do disco.
+- Apenas discos **USB** são listados. No macOS o disco interno é filtrado duas vezes (`diskutil list external physical` + verificação da flag `Internal`) e o protocolo do barramento precisa ser `USB`; no Linux o disco que contém a raiz `/` é excluído e apenas dispositivos com transporte USB são exibidos (cartões SD e discos internos não aparecem).
 - Ainda há um diálogo de confirmação final antes de qualquer escrita.
 - **Reconferência antes de apagar:** imediatamente antes da gravação, o programa reconsulta a lista de discos e confirma que o identificador escolhido ainda aponta para o mesmo dispositivo, com o mesmo tamanho. Nomes como `/dev/sdb` são reciclados pelo sistema — se um pendrive for trocado nesse intervalo, a operação é abortada.
 - **Falha fechada:** se o programa não conseguir *confirmar* que um disco é externo, ele o esconde em vez de exibi-lo. Discos que contêm `/`, `/boot`, `/home`, `/usr`, `/var` ou `/etc` nunca são listados, mesmo que o sistema os marque como removíveis (protege máquinas que inicializam por cartão SD ou USB, como um Raspberry Pi).
