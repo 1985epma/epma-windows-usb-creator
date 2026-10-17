@@ -6,9 +6,9 @@
 # distinguir "projeto sem dependências" de "projeto não analisado".
 #
 # O programa usa apenas a biblioteca padrão do Python:
-#   argparse, atexit, collections, contextlib, ctypes (só no macOS), errno,
+#   argparse, atexit, base64, collections, contextlib, ctypes (só no macOS), errno,
 #   filecmp, hashlib, http.client, inspect, json, logging, os, pathlib,
-#   platform, plistlib, re, shutil, signal, subprocess, sys, tempfile,
+#   platform, plistlib, re, shutil, signal, subprocess, sys, tempfile, textwrap,
 #   threading, time, traceback, urllib.error, urllib.parse, urllib.request,
 #   webbrowser, zipfile, zlib e tkinter (interface gráfica; o modo linha de
 #   comando não precisa dele).

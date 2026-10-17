@@ -142,6 +142,12 @@ ALL_MODES = (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS)
 # Image types that are written byte for byte to the whole drive (no partitioning, no copying).
 RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
 MODE_AUTO = "auto"  # command line only: take the mode from what detect_iso_kind() finds in the image
+MODE_SEED = "seed"  # a drive that carries only the hardening seed files (no operating system image)
+HARDENING_NONE = "none"
+HARDENING_BASELINE = "baseline"
+HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
+SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -2984,6 +2990,286 @@ def get_missing_dependencies(mode=MODE_WINDOWS):
     if IS_MAC:
         return [] if shutil.which("wimlib-imagex") else ["wimlib-imagex"]
     return [t for t in LINUX_REQUIRED_TOOLS if not shutil.which(t)]
+
+
+# ===== hardening: seed content =====
+# The files of the "seed drive": a small second USB that is plugged in next to a Linux installer USB.
+# Nothing here selects a disk, creates an account or stores a secret: storage, accounts and the final
+# summary stay interactive in every installer. The hardening script is embedded as base64 inside the
+# seed itself (so the seed works even when the other files are not read) and is also written as a
+# plain file for reading and for running by hand. Output is deterministic: same input, same bytes.
+SEED_LABELS = {SEED_UBUNTU: "CIDATA", SEED_FEDORA: "OEMDRV", SEED_DEBIAN: "EPMA-SEED"}
+SEED_SCRIPT_NAME = "harden-linux.sh"
+SEED_LOG_NAME = "epma-hardening.log"  # written inside the installed system, in /var/log
+SEED_BASE64_WIDTH = 76
+SEED_README_WIDTH = 78
+SEED_README_TITLES = {
+    SEED_UBUNTU: "Ubuntu (autoinstall)",
+    SEED_FEDORA: "Fedora / RHEL / Rocky / Alma (kickstart)",
+    SEED_DEBIAN: "Debian (script + preseed)",
+}
+# The installer screens that stay interactive for Ubuntu (autoinstall decides every section that is
+# not listed here). Storage and identity must always be in this list.
+SEED_UBUNTU_INTERACTIVE = ("locale", "keyboard", "network", "storage", "identity", "timezone")
+SEED_PACKAGES_DEB = ("ufw", "auditd", "unattended-upgrades")
+SEED_PACKAGES_RPM = ("firewalld", "audit", "dnf-automatic")
+
+
+def _seed_check_args(target, profile):
+    if target not in SEED_TARGETS:
+        raise ValueError(f"Unknown seed target: {target!r} (use one of {', '.join(SEED_TARGETS)})")
+    if profile == HARDENING_NONE:
+        raise ValueError("The 'none' hardening profile has no seed files")
+    if profile not in HARDENING_PROFILES:
+        raise ValueError(f"Unknown hardening profile: {profile!r}")
+
+
+def _seed_b64_lines(data):
+    """The base64 text of `data` cut into short lines (plain ASCII: no '%', no quotes, no spaces)."""
+    import base64
+    text = base64.b64encode(data).decode("ascii")
+    return [text[i:i + SEED_BASE64_WIDTH] for i in range(0, len(text), SEED_BASE64_WIDTH)]
+
+
+def _seed_failure_echo(log):
+    return ('echo "EPMA hardening failed (exit status $?); the installation goes on. Run it again later '
+            'with: sudo bash /root/' + SEED_SCRIPT_NAME + '" >> ' + log)
+
+
+def _seed_ubuntu_user_data(script):
+    log = "/target/var/log/" + SEED_LOG_NAME
+    lines = [
+        "#cloud-config",
+        "# EPMA hardening seed for the Ubuntu installer (autoinstall). Read README.txt first.",
+        "# The sections under interactive-sections are asked on screen as usual. No disk layout,",
+        "# no account, no password and no key is stored in this file.",
+        "autoinstall:",
+        "  version: 1",
+        "  interactive-sections:",
+    ]
+    lines += ["    - " + name for name in SEED_UBUNTU_INTERACTIVE]
+    lines.append("  packages:")
+    lines += ["    - " + name for name in SEED_PACKAGES_DEB]
+    lines += [
+        "  late-commands:",
+        "    - |",
+        "      mkdir -p /target/root /target/var/log",
+        "      base64 -d > /target/root/" + SEED_SCRIPT_NAME + " <<'EPMA_B64'",
+    ]
+    lines += ["      " + chunk for chunk in _seed_b64_lines(script)]
+    lines += [
+        "      EPMA_B64",
+        "      chmod 700 /target/root/" + SEED_SCRIPT_NAME,
+        "      true",
+        "    - |",
+        "      if curtin in-target --target=/target -- /bin/bash /root/" + SEED_SCRIPT_NAME
+        + " --yes --chroot >> " + log + " 2>&1; then",
+        '        echo "EPMA hardening finished" >> ' + log,
+        "      else",
+        "        " + _seed_failure_echo(log),
+        "      fi",
+        "      true",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _seed_ubuntu_meta_data():
+    return "instance-id: epma-hardening-seed\nlocal-hostname: epma-ubuntu\n"
+
+
+def _seed_fedora_ks(script):
+    log = "/var/log/" + SEED_LOG_NAME
+    lines = [
+        "# EPMA hardening seed for Anaconda (kickstart). Read README.txt first.",
+        "# This file only adds a few packages and runs the hardening script after the install.",
+        "# Language, keyboard, disk, accounts and the summary are still asked on screen.",
+        "",
+        "%packages --ignoremissing",
+    ]
+    lines += list(SEED_PACKAGES_RPM)
+    lines += [
+        "%end",
+        "",
+        "# Runs inside the new system (the default). A failure here never stops the install.",
+        "%post",
+        "mkdir -p /root /var/log",
+        "base64 -d > /root/" + SEED_SCRIPT_NAME + " <<'EPMA_B64'",
+    ]
+    lines += _seed_b64_lines(script)
+    lines += [
+        "EPMA_B64",
+        "chmod 700 /root/" + SEED_SCRIPT_NAME,
+        "if /bin/bash /root/" + SEED_SCRIPT_NAME + " --yes --chroot >> " + log + " 2>&1; then",
+        '  echo "EPMA hardening finished" >> ' + log,
+        "else",
+        "  " + _seed_failure_echo(log),
+        "fi",
+        "exit 0",
+        "%end",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _seed_debian_preseed(script):
+    log = "/var/log/" + SEED_LOG_NAME
+    b64 = "/target/root/harden-linux.b64"
+    inner = (
+        "base64 -d /root/harden-linux.b64 > /root/" + SEED_SCRIPT_NAME
+        + " && chmod 700 /root/" + SEED_SCRIPT_NAME
+        + " && rm -f /root/harden-linux.b64"
+        + " && /bin/bash /root/" + SEED_SCRIPT_NAME + " --yes --chroot >> " + log + " 2>&1"
+        + " && echo EPMA-hardening-finished >> " + log
+        + " || echo EPMA-hardening-failed-installation-goes-on >> " + log
+    )
+    lines = [
+        "# EPMA hardening seed for the Debian installer (preseed). Read README.txt first.",
+        "# Debian's installer does not find this drive by itself: see README.txt.",
+        "# Only non-disk, language-neutral settings are here; disk, accounts and the rest are asked.",
+        "d-i pkgsel/include string " + " ".join(SEED_PACKAGES_DEB),
+        "d-i pkgsel/update-policy select unattended-upgrades",
+        "# The script is carried as base64 text and rebuilt inside the new system. Any failure",
+        "# is logged and ignored, so the installation always finishes.",
+        "d-i preseed/late_command string \\",
+        "    mkdir -p /target/root; \\",
+        "    : > " + b64 + "; \\",
+    ]
+    lines += ["    echo " + chunk + " >> " + b64 + "; \\" for chunk in _seed_b64_lines(script)]
+    lines += [
+        "    in-target /bin/sh -c '" + inner + "'; \\",
+        "    true",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _seed_readme(target):
+    import textwrap
+    out = []
+
+    def para(text, bullet="", indent=""):
+        first = indent + bullet
+        rest = indent + " " * len(bullet)
+        out.extend(textwrap.wrap(text, SEED_README_WIDTH, initial_indent=first, subsequent_indent=rest,
+                                 break_on_hyphens=False, break_long_words=False))
+
+    def blank():
+        out.append("")
+
+    def code(*commands):
+        out.extend("    " + c for c in commands)
+
+    def heading(text):
+        blank()
+        out.append(text.upper())
+
+    out.append("EPMA HARDENING SEED - " + SEED_README_TITLES[target])
+    out.append("=" * 60)
+    heading("What this drive is")
+    para("A small helper drive made by EPMA USB CREATOR. It holds settings files that make a fresh "
+         "Linux install start from safer settings (a firewall, audit logging, automatic security "
+         "updates and similar). It is not an installer and it does not boot by itself.")
+    heading("Use it as a SECOND USB")
+    para("Keep your normal installer USB (the one you wrote the Linux ISO to) and plug this drive in "
+         "next to it, before you start the installer.")
+    heading("What it does NOT do")
+    para("Nothing here selects a disk, partitions, formats or erases anything, and nothing creates "
+         "an account or sets a password or key. You still choose the disk and create your own "
+         "account in the installer. Check each screen before you confirm it.")
+    heading("How to use it")
+    if target == SEED_UBUNTU:
+        para("Meant for the Ubuntu Server live installer (autoinstall). Other Ubuntu flavours "
+             "may ignore it. The drive is named CIDATA, which the installer looks for.")
+        blank()
+        para("Plug in both USB drives and start the computer from the installer USB.", "1. ")
+        para("At the GRUB boot menu, press e to edit the boot entry.", "2. ")
+        para("On the line that starts with linux, add the word autoinstall before the --- "
+             "(leave the rest as it is).", "3. ")
+        para("Press F10 (or Ctrl+X) to boot.", "4. ")
+        blank()
+        para("Without the word autoinstall the installer asks you to confirm before it uses these "
+             "files. It still asks for language, keyboard, network, disk, your account and "
+             "time zone, as usual.")
+        blank()
+        para("An internet connection during the install is recommended: the packages ufw, auditd "
+             "and unattended-upgrades are fetched then. Some settings finish on the first boot.")
+        blank()
+        para("A log is kept in the installed system: /var/log/" + SEED_LOG_NAME + ". If the script "
+             "fails, the installation still finishes.")
+    elif target == SEED_FEDORA:
+        para("For Fedora, RHEL, Rocky Linux and AlmaLinux (Anaconda). The drive is named OEMDRV, "
+             "which Anaconda detects by itself and reads ks.cfg from.")
+        blank()
+        para("Plug in both USB drives and start the computer from the installer USB.", "1. ")
+        para("Anaconda opens as usual. Choose the language, the install destination (disk), "
+             "your root/user accounts and, if asked, the software selection.", "2. ")
+        para("Check the summary and start the installation yourself.", "3. ")
+        blank()
+        para("The kickstart adds the packages firewalld, audit and dnf-automatic and runs the script "
+             "inside the new system at the end. A log is kept in /var/log/" + SEED_LOG_NAME
+             + ". If the script fails, the installation still finishes.")
+    else:
+        para("Debian's installer does NOT detect this drive by itself. Pick one of these:")
+        blank()
+        para("(a) Recommended. Install Debian normally. When it is done and you are logged in, "
+             "plug this drive in (a desktop usually mounts it under /media; otherwise mount it "
+             "yourself), open a terminal in the drive's folder and run:")
+        code("sudo bash harden-linux.sh")
+        blank()
+        para("(b) Advanced. preseed.cfg is an example you can hand to the Debian installer with "
+             "boot parameters such as auto=true priority=critical file=... Read the official "
+             "Debian installation guide chapter on preseeding first: how the file is found "
+             "depends on your Debian version and on how you boot.")
+        blank()
+        para("preseed.cfg holds no disk, account or password settings. Its last step rebuilds "
+             "the script inside the new system and runs it; if that fails, the install still "
+             "finishes and the log is in /var/log/" + SEED_LOG_NAME + ".")
+    heading("What the script changes")
+    para("harden-linux.sh is a plain text file on this drive: read it before you use it. It prints "
+         "every change it makes. Typical changes:")
+    for item in ("a firewall that blocks unsolicited incoming connections",
+                 "audit logging of security-relevant events",
+                 "automatic security updates",
+                 "safer kernel and network settings",
+                 "conservative SSH server settings that keep your own login working"):
+        para(item, "- ", "  ")
+    para("Every file it edits is first copied once to a .epma-bak backup, running it twice "
+         "changes nothing more, and --dry-run shows what it would do without changing anything.")
+    heading("How to undo")
+    para("On the installed system run:")
+    code("sudo bash harden-linux.sh --undo")
+    if target == SEED_DEBIAN:
+        para("(with the preseed of option (b), a copy of the script is also kept in /root/"
+             + SEED_SCRIPT_NAME + ").")
+    else:
+        para("(a copy of the script is also kept in /root/" + SEED_SCRIPT_NAME
+             + " on the installed system).")
+    heading("A note on the word 'hardened'")
+    para("These settings are inspired by common security baselines. They are a sensible starting "
+         "point, not a compliance claim, certification or guarantee.")
+    return "\n".join(out) + "\n"
+
+
+def hardening_files_seed(target, profile):
+    """(FAT32 volume label, {relative_path: bytes}) of the seed drive for `target`.
+
+    target: SEED_UBUNTU, SEED_FEDORA or SEED_DEBIAN. profile: HARDENING_BASELINE (HARDENING_NONE has no
+    files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
+    never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile)."""
+    _seed_check_args(target, profile)
+    text = linux_hardening_script(profile)  # noqa: F821  (written by the linux-script part of this feature)
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("The hardening script is empty")
+    script = text.encode("utf-8")
+    if target == SEED_UBUNTU:
+        texts = {"user-data": _seed_ubuntu_user_data(script), "meta-data": _seed_ubuntu_meta_data()}
+    elif target == SEED_FEDORA:
+        texts = {"ks.cfg": _seed_fedora_ks(script)}
+    else:
+        texts = {"preseed.cfg": _seed_debian_preseed(script)}
+    files = {name: body.encode("ascii") for name, body in texts.items()}
+    files[SEED_SCRIPT_NAME] = script
+    files["README.txt"] = _seed_readme(target).encode("ascii")
+    return SEED_LABELS[target], files
+# ===== end hardening: seed content =====
 
 
 # ============================================================
