@@ -43,6 +43,7 @@ WIDGETS_OBRIGATORIOS = [
     "progress", "progress_label", "iso_label", "iso_label2",
     "dep_label", "install_deps_btn", "disk_combo",
     "mode_var", "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
+    "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -52,6 +53,7 @@ METODOS_OBRIGATORIOS = [
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
     "report_callback_exception", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
 ]
 
 print("Teste de fumaça da interface gráfica")
@@ -126,6 +128,18 @@ try:
     except Exception as e:
         print(f"  [FALHA] log(): {type(e).__name__}: {e}")
         falhas.append("log()")
+
+    try:
+        janela.log_threadsafe("linha da fila 1")
+        janela.log_threadsafe("linha da fila 2")
+        janela.log("linha direta")  # descarrega a fila preservando a ordem
+        janela.update()
+        texto = janela.log_text.get("1.0", "end")
+        assert texto.index("linha da fila 1") < texto.index("linha da fila 2") < texto.index("linha direta")
+        print("  [OK]    fila de log (thread-safe) preserva a ordem")
+    except Exception as e:
+        print(f"  [FALHA] fila de log: {type(e).__name__}: {e}")
+        falhas.append("fila de log")
 
     try:
         janela.update_create_button_state()

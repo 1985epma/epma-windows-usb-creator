@@ -408,7 +408,8 @@ class WriteRunTests(CliTestCase):
         self.assertEqual(self.build_usb.call_args[1]["mode"], app.MODE_WINDOWS)
 
     def test_cancel_event_is_passed_when_the_engine_supports_it(self):
-        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, cancel_event=None):
+        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, cancel_event=None,
+                   eject=True):
             engine.seen = cancel_event
             return True
 
@@ -418,7 +419,7 @@ class WriteRunTests(CliTestCase):
         self.assertFalse(engine.seen.is_set())
 
     def test_cancel_event_is_not_passed_when_the_engine_lacks_it(self):
-        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None):
+        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, eject=True):
             return True
 
         with mock.patch.object(app, "build_usb", engine):
@@ -445,23 +446,18 @@ class WriteRunTests(CliTestCase):
         self.assertEqual(result["exit_code"], 4)
         self.assertIn("could not be ejected", err)
 
-    def test_no_eject_skips_the_engine_eject_step_and_restores_it(self):
-        originals = (app.macos_eject, app.linux_eject, app.report_eject)
-        inside = {}
-
-        def engine(iso, dev, log, priv, **_kw):
-            inside["macos"] = app.macos_eject("disk9", log)
-            inside["linux"] = app.linux_eject("sdb", log, priv)
-            return False
-
-        self.build_usb.side_effect = engine
-        with mock.patch.object(app, "run_cmd") as run_cmd:
-            code, _out, err = self.run_write("--no-eject")
+    def test_no_eject_is_passed_to_the_engine_and_is_not_a_failure(self):
+        self.build_usb.return_value = False
+        code, _out, err = self.run_write("--no-eject")
         self.assertEqual(code, 0)  # not ejecting on request is not a failure
-        self.assertEqual(inside, {"macos": False, "linux": False})
-        run_cmd.assert_not_called()
+        self.assertIs(self.build_usb.call_args.kwargs["eject"], False)
         self.assertIn("left connected", err)
-        self.assertEqual((app.macos_eject, app.linux_eject, app.report_eject), originals)
+
+    def test_eject_is_requested_by_default(self):
+        self.build_usb.return_value = True
+        code, _out, _err = self.run_write()
+        self.assertEqual(code, 0)
+        self.assertIs(self.build_usb.call_args.kwargs["eject"], True)
 
     def test_verification_failure_exits_3(self):
         self.build_usb.side_effect = RuntimeError("Verification FAILED: the data differs near byte 4096.")
@@ -544,7 +540,7 @@ class WriteRunTests(CliTestCase):
         self.assertEqual(self.run_write()[0], 130)
 
     def test_sigint_without_engine_support_interrupts_immediately(self):
-        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None):
+        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, eject=True):
             os.kill(os.getpid(), signal.SIGINT)
             raise AssertionError("not reached")
 

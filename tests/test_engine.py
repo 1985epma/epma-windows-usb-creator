@@ -255,7 +255,7 @@ class EjectTests(unittest.TestCase):
     def run_macos_eject(self, results):
         calls = []
 
-        def fake_run_cmd(args, log, check=True):
+        def fake_run_cmd(args, log, check=True, **_kw):
             calls.append((list(args), check))
             return results[len(calls) - 1]
 
@@ -429,3 +429,33 @@ class ImportWithoutTkTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EjectOptionTests(unittest.TestCase):
+    def test_report_eject_skipped_says_the_drive_was_left_connected(self):
+        log = Collector()
+        app.report_eject(None, log, skipped=True)
+        self.assertIn("left connected", " ".join(log.lines))
+        self.assertNotIn("could not eject", " ".join(log.lines).lower())
+
+    def test_report_eject_outcomes(self):
+        ok, bad = Collector(), Collector()
+        app.report_eject(True, ok)
+        app.report_eject(False, bad)
+        self.assertIn("ejected", " ".join(ok.lines).lower())
+        self.assertIn("Could not eject", " ".join(bad.lines))
+
+
+class DeviceNameTests(unittest.TestCase):
+    def test_trailing_newline_is_rejected(self):
+        # "$" matches just before a trailing newline, so the code uses fullmatch().
+        for dev, mac in (("disk4\n", True), ("sdb\n", False)):
+            with mock.patch.object(app, "IS_MAC", mac):
+                with self.assertRaises(ValueError):
+                    app.validate_device_name(dev)
+
+    def test_valid_names_are_accepted(self):
+        with mock.patch.object(app, "IS_MAC", True):
+            self.assertEqual(app.validate_device_name("disk4"), "disk4")
+        with mock.patch.object(app, "IS_MAC", False):
+            self.assertEqual(app.validate_device_name("sdb"), "sdb")
