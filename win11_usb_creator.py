@@ -539,6 +539,20 @@ def human_size(n):
     return f"{n:.1f} PB"
 
 
+def _silent_remove(*paths):
+    """Best-effort cleanup: delete each file, ignoring any that is missing or cannot be removed."""
+    for path in paths:
+        with contextlib.suppress(OSError):
+            os.remove(path)
+
+
+def _silent_rmdir(*paths):
+    """Best-effort cleanup: remove each (empty) directory, ignoring any that cannot be removed."""
+    for path in paths:
+        with contextlib.suppress(OSError):
+            os.rmdir(path)
+
+
 def _eta_text(remaining_seconds, speed):
     """'~2m05s left' for the progress labels; '' when the speed is unknown (nothing to estimate from).
 
@@ -581,10 +595,8 @@ class PrivateRotatingFileHandler(logging.handlers.RotatingFileHandler):
         super().doRollover()
         for i in range(0, self.backupCount + 1):
             path = self.baseFilename if i == 0 else f"{self.baseFilename}.{i}"
-            try:
+            with contextlib.suppress(OSError):
                 os.chmod(path, PRIVATE_FILE_MODE)
-            except OSError:
-                pass
 
 
 def get_audit_logger():
@@ -888,10 +900,7 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
                              "supported. Download latest.bin.zip again from Google.") from None
         finally:
             if created and os.path.lexists(tmp):
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+                _silent_remove(tmp)
     audit(f"Extracted a disk image from a ZIP ({human_size(done)})")
     return dest
 
@@ -1412,14 +1421,8 @@ def cancel_flag(cancel_event):
     finally:
         stop.set()
         watcher.join(2)
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-        try:
-            os.rmdir(flag_dir)
-        except OSError:
-            pass
+        _silent_remove(path)
+        _silent_rmdir(flag_dir)
 
 
 @contextlib.contextmanager
@@ -2193,10 +2196,7 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
         run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log,
                 timeout=300)
     except Exception:
-        try:
-            os.rmdir(mount_dir)
-        except OSError:
-            pass
+        _silent_rmdir(mount_dir)
         raise
 
     try:
@@ -2222,10 +2222,7 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=N
     finally:
         log("Unmounting the ISO...")
         run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False, timeout=120)
-        try:
-            os.rmdir(mount_dir)
-        except OSError:
-            pass
+        _silent_rmdir(mount_dir)
 
     ejected = macos_eject(dev, log) if eject else None
     log("Done! The USB drive is ready to install Windows 11.")
@@ -2716,11 +2713,7 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
             priv.run_script(cleanup_script, log, args=[usb_mount, iso_mount])
         except Exception as cleanup_err:
             log(f"Warning: cleanup failed: {cleanup_err}")
-        for d in (iso_mount, usb_mount):
-            try:
-                os.rmdir(d)
-            except OSError:
-                pass
+        _silent_rmdir(iso_mount, usb_mount)
 
     ejected = linux_eject(dev_name, log, priv) if eject else None
     log("Done! The USB drive is ready to install Windows 11.")
@@ -2948,11 +2941,7 @@ class DownloadThread(threading.Thread):
             pass  # without it the next run simply restarts instead of resuming
 
     def _discard_partial(self, tmp_path):
-        for path in (tmp_path, self._meta_path()):
-            try:
-                os.remove(path)  # removes a symlink itself, never what it points to
-            except OSError:
-                pass
+        _silent_remove(tmp_path, self._meta_path())  # removes a symlink itself, never what it points to
 
     @staticmethod
     def _strong_validator(headers):
@@ -3059,10 +3048,7 @@ class DownloadThread(threading.Thread):
                 if fresh_validator:
                     self._write_validator(fresh_validator)
                 else:
-                    try:
-                        os.remove(self._meta_path())  # never leave a stale validator behind
-                    except OSError:
-                        pass
+                    _silent_remove(self._meta_path())  # never leave a stale validator behind
 
             downloaded = offset
             start = time.time()
@@ -3098,10 +3084,7 @@ class DownloadThread(threading.Thread):
                 "Do not use this file. Download it again from the official Microsoft page."
             )
         os.replace(tmp_path, self.dest_path)
-        try:
-            os.remove(self._meta_path())
-        except OSError:
-            pass
+        _silent_remove(self._meta_path())
         return downloaded, sha256, expected
 
     def _local_write_message(self, err):
@@ -4082,10 +4065,7 @@ class App(_TkBase):
         self.flex_progress.config(mode="determinate", value=100)
         self.flex_progress_label.config(text=_("Ready."))
         if delete_zip:
-            try:
-                os.remove(zip_path)  # only the archive this program downloaded itself
-            except OSError:
-                pass
+            _silent_remove(zip_path)  # only the archive this program downloaded itself
         self.set_iso(image)
         self.refresh_disks()  # so a drive that is already plugged in shows up right away
         messagebox.showinfo(
@@ -5429,10 +5409,7 @@ def cmd_fetch_chromeos(args):
     # A ZIP that was already there is the user's to keep; only one downloaded now is removed.
     keep_zip = bool(args.keep_zip) or reuse_zip
     if not keep_zip:
-        try:
-            os.remove(zip_path)
-        except OSError:
-            pass
+        _silent_remove(zip_path)
     if args.json:
         _out(json.dumps({"image": image, "zip_sha256": sha256, "kept_zip": keep_zip}, indent=2))
     else:
