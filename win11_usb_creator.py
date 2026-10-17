@@ -288,7 +288,10 @@ PT_BR = {
     "No ISO selected yet.": "Nenhuma ISO selecionada ainda.",
     "ISO image": "Imagem ISO",
     "Save ISO as": "Salvar a ISO como",
-    "Selected ISO: {path}": "ISO selecionada: {path}",
+    "Image type": "Tipo de imagem",
+    "Image": "Imagem",
+    "USB drive": "Unidade USB",
+    "Unknown": "Desconhecido",
     "{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}":
         "{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}",
     "~{minutes}m{seconds:02d}s left": "faltam ~{minutes}m{seconds:02d}s",
@@ -3327,9 +3330,9 @@ def help_sections():
 • After writing, the drive is read back and compared with the ISO. Only a drive that passes is ejected.
 
 ## The window, from top to bottom
-• Four cards choose the type of image: Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO. The panel under the cards changes with the card and shows where to get that kind of image.
-• The list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
-• "Select existing ISO file...": the image you already have, with an optional SHA-256 check.
+• The page has three numbered steps. 1 Image type: four equal cards choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO).
+• 2 Image: the panel under the cards changes with the card and shows where to get that kind of image. "Select existing ISO file..." picks the image you already have; the chosen file is shown with its name, folder, size and the type the program recognised (Windows 11, Linux, ChromeOS Flex or Unknown), with an optional SHA-256 check behind a link.
+• 3 USB drive: the list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Create Bootable USB Drive" (the blue button), the one "Cancel" button for whatever is running (a download, an extraction or the write), its progress bar, and "Show details", which opens the log.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
@@ -3619,7 +3622,7 @@ class OptionCard(_CanvasBase):
     are plain shapes on purpose: no brand logos.
     """
 
-    WIDTH, HEIGHT = 156, 124
+    WIDTH, HEIGHT = 156, 124   # WIDTH is the width asked for; the grid cell it sits in decides the real one
     ACCENT = "#0a84ff"
 
     def __init__(self, parent, key, title, subtitle, command):
@@ -3632,6 +3635,7 @@ class OptionCard(_CanvasBase):
         self._selected = False
         self._hover = False
         self._enabled = True
+        self._cw = self.WIDTH  # the width actually allocated (the card is redrawn when it changes)
         base = tkfont.nametofont("TkDefaultFont")
         self._title_font = (base.actual("family"), base.actual("size") + 2, "bold")
         self._sub_font = (base.actual("family"), max(base.actual("size") - 2, 8))
@@ -3642,7 +3646,13 @@ class OptionCard(_CanvasBase):
         self.bind("<Leave>", lambda _e: self._set_hover(False))
         self.bind("<FocusIn>", lambda _e: self._draw())
         self.bind("<FocusOut>", lambda _e: self._draw())
+        self.bind("<Configure>", self._on_resize)
         self._draw()
+
+    def _on_resize(self, event):
+        if event.width > 1 and event.width != self._cw:
+            self._cw = event.width
+            self._draw()
 
     def _choose(self):
         if not self._enabled:
@@ -3694,8 +3704,8 @@ class OptionCard(_CanvasBase):
             text_color = "#8e8e93"
             if not self._selected:
                 color = "#8e8e93"
-        self._rounded(3, 3, self.WIDTH - 3, self.HEIGHT - 3, 14, outline=color, fill="", width=width)
-        cx, cy = self.WIDTH / 2, 40
+        self._rounded(3, 3, self._cw - 3, self.HEIGHT - 3, 14, outline=color, fill="", width=width)
+        cx, cy = self._cw / 2, 40
         glyph = self.ACCENT if self._selected else text_color
         if self.key == CARD_WINDOWS:            # four tiles
             for ox, oy in ((-17, -17), (2, -17), (-17, 2), (2, 2)):
@@ -3827,6 +3837,89 @@ class _Disclosure(_LabelBase):
         self.set_open(not self.is_open)
 
 
+def _shorten_middle(text, limit):
+    """`text` cut to at most `limit` characters by replacing the middle with an ellipsis (the start and the
+    end of a path or file name are the parts that identify it)."""
+    if limit < 5 or len(text) <= limit:
+        return text
+    keep = limit - 1
+    head = keep // 2 + keep % 2
+    return text[:head] + "…" + text[len(text) - (keep - head):]
+
+
+class _StepHeading(ttk.Frame if ttk else object):
+    """A small section heading: a numbered pill and a bold title ("1  Image type"). Follows the light/dark
+    theme through the window background and the label colours."""
+
+    MUTED = "#8e8e93"
+
+    def __init__(self, parent, number, title):
+        super().__init__(parent)
+        style = ttk.Style(parent)
+        bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        fg = style.lookup("TLabel", "foreground") or "#000000"
+        base = tkfont.nametofont("TkDefaultFont")
+        size = max(base.actual("size") - 1, 8)
+        self.number, self.title = number, title
+        pill = tk.Canvas(self, width=20, height=20, bg=bg, highlightthickness=0)
+        pill.create_oval(1, 1, 19, 19, outline=self.MUTED, width=1)
+        pill.create_text(10, 10, text=str(number), fill=self.MUTED, font=(base.actual("family"), size, "bold"))
+        pill.pack(side="left", padx=(0, 8))
+        self.label = ttk.Label(self, text=title, font=(base.actual("family"), base.actual("size") + 1, "bold"),
+                               foreground=fg)
+        self.label.pack(side="left")
+
+
+class _FileCard(tk.Frame if tk else object):
+    """The chosen image, as a compact card: the file name (bold), its folder (muted, shortened in the
+    middle), its size and a badge with the kind that was detected. Until a file is chosen it shows only
+    `empty_text`. `label` is the name label (it holds `empty_text` in the empty state)."""
+
+    KIND_BADGES = {"windows": "#0a84ff", "linux": "#bf5af2", "chromeos": "#30a46c", "unknown": "#8e8e93"}
+
+    def __init__(self, parent, empty_text, kind_names):
+        style = ttk.Style(parent)
+        bg = style.lookup("TFrame", "background") or style.lookup("TLabel", "background") or "#ececec"
+        fg = style.lookup("TLabel", "foreground") or "#000000"
+        super().__init__(parent, bg=bg, highlightthickness=0)
+        self._empty_text, self._kind_names = empty_text, kind_names
+        base = tkfont.nametofont("TkDefaultFont")
+        small = (base.actual("family"), max(base.actual("size") - 1, 8))
+        self.columnconfigure(0, weight=1)
+        self.label = ttk.Label(self, text=empty_text, foreground="#8e8e93")
+        self.label.grid(row=0, column=0, sticky="w")
+        self._bold = (base.actual("family"), base.actual("size"), "bold")
+        self._fg = fg
+        self.folder_label = ttk.Label(self, text="", foreground="#8e8e93", font=small)
+        self.size_label = ttk.Label(self, text="", foreground="#8e8e93", font=small)
+        self.badge = tk.Label(self, text="", fg="#ffffff", font=(base.actual("family"), small[1], "bold"),
+                              padx=7, pady=1, bd=0)
+        self.has_file = False
+
+    def clear(self):
+        self.has_file = False
+        self.label.configure(text=self._empty_text, foreground="#8e8e93", font=tkfont.nametofont("TkDefaultFont"))
+        for widget in (self.folder_label, self.size_label, self.badge):
+            widget.grid_remove()
+
+    def show(self, path, kind, size=None):
+        """Show `path`; `kind` is an ISO_KIND_* value; `size` is in bytes (None when it cannot be read)."""
+        self.has_file = True
+        folder = os.path.dirname(path)
+        home = os.path.expanduser("~")
+        if home and home != os.sep and (folder == home or folder.startswith(home + os.sep)):
+            folder = "~" + folder[len(home):]
+        self.label.configure(text=_shorten_middle(os.path.basename(path) or path, 56),
+                             foreground=self._fg, font=self._bold)
+        self.folder_label.configure(text=_shorten_middle(folder, 64))
+        self.folder_label.grid(row=1, column=0, sticky="w")
+        self.size_label.configure(text=human_size(size) if size is not None else "")
+        self.size_label.grid(row=1, column=1, sticky="e", padx=(12, 0))
+        name = self._kind_names.get(kind) or self._kind_names["unknown"]
+        self.badge.configure(text=name, bg=self.KIND_BADGES.get(kind, self.KIND_BADGES["unknown"]))
+        self.badge.grid(row=0, column=1, sticky="e", padx=(12, 0))
+
+
 def _pack_bar(bar, *followers, pady=(8, 2)):
     """Show a progress bar that was hidden with pack_forget(), just above the first of `followers`
     that is on screen (so it keeps its place in the page)."""
@@ -3926,38 +4019,56 @@ class App(_TkBase):
 
     # ---------- UI ----------
     # ---------- the window: one page ----------
-    # Image type cards -> where the image comes from -> the drive -> the image file -> create.
+    # 1 Image type (cards) -> 2 Image (where it comes from, the file) -> 3 USB drive -> create.
     def _build_ui(self):
         page = ttk.Frame(self)
         page.pack(fill="both", expand=True, padx=14, pady=(12, 8))
+        self.step_headings = {}
+        self._add_step(page, 1, _("Image type"), pady=(0, 6))
         self._build_cards(page)
+        self._add_step(page, 2, _("Image"), pady=(0, 6))
         self._build_sources(page)
-        self._build_drive(page)
         self._build_image(page)
+        before = len(page.pack_slaves())
+        self._build_drive(page)
+        # The heading of step 3 goes above the first widget of the drive section (after its separator, if any).
+        section = page.pack_slaves()[before:]
+        first = next((w for w in section if not isinstance(w, ttk.Separator)), None)
+        self._add_step(page, 3, _("USB drive"), pady=(0, 6), before=first)
         self._build_create(page)
         self.select_card(CARD_WINDOWS)
+
+    def _add_step(self, page, number, title, pady, **pack_options):
+        heading = _StepHeading(page, number, title)
+        heading.pack(anchor="w", pady=pady, **{k: v for k, v in pack_options.items() if v is not None})
+        self.step_headings[number] = heading
+        return heading
 
     def _build_cards(self, page):
         row = ttk.Frame(page)
         row.pack(fill="x", pady=(0, 10))
+        self.cards_row = row
+        for column in range(4):  # four equal columns sharing the window width
+            row.columnconfigure(column, weight=1, uniform="cards")
         self.card_var = tk.StringVar(value=CARD_WINDOWS)
         self.mode_var = tk.StringVar(value=MODE_WINDOWS)
         self.cards = {}
         self.card_titles = {}
-        for key, title, subtitle in (
+        for column, (key, title, subtitle) in enumerate((
             (CARD_CHROME, _("Google Chrome"), _("ChromeOS Flex")),
             (CARD_WINDOWS, _("Windows 11"), _("Copies the files")),
             (CARD_LINUX, _("Linux"), _("Ubuntu, Fedora...")),
             (CARD_OTHER, _("Other ISO"), _("Any bootable image")),
-        ):
+        )):
             card = OptionCard(row, key, title, subtitle, self.select_card)
-            card.pack(side="left", padx=(0, 12))
+            card.grid(row=0, column=column, sticky="ew", padx=((0, 9), (3, 6), (6, 3), (9, 0))[column])  # 9 px of gap in every cell
             self.cards[key] = card
             self.card_titles[key] = title
 
     def _build_sources(self, page):
-        """One panel per card, stacked in the same cell: the tallest decides the height, so the
-        rest of the window never jumps when another card is chosen."""
+        """One panel per card, stacked in the same cell; only the chosen one is shown (the others are
+        grid_remove()d), so the holder is exactly as tall as the panel on screen: no blank area under a short
+        panel. A download bar counts only while it is packed (see _pack_bar)."""
         holder = ttk.Frame(page)
         holder.pack(fill="x")
         holder.columnconfigure(0, weight=1)
@@ -3989,8 +4100,7 @@ class App(_TkBase):
                    command=lambda: webbrowser.open(CHROMEOS_FLEX_REQUIREMENTS_URL)).pack(side="left", padx=5)
         self.flex_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.flex_progress.pack(fill="x", pady=(8, 2))
-        self.flex_progress_label = ttk.Label(f, text="")
-        self.flex_progress_label.pack(anchor="w")
+        self.flex_progress_label = _LazyLabel(f, anchor="w")  # takes no room while it has no text
         self.flex_dl = _DownloadWidgets(self.flex_download_btn, self.flex_progress, self.flex_progress_label)
 
         # --- Windows 11 ---
@@ -4019,8 +4129,7 @@ class App(_TkBase):
         self.download_btn.pack(side="left")
         self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
         self.progress.pack(fill="x", pady=(8, 2))
-        self.progress_label = ttk.Label(f, text="")
-        self.progress_label.pack(anchor="w")
+        self.progress_label = _LazyLabel(f, anchor="w")  # takes no room while it has no text
         self.windows_dl = _DownloadWidgets(self.download_btn, self.progress, self.progress_label)
 
         # --- Linux and Other ISO: nothing to download here ---
@@ -4036,15 +4145,9 @@ class App(_TkBase):
                    "file below. Images that cannot boot from a USB drive are refused before anything is erased.")
         ).pack(anchor="nw")
 
-        # Keep the height of the tallest panel so the window does not jump between cards, and
-        # hide the others properly (grid_remove) instead of just stacking them.
-        self.update_idletasks()
-        holder.configure(height=max(p.winfo_reqheight() for p in self.panels.values()))
-        holder.grid_propagate(False)
-        holder.pack_propagate(False)
         for panel in self.panels.values():
             panel.grid_remove()
-        # The height above allowed for the progress bars; they appear only when a download runs.
+        # The progress bars appear only when a download runs.
         self.windows_dl.hide_bar()
         self.flex_dl.hide_bar()
 
@@ -4059,15 +4162,17 @@ class App(_TkBase):
         self.disk_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_create_button_state())
 
     def _build_image(self, page):
-        ttk.Separator(page).pack(fill="x", pady=(10, 8))
         row = ttk.Frame(page)
-        row.pack(fill="x")
+        row.pack(fill="x", pady=(10, 0))
         ttk.Label(row, text=_("Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?")).pack(side="left")
         self.pick_btn = ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso)
         self.pick_btn.pack(side="left", padx=(8, 0))
-        self.iso_label = ttk.Label(page, text=_("No ISO selected yet."), foreground="#4da3ff",
-                                   wraplength=PANEL_WRAP, justify="left")
-        self.iso_label.pack(anchor="w", pady=(4, 4))
+        # The chosen image as a compact card (name, folder, size, detected kind); `iso_label` is its name label.
+        self.iso_card = _FileCard(page, _("No ISO selected yet."), {
+            ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_LINUX: _("Linux"),
+            ISO_KIND_CHROMEOS: _("ChromeOS Flex"), ISO_KIND_UNKNOWN: _("Unknown")})
+        self.iso_card.pack(fill="x", pady=(6, 4))
+        self.iso_label = self.iso_card.label
 
         # Integrity check of the selected image: a link that appears once an image is selected (see
         # set_iso) and opens this panel (progressive disclosure: most people skip the check).
@@ -4521,27 +4626,44 @@ class App(_TkBase):
                 icon="warning")
         return True
 
-    def _fit_window(self):
-        """Grow the window height (never shrink it) so everything in the window is visible.
+    MIN_WINDOW_HEIGHT = 700  # the height the window starts with and settles back to
 
-        The size used to be fixed, which clipped panels that appear later (the ISO checksum
-        panel) on screens with larger fonts. It is capped to the screen.
+    def _fit_window(self):
+        """Make the window tall enough for its content, and let it settle back when the content shrinks.
+
+        It grows when something appears (the checksum panel, the log, a result) and returns toward
+        MIN_WINDOW_HEIGHT when that goes away again, but only while the user has not resized the window
+        by hand. Capped to the screen. The width is kept as it is.
         """
         self.update_idletasks()
-        width = self._window_size[0]  # only the height needs to grow; keep the familiar width
-        height = max(self._window_size[1], self.winfo_reqheight())
-        height = min(height, max(self.winfo_screenheight() - 120, 700))
-        if (width, height) != self._window_size:
+        last = self._window_size[1]
+        shown = self.winfo_height()
+        if shown <= 1:  # not on screen yet (or withdrawn): the size that was asked for is all there is
+            shown = last
+        width = self.winfo_width() if self.winfo_width() > 1 else self._window_size[0]
+        needed = min(max(self.MIN_WINDOW_HEIGHT, self.winfo_reqheight()),
+                     max(self.winfo_screenheight() - 120, self.MIN_WINDOW_HEIGHT))
+        if needed > shown:
+            height = needed
+        elif abs(shown - last) <= 2 and needed < last:  # still the size we set: settle back
+            height = needed
+        else:
+            return  # the user made it taller than needed: leave it alone
+        if height != last:
             self._window_size = (width, height)
             self.geometry("{}x{}".format(*self._window_size))
 
     def set_iso(self, path):
         self.iso_path.set(path)
-        self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
         # Only a default: the user can still switch the image type by hand. The CONTENT of the ISO
         # decides. When it cannot be identified the card is left as it is: guessing from the file name
         # could pick the card that erases the drive first ("darwin-linux.img" contains "win").
         kind = detect_iso_kind(path)
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            size = None
+        self.iso_card.show(path, kind, size)
         if kind == ISO_KIND_UNKNOWN:
             card = self.card_var.get()
             self.log(_("The content of this image could not be identified, so the image type was not changed. "
@@ -4556,7 +4678,7 @@ class App(_TkBase):
                 how=_("from the content of the ISO"), image=image))
         self.select_card(card)
         self._reset_iso_sha()
-        self.sha_toggle.pack(anchor="w", pady=(0, 6), after=self.iso_label)
+        self.sha_toggle.pack(anchor="w", pady=(0, 6), after=self.iso_card)
         if self.sha_toggle.is_open:
             self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.sha_toggle)
         self.after_idle(self._fit_window)
