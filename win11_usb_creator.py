@@ -3703,6 +3703,41 @@ class OptionCard(_CanvasBase):
         self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._sub_font)
 
 
+class _DownloadWidgets:
+    """The four widgets of a download card (download button, Cancel, progress bar and its label) and the
+    state changes the Windows ISO card and the ChromeOS Flex card share. The window keeps one per card and
+    still exposes the widgets under their own names (download_btn, progress, flex_progress_label, ...)."""
+
+    def __init__(self, btn, cancel_btn, bar, label):
+        self.btn, self.cancel_btn, self.bar, self.label = btn, cancel_btn, bar, label
+
+    def sync(self, running, creating):
+        """Download off while a write (`creating`) or this card's own operation (`running`) is going;
+        Cancel on only while `running`."""
+        self.btn.config(state="disabled" if (creating or running) else "normal")
+        self.cancel_btn.config(state="normal" if running else "disabled")
+
+    def start(self, text=None):
+        """A new operation: an empty determinate bar (and `text` in the label, if given)."""
+        self.bar.config(mode="determinate", value=0)
+        if text is not None:
+            self.label.config(text=text)
+
+    def show(self, pct, text):
+        """Progress: `pct` percent on the bar, or None when the length is unknown (a moving bar)."""
+        if pct is None:
+            self.bar.config(mode="indeterminate")
+        else:
+            self.bar.config(mode="determinate", value=pct)
+        self.label.config(text=text)
+
+    def finish(self, text, bar_value=None):
+        """The operation ended (done or failed): the final `text`, and the bar set to `bar_value` if given."""
+        if bar_value is not None:
+            self.bar.config(mode="determinate", value=bar_value)
+        self.label.config(text=text)
+
+
 class App(_TkBase):
     def __init__(self):
         if tk is None:
@@ -3812,6 +3847,8 @@ class App(_TkBase):
         self.flex_progress.pack(fill="x", pady=(8, 2))
         self.flex_progress_label = ttk.Label(f, text="")
         self.flex_progress_label.pack(anchor="w")
+        self.flex_dl = _DownloadWidgets(self.flex_download_btn, self.flex_cancel_btn,
+                                        self.flex_progress, self.flex_progress_label)
 
         # --- Windows 11 ---
         f = self.panels[CARD_WINDOWS]
@@ -3843,6 +3880,7 @@ class App(_TkBase):
         self.progress.pack(fill="x", pady=(8, 2))
         self.progress_label = ttk.Label(f, text="")
         self.progress_label.pack(anchor="w")
+        self.windows_dl = _DownloadWidgets(self.download_btn, self.cancel_btn, self.progress, self.progress_label)
 
         # --- Linux and Other ISO: nothing to download here ---
         ttk.Label(
@@ -4043,6 +4081,19 @@ class App(_TkBase):
         else:
             self.set_iso(path)
 
+    def _launch_download(self, url, dest, cancel_event, on_progress, on_done, on_error, **thread_options):
+        """Start a DownloadThread whose three callbacks run on the Tk thread (the worker only posts them).
+
+        on_progress(done, total, speed), on_done(path, sha256, verified), on_error(message).
+        """
+        DownloadThread(
+            url, dest,
+            progress_cb=lambda d, t, sp: self.after(0, on_progress, d, t, sp),
+            done_cb=lambda p, h, v: self.after(0, on_done, p, h, v),
+            error_cb=lambda e: self.after(0, on_error, e),
+            cancel_event=cancel_event, **thread_options,
+        ).start()
+
     # ---------- ChromeOS Flex (download from Google, extract, then the normal write flow) ----------
     def start_flex_download(self):
         if self._creating or self._flex_busy:
@@ -4077,14 +4128,13 @@ class App(_TkBase):
         self.flex_cancel_event.clear()
         self._flex_busy = True
         self._sync_controls()
-        self.flex_progress.config(mode="determinate", value=0)
-        DownloadThread(
-            CHROMEOS_FLEX_URL, dest,
-            progress_cb=lambda d, t, sp: self.after(0, self._on_flex_progress, d, t, sp, _("Downloading...")),
-            done_cb=lambda p, h, v: self.after(0, self._on_flex_downloaded, p, h),
-            error_cb=lambda e: self.after(0, self._on_flex_error, e),
-            cancel_event=self.flex_cancel_event, allowed_hosts=CHROMEOS_FLEX_HOSTS,
-        ).start()
+        self.flex_dl.start()
+        self._launch_download(
+            CHROMEOS_FLEX_URL, dest, self.flex_cancel_event,
+            on_progress=lambda d, t, sp: self._on_flex_progress(d, t, sp, _("Downloading...")),
+            on_done=lambda p, h, _verified: self._on_flex_downloaded(p, h),
+            on_error=self._on_flex_error,
+            allowed_hosts=CHROMEOS_FLEX_HOSTS)
 
     def cancel_flex(self):
         self.flex_cancel_event.set()
@@ -4092,12 +4142,10 @@ class App(_TkBase):
     def _on_flex_progress(self, done, total, speed, stage):
         if total:
             pct = done / total * 100
-            self.flex_progress.config(mode="determinate", value=pct)
-            self.flex_progress_label.config(
-                text=f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{_rate_tail(done, total, speed)}")
+            self.flex_dl.show(
+                pct, f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{_rate_tail(done, total, speed)}")
         else:
-            self.flex_progress.config(mode="indeterminate")
-            self.flex_progress_label.config(text=f"{stage}  {human_size(done)}")
+            self.flex_dl.show(None, f"{stage}  {human_size(done)}")
 
     def _on_flex_downloaded(self, path, sha256):
         self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
@@ -4118,8 +4166,7 @@ class App(_TkBase):
         self._flex_extracting = True
         self._flex_busy = True
         self._sync_controls()
-        self.flex_progress.config(mode="determinate", value=0)
-        self.flex_progress_label.config(text=_("Extracting..."))
+        self.flex_dl.start(_("Extracting..."))
         folder = os.path.dirname(os.path.abspath(zip_path))
 
         def worker():
@@ -4144,8 +4191,7 @@ class App(_TkBase):
         self._sync_controls()
         if self._closing:
             return
-        self.flex_progress.config(mode="determinate", value=100)
-        self.flex_progress_label.config(text=_("Ready."))
+        self.flex_dl.finish(_("Ready."), bar_value=100)
         if delete_zip:
             _silent_remove(zip_path)  # only the archive this program downloaded itself
         self.set_iso(image)
@@ -4161,8 +4207,7 @@ class App(_TkBase):
         self._sync_controls()
         if self._closing:
             return
-        self.flex_progress.config(mode="determinate", value=0)
-        self.flex_progress_label.config(text=_("Failed."))
+        self.flex_dl.finish(_("Failed."), bar_value=0)
         messagebox.showerror(_("ChromeOS Flex"), msg)
 
     # ---------- Help menu and built-in documentation ----------
@@ -4390,17 +4435,9 @@ class App(_TkBase):
         self.cancel_event.clear()
         self._download_running = True
         self._sync_controls()
-        self.progress.config(mode="determinate", value=0)
-        t = DownloadThread(
-            url,
-            dest,
-            progress_cb=lambda d, tt, s: self.after(0, self._on_progress, d, tt, s),
-            done_cb=lambda p, h, v: self.after(0, self._on_download_done, p, h, v),
-            error_cb=lambda e: self.after(0, self._on_download_error, e),
-            cancel_event=self.cancel_event,
-            expected_sha256=expected_sha,
-        )
-        t.start()
+        self.windows_dl.start()
+        self._launch_download(url, dest, self.cancel_event, self._on_progress, self._on_download_done,
+                              self._on_download_error, expected_sha256=expected_sha)
 
     def cancel_download(self):
         self.cancel_event.set()
@@ -4408,24 +4445,20 @@ class App(_TkBase):
     def _on_progress(self, downloaded, total, speed):
         if total:
             pct = downloaded / total * 100
-            self.progress.config(mode="determinate", value=pct)
             eta = _eta_remaining(downloaded, total, speed)
-            self.progress_label.config(
-                text=_("{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}").format(
-                    done=human_size(downloaded), total=human_size(total), pct=pct,
-                    speed=human_size(speed), eta=eta or _("calculating..."))
-            )
+            self.windows_dl.show(pct, _("{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}").format(
+                done=human_size(downloaded), total=human_size(total), pct=pct,
+                speed=human_size(speed), eta=eta or _("calculating...")))
         else:
-            self.progress.config(mode="indeterminate")
-            self.progress_label.config(
-                text=_("{done} downloaded — {speed}/s").format(done=human_size(downloaded), speed=human_size(speed)))
+            self.windows_dl.show(None, _("{done} downloaded — {speed}/s").format(
+                done=human_size(downloaded), speed=human_size(speed)))
 
     def _on_download_done(self, path, sha256, verified):
         self._download_running = False
         self._sync_controls()
         if self._closing:
             return
-        self.progress_label.config(text=_("Download complete."))
+        self.windows_dl.finish(_("Download complete."))
         self.set_iso(path)
         self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
         if verified:
@@ -4444,7 +4477,7 @@ class App(_TkBase):
         self._sync_controls()
         if self._closing:
             return
-        self.progress_label.config(text=_("Download failed."))
+        self.windows_dl.finish(_("Download failed."))
         messagebox.showerror(_("Download error"), msg)
 
     # ---------- USB drive ----------
@@ -4558,10 +4591,8 @@ class App(_TkBase):
             card.set_enabled(not creating)
         self.disk_combo.config(state="disabled" if creating else "readonly")
         self.refresh_btn.config(state=busy if creating else "normal")
-        self.download_btn.config(state=busy if (creating or self._download_running) else "normal")
-        self.cancel_btn.config(state="normal" if self._download_running else "disabled")
-        self.flex_download_btn.config(state=busy if (creating or self._flex_busy) else "normal")
-        self.flex_cancel_btn.config(state="normal" if self._flex_busy else "disabled")
+        self.windows_dl.sync(self._download_running, creating)
+        self.flex_dl.sync(self._flex_busy, creating)
         self.pick_btn.config(state=busy if (creating or self._flex_busy) else "normal")
         self.install_deps_btn.config(state=busy if (creating or self._installing) else "normal")
 

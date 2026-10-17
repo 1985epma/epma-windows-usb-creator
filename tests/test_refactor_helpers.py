@@ -10,6 +10,7 @@ import threading
 import unittest
 from unittest import mock
 
+from tests import test_fixes_gui as gui_tests
 from tests.helpers import TempDirTestCase, app
 
 
@@ -448,6 +449,121 @@ class ModalDialogTests(unittest.TestCase):
         top.tk.call(top.protocol("WM_DELETE_WINDOW"))
         self.assertFalse(top.winfo_exists())
         self.assertEqual(calls, [])
+
+
+class DownloadWidgetsTests(unittest.TestCase):
+    """The shared state changes of a download card, on stand-in widgets (no window needed)."""
+
+    def setUp(self):
+        self.btn, self.cancel, self.bar, self.label = (mock.MagicMock() for _ in range(4))
+        self.card = app._DownloadWidgets(self.btn, self.cancel, self.bar, self.label)
+
+    def test_sync_locks_the_download_button_and_arms_cancel_only_while_running(self):
+        for running, creating, btn_state, cancel_state in (
+                (False, False, "normal", "disabled"), (True, False, "disabled", "normal"),
+                (False, True, "disabled", "disabled"), (True, True, "disabled", "normal")):
+            self.card.sync(running, creating)
+            self.btn.config.assert_called_with(state=btn_state)
+            self.cancel.config.assert_called_with(state=cancel_state)
+
+    def test_start_show_finish(self):
+        self.card.start()
+        self.bar.config.assert_called_with(mode="determinate", value=0)
+        self.label.config.assert_not_called()
+        self.card.start("Extracting...")
+        self.label.config.assert_called_with(text="Extracting...")
+        self.card.show(42.5, "42%")
+        self.bar.config.assert_called_with(mode="determinate", value=42.5)
+        self.label.config.assert_called_with(text="42%")
+        self.card.show(None, "12 MB")
+        self.bar.config.assert_called_with(mode="indeterminate")
+        self.label.config.assert_called_with(text="12 MB")
+        self.bar.config.reset_mock()
+        self.card.finish("Download failed.")
+        self.bar.config.assert_not_called()  # the bar is left as it was unless a value is given
+        self.label.config.assert_called_with(text="Download failed.")
+        self.card.finish("Ready.", bar_value=100)
+        self.bar.config.assert_called_with(mode="determinate", value=100)
+        self.label.config.assert_called_with(text="Ready.")
+
+
+class DownloadCardWiringTests(gui_tests.GuiTestCase):
+    """The two download cards start a DownloadThread through one launcher and keep their own state."""
+
+    def setUp(self):
+        super().setUp()
+        self.captured = {}
+        captured = self.captured
+
+        class Spy:
+            def __init__(self, url, dest, **kw):
+                captured.update(kw, url=url, dest=dest)
+
+            def start(self):
+                captured["started"] = True
+
+        patcher = mock.patch.object(app, "DownloadThread", Spy)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_launcher_delivers_the_callbacks_on_the_tk_thread(self):
+        got = []
+        event = threading.Event()
+        self.win._launch_download("https://h.example/x", "/tmp/x", event,
+                                  lambda *a: got.append(("progress", *a)), lambda *a: got.append(("done", *a)),
+                                  lambda *a: got.append(("error", *a)), allowed_hosts=("h.example",))
+        self.assertTrue(self.captured["started"])
+        self.assertEqual((self.captured["url"], self.captured["dest"]), ("https://h.example/x", "/tmp/x"))
+        self.assertIs(self.captured["cancel_event"], event)
+        self.assertEqual(self.captured["allowed_hosts"], ("h.example",))
+        self.assertEqual(got, [])  # nothing runs in the worker's thread
+        self.captured["progress_cb"](1, 2, 3.0)
+        self.captured["done_cb"]("/tmp/x", "ab" * 32, True)
+        self.captured["error_cb"]("boom")
+        self.pump(lambda: len(got) == 3)
+        self.assertEqual(got, [("progress", 1, 2, 3.0), ("done", "/tmp/x", "ab" * 32, True), ("error", "boom")])
+
+    def test_windows_download_start_and_end(self):
+        self.win.url_entry.insert(0, "https://software.download.prss.microsoft.com/Win11.iso")
+        self.win.sha_entry.delete(0, "end")
+        self.win.sha_entry.insert(0, "AB" * 32)
+        with mock.patch.object(app.filedialog, "asksaveasfilename", return_value="/tmp/Win11.iso"):
+            self.win.start_download()
+        self.assertTrue(self.captured["started"])
+        self.assertEqual(self.captured["expected_sha256"], "ab" * 32)
+        self.assertIs(self.captured["cancel_event"], self.win.cancel_event)
+        self.assertTrue(self.win._download_running)
+        self.assertEqual(self.state(self.win.download_btn), "disabled")
+        self.assertEqual(self.state(self.win.cancel_btn), "normal")
+        self.captured["progress_cb"](500, 1000, 250.0)
+        self.pump(lambda: "50.0%" in str(self.win.progress_label.cget("text")))
+        with mock.patch.object(self.win, "set_iso") as set_iso:
+            self.captured["done_cb"]("/tmp/Win11.iso", "cd" * 32, True)
+            self.pump(lambda: not self.win._download_running)
+        set_iso.assert_called_once_with("/tmp/Win11.iso")
+        self.assertEqual(str(self.win.progress_label.cget("text")), "Download complete.")
+        self.assertEqual(self.state(self.win.download_btn), "normal")
+        self.assertEqual(self.state(self.win.cancel_btn), "disabled")
+
+    def test_flex_download_start_and_failure(self):
+        self.box.yes = True
+        with mock.patch.object(app.filedialog, "asksaveasfilename", return_value="/tmp/flex.zip"):
+            self.win.start_flex_download()
+        self.assertTrue(self.captured["started"])
+        self.assertEqual(self.captured["url"], app.CHROMEOS_FLEX_URL)
+        self.assertEqual(self.captured["allowed_hosts"], app.CHROMEOS_FLEX_HOSTS)
+        self.assertIs(self.captured["cancel_event"], self.win.flex_cancel_event)
+        self.assertNotIn("expected_sha256", self.captured)
+        self.assertTrue(self.win._flex_busy)
+        self.assertEqual(self.state(self.win.flex_cancel_btn), "normal")
+        self.captured["progress_cb"](500, 1000, 250.0)
+        self.pump(lambda: "Downloading..." in str(self.win.flex_progress_label.cget("text")))
+        self.captured["error_cb"]("network down")
+        self.pump(lambda: not self.win._flex_busy)
+        self.assertEqual(str(self.win.flex_progress_label.cget("text")), "Failed.")
+        self.assertEqual(float(self.win.flex_progress.cget("value")), 0.0)
+        self.assertEqual(self.box.titles("error"), ["ChromeOS Flex"])
+        self.assertEqual(self.state(self.win.flex_download_btn), "normal")
 
 
 if __name__ == "__main__":
