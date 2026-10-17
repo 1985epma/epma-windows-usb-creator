@@ -197,6 +197,7 @@ DOWNLOAD_TIMEOUT_SECONDS = 60  # per network read; prevents an indefinite hang
 DOWNLOAD_MAX_ATTEMPTS = 3      # transient network errors are retried (resuming where possible)
 DOWNLOAD_BACKOFF_SECONDS = (2, 5)  # wait before retry 2 and 3
 QUERY_TIMEOUT = 30             # seconds allowed for quick query commands (diskutil list, lsblk, ...)
+IOREG_TIMEOUT = 10             # seconds for `ioreg`: it only adds the USB serial number, so it must not stall the list
 SUDO_KEEPALIVE_SECONDS = 60    # how often the sudo timestamp is refreshed while an operation runs
 SUDO_KEEPALIVE_MAX_SECONDS = 6 * 3600  # the keep-alive never outlives this, whatever happens
 AUDIT_LOG_MAX_BYTES = 1_000_000
@@ -266,8 +267,10 @@ PT_BR = {
     "ISO image": "Imagem ISO",
     "Save ISO as": "Salvar a ISO como",
     "Selected ISO: {path}": "ISO selecionada: {path}",
-    "{done} / {total} ({pct:.1f}%) — {speed}/s — ~{eta}s left":
-        "{done} / {total} ({pct:.1f}%) — {speed}/s — faltam ~{eta}s",
+    "{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}":
+        "{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}",
+    "~{minutes}m{seconds:02d}s left": "faltam ~{minutes}m{seconds:02d}s",
+    "calculating...": "calculando...",
     "{done} downloaded — {speed}/s": "{done} baixados — {speed}/s",
     "Download complete.": "Download concluído.",
     "Download failed.": "O download falhou.",
@@ -303,8 +306,6 @@ PT_BR = {
     "ISO downloaded to:\n{path}": "ISO baixada em:\n{path}",
     "SHA-256 of the downloaded file: {sha256}": "SHA-256 do arquivo baixado: {sha256}",
     "Image type preselected {how}: {image}.": "Tipo de imagem pré-selecionado {how}: {image}.",
-    "from the file name (the content could not be identified)":
-        "pelo nome do arquivo (não foi possível identificar o conteúdo)",
     "from the content of the ISO": "pelo conteúdo da ISO",
     "Linux / other hybrid ISO": "Linux / outra ISO híbrida",
 
@@ -410,7 +411,6 @@ PT_BR = {
     "Flushing data to the drive...": "Gravando os dados pendentes na unidade...",
     "Written": "Gravado",
     "{stage} (this can take a few minutes)": "{stage} (isto pode levar alguns minutos)",
-    " — {speed}/s — ~{minutes}m{seconds:02d}s left": " — {speed}/s — faltam ~{minutes}m{seconds:02d}s",
     " — calculating...": " — calculando...",
     "Done — 100%": "Concluído — 100%",
     "Canceled.": "Cancelado.",
@@ -490,6 +490,21 @@ PT_BR = {
     "Any bootable hybrid ISO or disk image is written to the drive exactly as it is. Choose the file below. Images that cannot boot from a USB drive are refused before anything is erased.": "Qualquer ISO híbrida de boot ou imagem de disco é gravada no pendrive exatamente como está. Escolha o arquivo abaixo. Imagens que não conseguem iniciar por USB são recusadas antes de apagar qualquer coisa.",
     "Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?": "Já baixou a imagem (ISO, ou .zip/.bin do ChromeOS Flex)?",
     "The selected file looks like {name}, but \"Windows 11\" is chosen. Windows mode would erase the drive and then fail to find the Windows installer.\n\nChoose the matching card instead, or continue only if you are sure.\n\nContinue anyway?": "O arquivo selecionado parece ser {name}, mas \"Windows 11\" está escolhido. O modo Windows apagaria o pendrive e só depois não acharia o instalador do Windows.\n\nEscolha o cartão correspondente, ou continue só se tiver certeza.\n\nContinuar mesmo assim?",
+    "Quit while writing?": "Sair durante a gravação?",
+    "A USB drive is being written right now. Quitting cancels the operation and leaves the drive incomplete and UNUSABLE until it is created again.\n\nCancel the operation and quit?": "Um pendrive está sendo gravado agora. Sair cancela a operação e deixa o pendrive incompleto e INUTILIZÁVEL até ser criado de novo.\n\nCancelar a operação e sair?",
+    "Still stopping": "Ainda parando",
+    "The operation is taking a while to stop. Quit anyway? The drive stays unusable until it is created again.": "A operação está demorando para parar. Sair mesmo assim? O pendrive continua inutilizável até ser criado de novo.",
+    "Canceled. The drive was not modified.": "Cancelado. O pendrive não foi modificado.",
+    "The operation was canceled.\n\nThe USB drive was NOT modified.": "A operação foi cancelada.\n\nO pendrive NÃO foi modificado.",
+    "Missing tools": "Ferramentas ausentes",
+    "Missing tools: {tools}. Click \"Install missing dependencies\" first.": "Ferramentas ausentes: {tools}. Clique em \"Instalar as dependências que faltam\" primeiro.",
+    "These tools are missing: {tools}. Click \"Install missing dependencies\" first. Nothing was changed.": "Estas ferramentas estão ausentes: {tools}. Clique em \"Instalar as dependências que faltam\" primeiro. Nada foi alterado.",
+    "Installing the missing tools...": "Instalando as ferramentas ausentes...",
+    "Unknown drive size": "Tamanho do pendrive desconhecido",
+    "The size of this drive could not be read (it reports 0 bytes). It may be an empty card reader or a drive that is not ready. Nothing was changed.": "Não foi possível ler o tamanho deste pendrive (ele informa 0 bytes). Pode ser um leitor de cartão vazio ou um pendrive que não está pronto. Nada foi alterado.",
+    "Image type not recognised": "Tipo de imagem não reconhecido",
+    "The program could not identify the selected file, but \"Windows 11\" is chosen. Windows mode would erase the drive and then fail if this is not a Windows installer.\n\nContinue only if you are sure this is a Windows 11 ISO.\n\nContinue anyway?": "O programa não conseguiu identificar o arquivo selecionado, mas \"Windows 11\" está escolhido. O modo Windows apagaria o pendrive e depois falharia se isto não for um instalador do Windows.\n\nContinue só se tiver certeza de que é uma ISO do Windows 11.\n\nContinuar mesmo assim?",
+    "The content of this image could not be identified, so the image type was not changed. Check that the selected card ({card}) is the right one.": "Não foi possível identificar o conteúdo desta imagem, então o tipo de imagem não foi alterado. Confira se o cartão selecionado ({card}) é o correto.",
     "Not much free space": "Pouco espaço livre",
     "The download (about 1.4 GB) and the extracted image (about 9.5 GB) need roughly {need} free in this folder, and only {free} is available. It may fail part-way.\n\nContinue anyway?": "O download (cerca de 1,4 GB) e a imagem extraída (cerca de 9,5 GB) precisam de aproximadamente {need} livres nesta pasta, e há só {free}. Pode falhar no meio.\n\nContinuar mesmo assim?",
 }
@@ -512,6 +527,21 @@ def human_size(n):
             return f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} PB"
+
+
+def _eta_text(remaining_seconds, speed):
+    """'~2m05s left' for the progress labels; '' when the speed is unknown (nothing to estimate from).
+
+    One helper for every GUI progress label, so a long wait reads the same everywhere (minutes and
+    seconds, never a raw count of seconds).
+    """
+    try:
+        if not speed or speed <= 0 or remaining_seconds is None or remaining_seconds < 0:
+            return ""
+        seconds = int(remaining_seconds)
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    return _("~{minutes}m{seconds:02d}s left").format(minutes=seconds // 60, seconds=seconds % 60)
 
 
 # ============================================================
@@ -620,7 +650,7 @@ def validate_iso_path(path):
         raise ValueError(f"The selected ISO file cannot be read: {resolved}")
     if os.path.getsize(resolved) < 1024 * 1024:
         raise ValueError(
-            "The selected file is too small to be a Windows 11 ISO "
+            "The selected file is too small to be a valid image "
             f"({human_size(os.path.getsize(resolved))}). It may be an incomplete download."
         )
     return resolved
@@ -661,8 +691,11 @@ ISO_PVD_OFFSET = 16 * ISO_SECTOR        # Primary Volume Descriptor: sector 16 (
 ISO_DIR_MAX_BYTES = 256 * 1024          # never read more than this per directory
 ISO_UDF_SCAN_BYTES = 4 * 1024 * 1024    # how much of a UDF image is searched for Windows names
 # Volume ids that Microsoft's media tools produce, e.g. CCCOMA_X64FRE_EN-US_DV9.
+# The version must not run into another digit; "_" may follow it ("WIN11_23H2"), which is why
+# there is no word boundary here ("_" is a word character, so it would stop WIN11_23H2 matching).
 WINDOWS_VOLUME_ID_RE = re.compile(
-    r"^(?:[A-Z0-9]{2,8}_(?:X64|X86|A64|ARM64)F?REV?_|WIN(?:DOWS)?[ _-]?(?:SERVER|1[01]|[78])\b)")
+    r"^(?:[A-Z0-9]{2,8}_(?:X64|X86|A64|ARM64)F?REV?_|WIN(?:DOWS)?[ _-]?(?:SERVER|1[01]|[78])(?![0-9]))",
+    re.IGNORECASE)
 WINDOWS_ROOT_FILES = {"BOOTMGR", "BOOTMGR.EFI", "SETUP.EXE"}
 WINDOWS_SOURCES_FILES = {"INSTALL.WIM", "INSTALL.ESD", "INSTALL.SWM", "BOOT.WIM"}
 
@@ -1489,11 +1522,12 @@ def normalize_typed_identifier(text):
     return text[5:] if text.startswith("/dev/") else text
 
 
-def ask_typed_confirmation(parent, title, message, expected, reasons=()):
-    """Modal "type the drive identifier to continue" dialog. Returns True only on an exact match.
+def build_typed_confirmation_dialog(parent, title, message, expected, reasons=()):
+    """Build (without showing it modally) the "type the drive identifier" dialog.
 
-    Used for high-risk drives. Built by hand (see ask_password): no simpledialog on Tk 9. The
-    confirm button stays disabled until the text matches, so Enter cannot slip through.
+    Returns (top, entry, erase_btn, result). The Erase button follows the text through a
+    StringVar write trace, so every way of changing the text counts: typing, a mouse paste,
+    the Edit menu, drag and drop. Reacting to key releases only left it disabled after a mouse paste.
     """
     top = tk.Toplevel(parent)
     top.title(title)
@@ -1509,11 +1543,12 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
                       wraplength=500).pack(padx=(28, 16), anchor="w")
     ttk.Label(top, text=_("To confirm, type the drive identifier exactly as shown ({expected}):").format(
         expected=expected), justify="left", wraplength=520).pack(padx=16, pady=(12, 4), anchor="w")
-    entry = ttk.Entry(top, width=30)
+    typed = tk.StringVar(master=top)
+    entry = ttk.Entry(top, width=30, textvariable=typed)
     entry.pack(padx=16, anchor="w")
 
     def matches():
-        return normalize_typed_identifier(entry.get()) == expected
+        return normalize_typed_identifier(typed.get()) == expected
 
     def accept(_event=None):
         if matches():
@@ -1528,10 +1563,21 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
     ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
     erase_btn = ttk.Button(row, text=_("Erase this drive"), command=accept, state="disabled")
     erase_btn.pack(side="left")
-    entry.bind("<KeyRelease>", lambda _e: erase_btn.config(state="normal" if matches() else "disabled"))
+    typed.trace_add("write", lambda *_args: erase_btn.config(state="normal" if matches() else "disabled"))
+    top._typed = typed  # keep the variable alive as long as the dialog
     top.bind("<Return>", accept)
     top.bind("<Escape>", cancel)
     top.protocol("WM_DELETE_WINDOW", cancel)
+    return top, entry, erase_btn, result
+
+
+def ask_typed_confirmation(parent, title, message, expected, reasons=()):
+    """Modal "type the drive identifier to continue" dialog. Returns True only on an exact match.
+
+    Used for high-risk drives. Built by hand (see ask_password): no simpledialog on Tk 9. The
+    confirm button stays disabled until the text matches, so Enter cannot slip through.
+    """
+    top, entry, _erase_btn, result = build_typed_confirmation_dialog(parent, title, message, expected, reasons)
 
     top.update_idletasks()
     x = parent.winfo_rootx() + max((parent.winfo_width() - top.winfo_reqwidth()) // 2, 0)
@@ -1966,7 +2012,7 @@ def macos_usb_device_map():
     """
     try:
         out = subprocess.check_output(["ioreg", "-a", "-r", "-c", "IOUSBHostDevice", "-l"],
-                                      stderr=subprocess.DEVNULL, timeout=15)
+                                      stderr=subprocess.DEVNULL, timeout=IOREG_TIMEOUT)
         roots = plistlib.loads(out)
     except Exception as e:
         audit(f"USB serial lookup unavailable ({type(e).__name__})", logging.WARNING)
@@ -1996,7 +2042,7 @@ def macos_usb_device_map():
 def macos_apfs_volumes_by_store():
     """Map the partition holding an APFS container ('disk4s2') to that container's volumes."""
     try:
-        data = plistlib.loads(subprocess.check_output(["diskutil", "list", "-plist"], timeout=30))
+        data = plistlib.loads(subprocess.check_output(["diskutil", "list", "-plist"], timeout=QUERY_TIMEOUT))
     except Exception:
         return {}
     by_store = {}
@@ -2045,7 +2091,7 @@ def macos_describe_disk(entry, info, usb_map, apfs_map):
                 volumes.extend(apfs_map[pid])
                 continue
             pinfo = plistlib.loads(subprocess.check_output(
-                ["diskutil", "info", "-plist", f"/dev/{pid}"], timeout=30))
+                ["diskutil", "info", "-plist", f"/dev/{pid}"], timeout=QUERY_TIMEOUT))
             mountpoint = pinfo.get("MountPoint") or part.get("MountPoint") or None
             volumes.append({
                 "name": part.get("VolumeName") or pinfo.get("VolumeName") or "",
@@ -2063,7 +2109,7 @@ def macos_describe_disk(entry, info, usb_map, apfs_map):
 
 def macos_get_external_disks():
     """List only EXTERNAL physical disks attached over USB (never the Mac's internal disk)."""
-    out = subprocess.check_output(["diskutil", "list", "-plist", "external", "physical"])
+    out = subprocess.check_output(["diskutil", "list", "-plist", "external", "physical"], timeout=QUERY_TIMEOUT)
     data = plistlib.loads(out)
     usb_map = None  # looked up lazily: only needed when at least one disk qualifies
     apfs_map = None
@@ -2072,9 +2118,14 @@ def macos_get_external_disks():
         dev = d.get("DeviceIdentifier")
         if not dev or not MAC_DEVICE_RE.fullmatch(dev):
             continue
-        size = d.get("Size", 0)
+        size = d.get("Size") or 0
+        if not isinstance(size, int) or size <= 0:
+            # An empty card reader reports no media (0 bytes): there is nothing to write to.
+            audit(f"Hiding {dev}: its size is zero or unreadable", logging.WARNING)
+            continue
         try:
-            info = plistlib.loads(subprocess.check_output(["diskutil", "info", "-plist", f"/dev/{dev}"]))
+            info = plistlib.loads(subprocess.check_output(
+                ["diskutil", "info", "-plist", f"/dev/{dev}"], timeout=QUERY_TIMEOUT))
         except Exception as e:
             # Fail closed: if we cannot confirm the disk is external, do not offer
             # it for erasure. Previously this fell back to {} and the Internal
@@ -2322,8 +2373,8 @@ def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None, 
 # ============================================================
 def linux_root_disk():
     try:
-        src = subprocess.check_output(["findmnt", "-no", "SOURCE", "/"], text=True).strip()
-        pk = subprocess.check_output(["lsblk", "-no", "PKNAME", src], text=True).strip()
+        src = subprocess.check_output(["findmnt", "-no", "SOURCE", "/"], text=True, timeout=QUERY_TIMEOUT).strip()
+        pk = subprocess.check_output(["lsblk", "-no", "PKNAME", src], text=True, timeout=QUERY_TIMEOUT).strip()
         return pk or None
     except Exception as e:
         audit(f"Could not determine the system disk ({type(e).__name__}); "
@@ -2342,7 +2393,7 @@ def linux_disks_holding_critical_mounts():
     unsafe = set()
     try:
         out = subprocess.check_output(
-            ["lsblk", "-J", "-b", "-o", "NAME,TYPE,MOUNTPOINT,PKNAME"], text=True)
+            ["lsblk", "-J", "-b", "-o", "NAME,TYPE,MOUNTPOINT,PKNAME"], text=True, timeout=QUERY_TIMEOUT)
         data = json.loads(out)
 
         def walk(node, top):
@@ -2382,7 +2433,7 @@ def linux_lsblk_disks():
     for columns in LSBLK_COLUMN_SETS:
         try:
             out = subprocess.check_output(["lsblk", "-J", "-b", "-o", columns], text=True,
-                                          stderr=subprocess.DEVNULL, timeout=30)
+                                          stderr=subprocess.DEVNULL, timeout=QUERY_TIMEOUT)
             return json.loads(out).get("blockdevices", [])
         except Exception as e:
             last_error = e
@@ -2445,7 +2496,11 @@ def linux_get_external_disks():
                     continue
                 if (dev.get("tran") or "").lower() != "usb":
                     continue  # only USB drives are offered
-                size = int(dev.get("size") or 0)
+                size = _as_int(dev.get("size")) or 0
+                if size <= 0:
+                    # An empty card reader (transport "usb", no media) reports 0 bytes.
+                    audit(f"Hiding {name}: its size is zero or unreadable", logging.WARNING)
+                    continue
                 model, volumes, identity = linux_describe_disk(dev)
                 disks.append({"id": name, "size": size, "model": model, "volumes": volumes,
                               "identity": identity,
@@ -2482,6 +2537,9 @@ def linux_get_external_disks():
             audit(f"Hiding {name}: could not read its size", logging.WARNING)
             continue  # fail closed: an unknown-size disk is not offered
         size = sectors * 512
+        if size <= 0:
+            audit(f"Hiding {name}: its size is zero", logging.WARNING)
+            continue  # fail closed: a drive without media is not offered
         model = ""
         try:
             parts = []
@@ -3426,18 +3484,38 @@ _LabelBase = ttk.Label if ttk else object
 
 
 class _LazyLabel(_LabelBase):
-    """A label that occupies no space while its text is empty (it is packed when it gets text)."""
+    """A label that occupies no space while its text is empty (it is packed when it gets text).
+
+    `before=` / `after=` (a widget, or a function returning one) say where in the parent the label
+    goes when it is packed. Without them a label that appears later would land at the END of the page,
+    below everything else. A target that is not packed at that moment is ignored.
+    """
 
     def __init__(self, parent, **pack_options):
         super().__init__(parent, text="", justify="left", wraplength=680)
         self._pack_options = pack_options
+
+    def _pack_now(self):
+        options = dict(self._pack_options)
+        targets = {}
+        for key in ("before", "after"):
+            target = options.pop(key, None)
+            if callable(target):
+                target = target()
+            if target is not None and str(target.winfo_manager()) == "pack":
+                targets[key] = target
+        if "before" in targets:  # Tk takes one anchor: "just above X" wins over "just below Y"
+            options["before"] = targets["before"]
+        elif "after" in targets:
+            options["after"] = targets["after"]
+        self.pack(**options)
 
     def config(self, cnf=None, **kw):
         result = super().config(cnf, **kw)
         if "text" in kw:
             if kw["text"]:
                 if not self.winfo_manager():
-                    self.pack(**self._pack_options)
+                    self._pack_now()
             else:
                 self.pack_forget()
         return result
@@ -3465,6 +3543,7 @@ class OptionCard(_CanvasBase):
         self.key, self._title, self._subtitle, self._command = key, title, subtitle, command
         self._selected = False
         self._hover = False
+        self._enabled = True
         base = tkfont.nametofont("TkDefaultFont")
         self._title_font = (base.actual("family"), base.actual("size") + 2, "bold")
         self._sub_font = (base.actual("family"), max(base.actual("size") - 2, 8))
@@ -3478,12 +3557,35 @@ class OptionCard(_CanvasBase):
         self._draw()
 
     def _choose(self):
+        if not self._enabled:
+            return
         self.focus_set()
         self._command(self.key)
 
     def _set_hover(self, value):
-        self._hover = value
+        self._hover = value and self._enabled
         self._draw()
+
+    def set_enabled(self, enabled):
+        """A disabled card ignores clicks and the keyboard (the window locks them during a write)."""
+        self._enabled = bool(enabled)
+        self._hover = self._hover and self._enabled
+        self.configure(cursor="hand2" if self._enabled else "arrow", takefocus=self._enabled)
+        self._draw()
+
+    def _has_focus(self):
+        """True when this card has the keyboard focus. Never raises.
+
+        Tk's `focus_get` can raise KeyError ('!combobox', 'popdown') while the focus sits in the
+        pop-down list of a ttk Combobox, because Python cannot map that internal window to a widget.
+        """
+        try:
+            return self.focus_get() is self
+        except (KeyError, tk.TclError):
+            try:
+                return str(self.tk.call("focus")) == str(self)
+            except tk.TclError:
+                return False
 
     def set_selected(self, selected):
         self._selected = bool(selected)
@@ -3495,13 +3597,18 @@ class OptionCard(_CanvasBase):
         return self.create_polygon(points, smooth=True, **kw)
 
     def _draw(self):
+        focused = self._has_focus()  # before anything is erased: a failure here must not leave a blank card
         self.delete("all")
-        focused = self.focus_get() is self
         color = self.ACCENT if self._selected else ("#a0a0a8" if (self._hover or focused) else "#6e6e73")
         width = 3 if self._selected else (2 if focused else 1)
+        text_color = self._fg
+        if not self._enabled:  # locked while a write runs: the chosen card stays visible, the rest greys out
+            text_color = "#8e8e93"
+            if not self._selected:
+                color = "#8e8e93"
         self._rounded(3, 3, self.WIDTH - 3, self.HEIGHT - 3, 14, outline=color, fill="", width=width)
         cx, cy = self.WIDTH / 2, 40
-        glyph = self.ACCENT if self._selected else self._fg
+        glyph = self.ACCENT if self._selected else text_color
         if self.key == CARD_WINDOWS:            # four tiles
             for ox, oy in ((-17, -17), (2, -17), (-17, 2), (2, 2)):
                 self.create_rectangle(cx + ox, cy + oy, cx + ox + 15, cy + oy + 15, fill=glyph, outline=glyph)
@@ -3513,7 +3620,7 @@ class OptionCard(_CanvasBase):
         else:                                   # a disc
             self.create_oval(cx - 20, cy - 20, cx + 20, cy + 20, outline=glyph, width=3)
             self.create_oval(cx - 6, cy - 6, cx + 6, cy + 6, outline=glyph, width=3)
-        self.create_text(cx, 82, text=self._title, fill=self._fg, font=self._title_font)
+        self.create_text(cx, 82, text=self._title, fill=text_color, font=self._title_font)
         self.create_text(cx, 103, text=self._subtitle, fill="#8e8e93", font=self._sub_font)
 
 
@@ -3536,11 +3643,23 @@ class App(_TkBase):
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
         self._help_win = None
         self._creating = False          # True from the click on "Create" until the write has ended
+        self._create_thread = None      # the worker that writes the drive (None before it starts / after it ends)
+        self._closing = False           # the window is being closed: no more dialogs, no more listings
+        self._download_running = False  # a Windows ISO download is running
+        self._flex_busy = False         # a ChromeOS Flex download or extraction is running
+        self._flex_extracting = False   # ... and it is in the extraction step
+        self._installing = False        # "Install missing dependencies" is running
         self._last_disk_refresh = 0.0
+        self._disk_job = 0              # identifies the drive listing whose result may still be applied
+        self._disk_listing = False      # a listing worker is running (listings never overlap)
+        self._disk_pending = None       # a refresh asked for while one was running: the `quiet` of the request
         self.flex_cancel_event = threading.Event()
         self._build_menu()
         self._build_ui()
         self._fit_window()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+        if IS_MAC:
+            self.createcommand("tk::mac::Quit", self._on_close)  # Cmd-Q goes through the same checks
         self.bind("<FocusIn>", self._auto_refresh_disks)
         self.after(300, self._auto_refresh_disks)
         self.after(LOG_FLUSH_MS, self._log_tick)
@@ -3564,6 +3683,7 @@ class App(_TkBase):
         self.card_var = tk.StringVar(value=CARD_WINDOWS)
         self.mode_var = tk.StringVar(value=MODE_WINDOWS)
         self.cards = {}
+        self.card_titles = {}
         for key, title, subtitle in (
             (CARD_CHROME, _("Google Chrome"), _("ChromeOS Flex")),
             (CARD_WINDOWS, _("Windows 11"), _("Copies the files")),
@@ -3573,6 +3693,7 @@ class App(_TkBase):
             card = OptionCard(row, key, title, subtitle, self.select_card)
             card.pack(side="left", padx=(0, 12))
             self.cards[key] = card
+            self.card_titles[key] = title
 
     def _build_sources(self, page):
         """One panel per card, stacked in the same cell: the tallest decides the height, so the
@@ -3670,7 +3791,8 @@ class App(_TkBase):
         ttk.Separator(page).pack(fill="x", pady=(10, 8))
         row = ttk.Frame(page)
         row.pack(fill="x")
-        ttk.Button(row, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(side="left")
+        self.refresh_btn = ttk.Button(row, text=_("Refresh USB drives list"), command=self.refresh_disks)
+        self.refresh_btn.pack(side="left")
         self.disk_combo = ttk.Combobox(row, state="readonly")
         self.disk_combo.pack(side="left", fill="x", expand=True, padx=(8, 0))
         self.disk_combo.bind("<<ComboboxSelected>>", lambda _e: self.update_create_button_state())
@@ -3687,8 +3809,8 @@ class App(_TkBase):
         row = ttk.Frame(page)
         row.pack(fill="x")
         ttk.Label(row, text=_("Already downloaded the image (ISO, or ChromeOS Flex .zip/.bin)?")).pack(side="left")
-        ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso).pack(
-            side="left", padx=(8, 0))
+        self.pick_btn = ttk.Button(row, text=_("Select existing ISO file..."), command=self.pick_existing_iso)
+        self.pick_btn.pack(side="left", padx=(8, 0))
         self.iso_label = ttk.Label(page, text=_("No ISO selected yet."), foreground="#4da3ff",
                                    wraplength=720, justify="left")
         self.iso_label.pack(anchor="w", pady=(4, 4))
@@ -3704,8 +3826,12 @@ class App(_TkBase):
         self.iso_sha_btn.pack(side="left", padx=(8, 0))
         self.iso_sha_progress = ttk.Progressbar(self.iso_check_frame, orient="horizontal", mode="determinate")
         self.iso_sha_progress.pack(fill="x", padx=8, pady=(0, 2))
-        self.iso_sha_label = _LazyLabel(self.iso_check_frame, anchor="w", padx=8)
-        self.iso_sha_result = _LazyLabel(self.iso_check_frame, anchor="w", padx=8, pady=(0, 4))
+        # Each label is placed relative to the other, whichever gets its text first: the progress text
+        # always sits above the verdict.
+        self.iso_sha_label = _LazyLabel(self.iso_check_frame, anchor="w", padx=8,
+                                        after=self.iso_sha_progress, before=lambda: self.iso_sha_result)
+        self.iso_sha_result = _LazyLabel(self.iso_check_frame, anchor="w", padx=8, pady=(0, 4),
+                                         after=lambda: self.iso_sha_label)
 
     def _build_create(self, page):
         ttk.Separator(page).pack(fill="x", pady=(8, 8))
@@ -3729,11 +3855,12 @@ class App(_TkBase):
         self.cancel_create_btn = ttk.Button(create_row, text=_("Cancel"), command=self.cancel_create_usb,
                                             state="disabled")
         self.cancel_create_btn.pack(side="left", padx=(10, 0))
-        self.create_hint = _LazyLabel(page, anchor="w", pady=(6, 0))
-        self.create_hint.config(foreground="#ff9f0a")
-
         self.create_progress = ttk.Progressbar(page, orient="horizontal", mode="determinate")
         self.create_progress.pack(fill="x", pady=(10, 2))
+        # The hint is packed only when it has text; `before=` keeps it right under the Create row
+        # instead of at the very end of the page (below the log).
+        self.create_hint = _LazyLabel(page, anchor="w", pady=(6, 0), before=self.create_progress)
+        self.create_hint.config(foreground="#ff9f0a")
         self.create_progress_label = ttk.Label(page, text="")
         self.create_progress_label.pack(anchor="w")
         self._create_started = None
@@ -3774,7 +3901,11 @@ class App(_TkBase):
             self.install_deps_btn.pack(side="left", padx=5)
 
     def install_dependencies(self):
-        self.install_deps_btn.config(state="disabled")
+        if self._creating or self._installing:
+            return  # installing clears the cached administrator password the running write may be using
+        self._installing = True
+        self._sync_controls()
+        self.update_create_button_state()
 
         def worker():
             try:
@@ -3801,30 +3932,42 @@ class App(_TkBase):
                 self.after(0, self._report_error, "Unexpected error", None, e)
             finally:
                 self.priv.clear_cached_password()
-                self.after(0, self.check_dependencies)
-                self.after(0, lambda: self.install_deps_btn.config(state="normal"))
+                self.after(0, self._installation_ended)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _installation_ended(self):
+        self._installing = False
+        self.check_dependencies()
+        self._sync_controls()
+        self.update_create_button_state()  # the Create button depends on the tools being there
 
     # ---------- download ----------
     def open_ms_page(self):
         webbrowser.open(MS_DOWNLOAD_PAGE)
 
     def pick_existing_iso(self):
+        if self._creating or self._flex_busy:
+            return  # the button is disabled meanwhile; this is the safety net for other callers
         path = filedialog.askopenfilename(
             title=_("Select an ISO or disk image"),
             filetypes=[(_("ISO and disk images"), "*.iso *.bin *.img *.zip"), (_("All files"), "*")])
         if not path:
             return
+        if self._creating or self._flex_busy:
+            return  # something started while the file dialog was open
         if path.lower().endswith(".zip"):
             # Google distributes ChromeOS Flex as latest.bin.zip: extract the .bin next to it.
             self.select_card(CARD_CHROME)  # the extraction progress is shown in that card
+            self.flex_cancel_event.clear()  # a new operation: only here, so a running one never loses its cancel
             self._extract_flex_image(path, delete_zip=False)
         else:
             self.set_iso(path)
 
     # ---------- ChromeOS Flex (download from Google, extract, then the normal write flow) ----------
     def start_flex_download(self):
+        if self._creating or self._flex_busy:
+            return
         if not messagebox.askyesno(
             _("Download ChromeOS Flex"),
             _("ChromeOS Flex is provided by Google and is subject to Google's own terms.\n\n"
@@ -3849,10 +3992,12 @@ class App(_TkBase):
                   "Continue anyway?").format(need=human_size(CHROMEOS_FLEX_FREE_BYTES), free=human_size(free)),
                 icon="warning"):
             return
+        if self._creating or self._flex_busy:
+            return  # something started while the dialogs were open
         audit("ChromeOS Flex download started (dl.google.com)")
         self.flex_cancel_event.clear()
-        self.flex_download_btn.config(state="disabled")
-        self.flex_cancel_btn.config(state="normal")
+        self._flex_busy = True
+        self._sync_controls()
         self.flex_progress.config(mode="determinate", value=0)
         DownloadThread(
             CHROMEOS_FLEX_URL, dest,
@@ -3872,7 +4017,7 @@ class App(_TkBase):
             tail = ""
             if speed and speed > 0:
                 eta = (total - done) / speed
-                tail = f" — {human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left"
+                tail = f" — {human_size(speed)}/s — {_eta_text(eta, speed)}"
             self.flex_progress_label.config(
                 text=f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
         else:
@@ -3881,13 +4026,23 @@ class App(_TkBase):
 
     def _on_flex_downloaded(self, path, sha256):
         self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
+        if self.flex_cancel_event.is_set():  # canceled just as the download ended: keep the cancel
+            self._on_flex_error(_("Canceled."))
+            return
         self._extract_flex_image(path, delete_zip=True)
 
     def _extract_flex_image(self, zip_path, delete_zip):
-        """Extract the .bin from `zip_path` in a worker thread, then select it for writing."""
-        self.flex_cancel_event.clear()
-        self.flex_download_btn.config(state="disabled")
-        self.flex_cancel_btn.config(state="normal")
+        """Extract the .bin from `zip_path` in a worker thread, then select it for writing.
+
+        The caller starts the operation (see `start_flex_download` / `pick_existing_iso`); this never
+        clears `flex_cancel_event`, so a cancel that is already pending is honoured. A second
+        extraction cannot start while one is running.
+        """
+        if self._flex_extracting:
+            return
+        self._flex_extracting = True
+        self._flex_busy = True
+        self._sync_controls()
         self.flex_progress.config(mode="determinate", value=0)
         self.flex_progress_label.config(text=_("Extracting..."))
         folder = os.path.dirname(os.path.abspath(zip_path))
@@ -3910,8 +4065,10 @@ class App(_TkBase):
         threading.Thread(target=worker, daemon=True).start()
 
     def _on_flex_extracted(self, image, zip_path, delete_zip):
-        self.flex_download_btn.config(state="normal")
-        self.flex_cancel_btn.config(state="disabled")
+        self._flex_busy = self._flex_extracting = False
+        self._sync_controls()
+        if self._closing:
+            return
         self.flex_progress.config(mode="determinate", value=100)
         self.flex_progress_label.config(text=_("Ready."))
         if delete_zip:
@@ -3928,8 +4085,10 @@ class App(_TkBase):
               "\"Create Bootable USB Drive\".").format(path=image))
 
     def _on_flex_error(self, msg):
-        self.flex_download_btn.config(state="normal")
-        self.flex_cancel_btn.config(state="disabled")
+        self._flex_busy = self._flex_extracting = False
+        self._sync_controls()
+        if self._closing:
+            return
         self.flex_progress.config(mode="determinate", value=0)
         self.flex_progress_label.config(text=_("Failed."))
         messagebox.showerror(_("ChromeOS Flex"), msg)
@@ -4066,6 +4225,16 @@ class App(_TkBase):
                   "Choose the matching card instead, or continue only if you are sure.\n\n"
                   "Continue anyway?").format(name=name),
                 icon="warning")
+        if mode == MODE_WINDOWS and kind == ISO_KIND_UNKNOWN:
+            # Nothing says this is a Windows installer, and Windows mode erases the drive BEFORE it
+            # looks for install.wim. The file name is no evidence, so ask.
+            return messagebox.askyesno(
+                _("Image type not recognised"),
+                _("The program could not identify the selected file, but \"Windows 11\" is chosen. Windows mode "
+                  "would erase the drive and then fail if this is not a Windows installer.\n\n"
+                  "Continue only if you are sure this is a Windows 11 ISO.\n\n"
+                  "Continue anyway?"),
+                icon="warning")
         return True
 
     def _fit_window(self):
@@ -4085,29 +4254,34 @@ class App(_TkBase):
     def set_iso(self, path):
         self.iso_path.set(path)
         self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
-        # Only a default: the user can still switch the image type by hand. The content of
-        # the ISO decides; the file name is only the fallback when it cannot be read.
+        # Only a default: the user can still switch the image type by hand. The CONTENT of the ISO
+        # decides. When it cannot be identified the card is left as it is: guessing from the file name
+        # could pick the card that erases the drive first ("darwin-linux.img" contains "win").
         kind = detect_iso_kind(path)
         if kind == ISO_KIND_UNKNOWN:
-            kind = MODE_WINDOWS if "win" in os.path.basename(path).lower() else MODE_LINUX
-            how = _("from the file name (the content could not be identified)")
+            card = self.card_var.get()
+            self.log(_("The content of this image could not be identified, so the image type was not changed. "
+                       "Check that the selected card ({card}) is the right one.").format(
+                           card=self.card_titles.get(card, card)))
         else:
-            how = _("from the content of the ISO")
-        if kind == ISO_KIND_CHROMEOS:
-            card = CARD_CHROME
-        elif kind == ISO_KIND_WINDOWS:
-            card = CARD_WINDOWS
-        else:  # a hybrid image: keep "Other ISO" if that is what was chosen, otherwise "Linux"
-            card = self.card_var.get() if self.card_var.get() in (CARD_LINUX, CARD_OTHER) else CARD_LINUX
-        image = {ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_CHROMEOS: _("ChromeOS Flex")}.get(
-            kind, _("Linux / other hybrid ISO"))
-        self.log(_("Image type preselected {how}: {image}.").format(how=how, image=image))
+            if kind == ISO_KIND_CHROMEOS:
+                card = CARD_CHROME
+            elif kind == ISO_KIND_WINDOWS:
+                card = CARD_WINDOWS
+            else:  # a hybrid image: keep "Other ISO" if that is what was chosen, otherwise "Linux"
+                card = self.card_var.get() if self.card_var.get() in (CARD_LINUX, CARD_OTHER) else CARD_LINUX
+            image = {ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_CHROMEOS: _("ChromeOS Flex")}.get(
+                kind, _("Linux / other hybrid ISO"))
+            self.log(_("Image type preselected {how}: {image}.").format(
+                how=_("from the content of the ISO"), image=image))
         self.select_card(card)
         self._reset_iso_sha()
         self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.iso_label)
         self.after_idle(self._fit_window)
 
     def start_download(self):
+        if self._creating or self._download_running:
+            return
         try:
             url, host, untrusted_host = validate_download_url(self.url_entry.get())
         except ValueError as e:
@@ -4143,9 +4317,11 @@ class App(_TkBase):
             return
         audit(f"Download started from host={host} trusted={not untrusted_host} "
               f"checksum_supplied={bool(expected_sha)}")
+        if self._creating or self._download_running:
+            return  # something started while the dialogs were open
         self.cancel_event.clear()
-        self.download_btn.config(state="disabled")
-        self.cancel_btn.config(state="normal")
+        self._download_running = True
+        self._sync_controls()
         self.progress.config(mode="determinate", value=0)
         t = DownloadThread(
             url,
@@ -4165,11 +4341,11 @@ class App(_TkBase):
         if total:
             pct = downloaded / total * 100
             self.progress.config(mode="determinate", value=pct)
-            eta = (total - downloaded) / speed if speed > 0 else 0
+            eta = _eta_text((total - downloaded) / speed, speed) if speed > 0 else ""
             self.progress_label.config(
-                text=_("{done} / {total} ({pct:.1f}%) — {speed}/s — ~{eta}s left").format(
+                text=_("{done} / {total} ({pct:.1f}%) — {speed}/s — {eta}").format(
                     done=human_size(downloaded), total=human_size(total), pct=pct,
-                    speed=human_size(speed), eta=int(eta))
+                    speed=human_size(speed), eta=eta or _("calculating..."))
             )
         else:
             self.progress.config(mode="indeterminate")
@@ -4177,8 +4353,10 @@ class App(_TkBase):
                 text=_("{done} downloaded — {speed}/s").format(done=human_size(downloaded), speed=human_size(speed)))
 
     def _on_download_done(self, path, sha256, verified):
-        self.download_btn.config(state="normal")
-        self.cancel_btn.config(state="disabled")
+        self._download_running = False
+        self._sync_controls()
+        if self._closing:
+            return
         self.progress_label.config(text=_("Download complete."))
         self.set_iso(path)
         self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
@@ -4194,24 +4372,86 @@ class App(_TkBase):
         messagebox.showinfo(_("Done"), _("ISO downloaded to:\n{path}").format(path=path) + detail)
 
     def _on_download_error(self, msg):
-        self.download_btn.config(state="normal")
-        self.cancel_btn.config(state="disabled")
+        self._download_running = False
+        self._sync_controls()
+        if self._closing:
+            return
         self.progress_label.config(text=_("Download failed."))
         messagebox.showerror(_("Download error"), msg)
 
     # ---------- USB drive ----------
-    def refresh_disks(self, quiet=False):
+    def refresh_disks(self, quiet=False, sync=False):
         """Read the list of USB drives. `quiet` (automatic refreshes) logs a failure instead of
-        opening a dialog. The drive that was selected stays selected if it is still there."""
-        previous = self.selected_disk()
-        try:
-            self.disks = get_external_disks()
-        except Exception as e:
-            if quiet:
-                self.log(_("Could not list disks: {error}").format(error=e))
-            else:
-                messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
+        opening a dialog. The drive that was selected stays selected if it is still there.
+
+        The listing runs diskutil/lsblk, which can take a long time (or hang) with a faulty drive, so
+        it runs in a worker thread and the window stays alive; the result is applied on the Tk thread.
+        Two listings never overlap: a request made while one runs is remembered and served right after.
+        `sync=True` lists on the calling thread (tests and the smoke test).
+        """
+        if self._closing:
             return
+        if sync:
+            self._disk_job += 1
+            job = self._disk_job
+            try:
+                disks = get_external_disks()
+            except Exception as e:  # noqa: BLE001 - shown (or logged), never lost
+                self._on_disks_error(job, e, quiet)
+            else:
+                self._on_disks(job, disks)
+            return
+        if self._disk_listing:
+            # Keep the strongest request: an explicit click (not quiet) must still report a failure.
+            self._disk_pending = quiet if self._disk_pending is None else (self._disk_pending and quiet)
+            return
+        self._disk_listing = True
+        self._disk_job += 1
+        job = self._disk_job
+
+        def worker():
+            try:
+                disks = get_external_disks()
+            except Exception as e:  # noqa: BLE001 - delivered to the Tk thread below
+                self._post(self._listing_finished, job, None, e, quiet)
+            else:
+                self._post(self._listing_finished, job, disks, None, quiet)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _post(self, func, *args):
+        """Run `func(*args)` on the Tk thread from a worker; silently drop it once the window is gone."""
+        try:
+            self.after(0, func, *args)
+        except (RuntimeError, tk.TclError):
+            pass
+
+    def _listing_finished(self, job, disks, error, quiet):
+        """The listing worker delivered its result on the Tk thread; then serve the request made meanwhile."""
+        self._disk_listing = False
+        try:
+            if error is not None:
+                self._on_disks_error(job, error, quiet)
+            else:
+                self._on_disks(job, disks)
+        finally:
+            pending, self._disk_pending = self._disk_pending, None
+            if pending is not None and not self._closing:
+                self.refresh_disks(quiet=pending)
+
+    def _on_disks_error(self, job, error, quiet):
+        if job != self._disk_job or self._closing:
+            return  # an older listing, or the window is closing
+        if quiet:
+            self.log(_("Could not list disks: {error}").format(error=error))
+        else:
+            messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=error))
+
+    def _on_disks(self, job, disks):
+        if job != self._disk_job or self._closing or self._creating:
+            return  # an older listing, or the write is running: _creation_ended lists again
+        previous = self.selected_disk()
+        self.disks = disks
         self._last_disk_refresh = time.monotonic()
         labels = [d["label"] for d in self.disks]
         self.disk_combo["values"] = labels
@@ -4237,10 +4477,33 @@ class App(_TkBase):
             return None
         return self.disks[idx]
 
+    def _sync_controls(self):
+        """Enable or disable the controls that must not be used while something is running.
+
+        While a write runs nothing that changes the image type, the drive or the image may be touched
+        (a second click on Create, a different card or a refreshed list would act on the same drive).
+        A download or an extraction only locks its own button and the image picker.
+        """
+        creating = self._creating
+        busy = "disabled"
+        for card in self.cards.values():
+            card.set_enabled(not creating)
+        self.disk_combo.config(state="disabled" if creating else "readonly")
+        self.refresh_btn.config(state=busy if creating else "normal")
+        self.download_btn.config(state=busy if (creating or self._download_running) else "normal")
+        self.cancel_btn.config(state="normal" if self._download_running else "disabled")
+        self.flex_download_btn.config(state=busy if (creating or self._flex_busy) else "normal")
+        self.flex_cancel_btn.config(state="normal" if self._flex_busy else "disabled")
+        self.pick_btn.config(state=busy if (creating or self._flex_busy) else "normal")
+        self.install_deps_btn.config(state=busy if (creating or self._installing) else "normal")
+
     def update_create_button_state(self):
         disk = self.selected_disk()
         has_image = bool(self.iso_path.get())
-        ok = has_image and disk is not None
+        # The tools the chosen mode needs: without them the drive would be erased and the copy would then fail.
+        missing = [] if self._creating else get_missing_dependencies(self.mode_var.get())
+        ok = (has_image and disk is not None and not missing and not self._creating and not self._installing
+              and not self._closing)
         self.create_btn.config(state="normal" if ok else "disabled")
         if self._creating:
             hint = ""
@@ -4250,6 +4513,11 @@ class App(_TkBase):
             hint = _("No USB drive found. Plug it in and click \"Refresh USB drives list\".")
         elif disk is None:
             hint = _("Select a USB drive in the list.")
+        elif missing:
+            hint = _("Missing tools: {tools}. Click \"Install missing dependencies\" first.").format(
+                tools=", ".join(missing))
+        elif self._installing:
+            hint = _("Installing the missing tools...")
         else:
             hint = ""
         self.create_hint.config(text=hint)
@@ -4391,13 +4659,17 @@ class App(_TkBase):
         return ok
 
     def start_create_usb(self):
+        if self._creating:
+            return  # a write (or its confirmation) is already in progress: never start a second one
         self._creating = True
+        self._sync_controls()
         started = False
         try:
             started = bool(self._start_create_usb())
         finally:
             if not started:  # canceled or refused before the worker began
                 self._creating = False
+                self._sync_controls()
                 self.update_create_button_state()
 
     def _start_create_usb(self):
@@ -4405,6 +4677,21 @@ class App(_TkBase):
         if not disk:
             return
         mode = self.mode_var.get()
+        missing = get_missing_dependencies(mode)
+        if missing:  # the Create button is disabled in this case; this covers a stale button
+            messagebox.showerror(
+                _("Missing tools"),
+                _("These tools are missing: {tools}. Click \"Install missing dependencies\" first. "
+                  "Nothing was changed.").format(tools=", ".join(missing)))
+            return
+        disk_size = disk.get("size") or 0
+        if disk_size <= 0:
+            # An empty card reader reports 0 bytes. Never skip the size checks for it: refuse.
+            messagebox.showerror(
+                _("Unknown drive size"),
+                _("The size of this drive could not be read (it reports 0 bytes). It may be an empty card "
+                  "reader or a drive that is not ready. Nothing was changed."))
+            return
         if not self._image_matches_choice(mode):
             return
         what = {MODE_WINDOWS: _("Windows 11"), MODE_CHROMEOS: _("ChromeOS Flex")}.get(
@@ -4414,16 +4701,16 @@ class App(_TkBase):
                 image_size = os.path.getsize(self.iso_path.get())
             except OSError:
                 image_size = 0
-            if image_size and disk.get("size") and image_size > disk["size"]:
+            if image_size and image_size > disk_size:
                 messagebox.showerror(
                     _("Drive too small"),
                     _("The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. "
-                      "Nothing was changed.").format(image=human_size(image_size), drive=human_size(disk["size"])))
+                      "Nothing was changed.").format(image=human_size(image_size), drive=human_size(disk_size)))
                 return
-        if mode == MODE_CHROMEOS and (disk.get("size") or 0) < CHROMEOS_MIN_USB_BYTES and not messagebox.askyesno(
+        if mode == MODE_CHROMEOS and disk_size < CHROMEOS_MIN_USB_BYTES and not messagebox.askyesno(
                 _("Small USB drive"),
                 _("Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. "
-                  "It may not work as an installer.\n\nContinue anyway?").format(size=human_size(disk["size"])),
+                  "It may not work as an installer.\n\nContinue anyway?").format(size=human_size(disk_size)),
                 icon="warning"):
             return
         if not self.confirm_erase(disk, what):
@@ -4438,55 +4725,77 @@ class App(_TkBase):
             self.priv.clear_cached_password()
             self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
             return
-        self.create_btn.config(state="disabled")
         self.create_cancel_event.clear()
+        self.update_create_button_state()
         self.cancel_create_btn.config(state="normal")
         self._reset_create_progress()
         iso = self.iso_path.get()
         dev = disk["id"]
-        expected_size = disk.get("size")
+        expected_size = disk_size
 
         def worker():
             try:
                 ejected = build_usb(iso, dev, self.log_threadsafe, self.priv,
-                          expected_size=expected_size, mode=mode,
-                          progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s),
-                          cancel_event=self.create_cancel_event)
-                self.after(0, self._finish_create_progress, True)
+                                    expected_size=expected_size, mode=mode,
+                                    progress=lambda d, t, s: self._post(self._on_create_progress, d, t, s),
+                                    cancel_event=self.create_cancel_event)
+                self._post(self._finish_create_progress, True)
                 note = (_("It was verified against the ISO and ejected — you can unplug it now.") if ejected else
                         _("It was verified against the ISO, but could not be ejected automatically. "
                           "Eject it from the file manager before unplugging."))
-                self.after(0, lambda: messagebox.showinfo(
-                    _("Done"), _("Bootable USB drive created successfully!") + f"\n\n{note}"))
-            except OperationCanceled:
+                self._post(self._notify, "info", _("Done"),
+                           _("Bootable USB drive created successfully!") + f"\n\n{note}")
+            except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
-                self.after(0, self._finish_create_progress, False, True)
-                self.after(0, self.log, _("Canceled. The drive was left unusable; create it again before use."))
-                self.after(0, lambda: messagebox.showinfo(
-                    _("Canceled"), _("The operation was canceled.\n\nThe USB drive was left incomplete and "
-                                     "unusable. Create it again before using it.")))
+                log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True))
+                self._post(self._finish_create_progress, False, True)
+                self._post(self.log, log_text)
+                self._post(self._notify, "info", title, body)
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
-                self.after(0, self._finish_create_progress, False)
-                self.after(0, self._report_error, "Error", str(e))
+                self._post(self._finish_create_progress, False)
+                self._post(self._report_error, "Error", str(e))
             except Exception as e:
                 # Unexpected failure: show a short message, keep the detail in the log
                 # so internal paths and command lines are not surfaced in a dialog.
-                self.after(0, self._finish_create_progress, False)
-                self.after(0, self._report_error, "Unexpected error", None, e)
+                self._post(self._finish_create_progress, False)
+                self._post(self._report_error, "Unexpected error", None, e)
             finally:
                 # The administrator password is no longer needed once the operation ends.
                 self.priv.clear_cached_password()
-                self.after(0, self._creation_ended)
+                self._post(self._creation_ended)
 
-        threading.Thread(target=worker, daemon=True).start()
+        self._create_thread = threading.Thread(target=worker, daemon=True)
+        self._create_thread.start()
         return True
+
+    @staticmethod
+    def _canceled_texts(drive_touched):
+        """(log line, dialog title, dialog text) after a cancel. The engine says whether it had already
+        started to change the drive; when it did not, the drive must not be called unusable."""
+        if drive_touched:
+            return (_("Canceled. The drive was left unusable; create it again before use."),
+                    _("Canceled"),
+                    _("The operation was canceled.\n\nThe USB drive was left incomplete and "
+                      "unusable. Create it again before using it."))
+        return (_("Canceled. The drive was not modified."),
+                _("Canceled"),
+                _("The operation was canceled.\n\nThe USB drive was NOT modified."))
+
+    def _notify(self, kind, title, message):
+        """An information dialog from a worker's result; skipped while the window is closing."""
+        if self._closing:
+            return
+        (messagebox.showinfo if kind == "info" else messagebox.showerror)(title, message)
 
     def _creation_ended(self):
         """The write finished (or failed or was canceled): unlock the window and look at the drives
         again, because a drive that was ejected is no longer there."""
         self._creating = False
+        self._create_thread = None
         self.cancel_create_btn.config(state="disabled")
+        self._sync_controls()
+        self.update_create_button_state()
         self.refresh_disks(quiet=True)
 
     def cancel_create_usb(self):
@@ -4547,9 +4856,7 @@ class App(_TkBase):
         elapsed = max(now - self._create_started, 0.001)
         speed = (done - self._create_stage_base) / elapsed
         if speed > 0:
-            eta = (total - done) / speed
-            tail = _(" — {speed}/s — ~{minutes}m{seconds:02d}s left").format(
-                speed=human_size(speed), minutes=int(eta // 60), seconds=int(eta % 60))
+            tail = f" — {human_size(speed)}/s — {_eta_text((total - done) / speed, speed)}"
         else:
             tail = _(" — calculating...")
         self.create_progress_label.config(
@@ -4562,6 +4869,63 @@ class App(_TkBase):
         self.create_progress_label.config(
             text=_("Done — 100%") if ok else (_("Canceled.") if canceled else _("Failed.")))
 
+    # ---------- closing the window ----------
+    CLOSE_WAIT_SECONDS = 20  # how long a close waits for a canceled write to stop
+
+    def _write_running(self):
+        thread = self._create_thread
+        return thread is not None and thread.is_alive()
+
+    def _on_close(self):
+        """The window's close button and Cmd-Q. A running write is never abandoned silently: closing
+        asks first, then cancels it and waits (bounded, UI alive) for the worker to stop."""
+        if self._closing:
+            return
+        if self._creating and self._create_thread is None:
+            return  # a confirmation or password dialog is waiting for an answer: finish that first
+        if self._write_running():
+            if not messagebox.askyesno(
+                _("Quit while writing?"),
+                _("A USB drive is being written right now. Quitting cancels the operation and leaves "
+                  "the drive incomplete and UNUSABLE until it is created again.\n\n"
+                  "Cancel the operation and quit?"),
+                icon="warning",
+            ):
+                return
+            if self._write_running():  # it may have finished while the question was open
+                self.create_cancel_event.set()
+                self.cancel_create_btn.config(state="disabled")
+                self.log(_("Cancel requested: stopping safely..."))
+                audit("User closed the window during the USB creation: canceling it")
+                if not self._wait_for_write(self.CLOSE_WAIT_SECONDS) and not messagebox.askyesno(
+                    _("Still stopping"),
+                    _("The operation is taking a while to stop. Quit anyway? The drive stays unusable "
+                      "until it is created again."),
+                    icon="warning",
+                ):
+                    return
+        self._closing = True
+        self.cancel_event.set()        # a Windows ISO download
+        self.flex_cancel_event.set()   # a ChromeOS Flex download or extraction
+        self.destroy()
+
+    def _wait_for_write(self, seconds):
+        """Keep the window responsive until the write worker ends or `seconds` pass. True if it ended.
+
+        Dialogs from the worker are suppressed meanwhile (`_closing`), so nothing can block the wait."""
+        self._closing = True
+        try:
+            deadline = time.monotonic() + seconds
+            while self._write_running() and time.monotonic() < deadline:
+                try:
+                    self.update()
+                except tk.TclError:
+                    break
+                time.sleep(0.05)
+        finally:
+            self._closing = False
+        return not self._write_running()
+
     def report_callback_exception(self, exc, val, tb):
         """Tk swallows exceptions raised in button handlers (they only reach stderr).
         Show them, so a broken button never looks like "nothing happened"."""
@@ -4573,6 +4937,9 @@ class App(_TkBase):
         `title` is the English text (it also goes to the audit log); the dialog shows it translated.
         A `message` given by the caller (an engine error) is shown as it is.
         """
+        if self._closing:  # no dialog while the window is going away; the log and the audit trail keep it
+            self.log(f"ERROR: {message}" if exc is None else f"ERROR [{type(exc).__name__}]: {exc}")
+            return
         if exc is not None:
             self.log(f"ERROR [{type(exc).__name__}]: {exc}")
             audit(f"{title}: {type(exc).__name__}", logging.ERROR)
