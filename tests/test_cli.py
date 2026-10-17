@@ -180,23 +180,20 @@ class DetectTests(CliTestCase):
         self.assertEqual(data["method"], "boot-signature")
         self.assertTrue(os.path.isabs(data["iso"]))
 
-    def test_uses_engine_detector_when_available(self):
+    def test_uses_the_content_detector(self):
         win_named = self.make_iso("win-looking.iso", hybrid=False)
-        with mock.patch.object(app, "detect_iso_kind", create=True, return_value="linux") as detector:
+        with mock.patch.object(app, "detect_iso_kind", return_value="linux") as detector:
             code, out, _err = run_main(["detect", win_named, "--json"])
         detector.assert_called_once_with(win_named)
         self.assertEqual(json.loads(out)["kind"], "linux")
         self.assertEqual(json.loads(out)["method"], "content")
 
-    def test_engine_detector_failure_falls_back_to_the_boot_signature(self):
+    def test_an_unknown_content_result_falls_back_to_the_boot_signature(self):
         hybrid = self.make_iso("ubuntu.iso", hybrid=True)
         plain = self.make_iso("windows.iso", hybrid=False)
-        for result in (RuntimeError("boom"), "unknown", None):
-            with self.subTest(result=result):
-                kwargs = {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
-                with mock.patch.object(app, "detect_iso_kind", create=True, **kwargs):
-                    self.assertEqual(run_main(["detect", hybrid])[1], "linux\n")
-                    self.assertEqual(run_main(["detect", plain])[1], "unknown\n")
+        with mock.patch.object(app, "detect_iso_kind", return_value="unknown"):
+            self.assertEqual(run_main(["detect", hybrid])[1], "linux\n")
+            self.assertEqual(run_main(["detect", plain])[1], "unknown\n")
 
     def test_missing_file(self):
         code, out, err = run_main(["detect", self.path("nope.iso")])
@@ -289,7 +286,7 @@ class WriteValidationTests(CliTestCase):
 
     def test_explicit_mode_overrides_detection_with_a_warning(self):
         win = self.make_iso("win11.iso", hybrid=True)
-        with mock.patch.object(app, "detect_iso_kind", create=True, return_value="windows"):
+        with mock.patch.object(app, "detect_iso_kind", return_value="windows"):
             code, out, err = run_main(self.write_args(win, "--dry-run", "--mode", "linux"))
         self.assertEqual(code, 0)
         self.assertIn("looks like a windows image", err)
@@ -427,7 +424,7 @@ class WriteRunTests(CliTestCase):
         self.authenticate.assert_not_called()
         self.assertEqual(self.build_usb.call_args[1]["mode"], app.MODE_WINDOWS)
 
-    def test_cancel_event_is_passed_when_the_engine_supports_it(self):
+    def test_cancel_event_is_passed_to_the_engine(self):
         def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, cancel_event=None,
                    eject=True):
             engine.seen = cancel_event
@@ -437,13 +434,6 @@ class WriteRunTests(CliTestCase):
             self.assertEqual(self.run_write()[0], 0)
         self.assertTrue(hasattr(engine.seen, "set"))
         self.assertFalse(engine.seen.is_set())
-
-    def test_cancel_event_is_not_passed_when_the_engine_lacks_it(self):
-        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, eject=True):
-            return True
-
-        with mock.patch.object(app, "build_usb", engine):
-            self.assertEqual(self.run_write()[0], 0)
 
     def test_json_result_on_success(self):
         code, out, err = self.run_write("--json")
@@ -489,14 +479,6 @@ class WriteRunTests(CliTestCase):
         self.assertIn("Verification FAILED", result["error"])
         self.assertEqual(result["exit_code"], 3)
         self.assertIn("Verification FAILED", err)
-
-    def test_verification_error_class_is_recognised_when_the_engine_defines_one(self):
-        class VerificationError(RuntimeError):
-            pass
-
-        self.build_usb.side_effect = VerificationError("drive differs")
-        with mock.patch.object(app, "VerificationError", VerificationError, create=True):
-            self.assertEqual(self.run_write()[0], 3)
 
     def test_engine_errors_exit_1_without_traceback(self):
         for exc in (RuntimeError("Privileged command failed"), ValueError("bad value"), KeyError("oops"),
@@ -559,14 +541,6 @@ class WriteRunTests(CliTestCase):
         self.build_usb.side_effect = engine
         self.assertEqual(self.run_write()[0], 130)
 
-    def test_sigint_without_engine_support_interrupts_immediately(self):
-        def engine(iso, dev, log, priv, expected_size=None, mode="windows", progress=None, eject=True):
-            os.kill(os.getpid(), signal.SIGINT)
-            raise AssertionError("not reached")
-
-        with mock.patch.object(app, "build_usb", engine):
-            self.assertEqual(self.run_write()[0], 130)
-
     def test_privilege_failure_stops_before_the_engine(self):
         self.authenticate.side_effect = RuntimeError("Could not obtain administrator privileges")
         code, _out, err = self.run_write()
@@ -590,25 +564,6 @@ class WriteRunTests(CliTestCase):
         self.assertIn("Copying files...", err)
         _code, _out, verbose_err = self.run_write("--verbose")
         self.assertIn("rsync noise line", verbose_err)
-
-
-class EngineKwargsTests(unittest.TestCase):
-    def test_detection(self):
-        def with_it(a, cancel_event=None):
-            return a
-
-        def without_it(a):
-            return a
-
-        def with_kwargs(a, **kw):
-            return a
-
-        with mock.patch.object(app, "build_usb", with_it):
-            self.assertEqual(app._engine_kwargs("EVT"), ({"cancel_event": "EVT"}, True))
-        with mock.patch.object(app, "build_usb", without_it):
-            self.assertEqual(app._engine_kwargs("EVT"), ({}, False))
-        with mock.patch.object(app, "build_usb", with_kwargs):
-            self.assertEqual(app._engine_kwargs("EVT"), ({"cancel_event": "EVT"}, True))
 
 
 class _FakeStream(io.StringIO):

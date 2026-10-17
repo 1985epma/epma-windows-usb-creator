@@ -50,7 +50,6 @@ import errno
 import filecmp
 import hashlib
 import http.client
-import inspect
 import json
 import logging
 import logging.handlers
@@ -5292,19 +5291,14 @@ def cli_sha256_file(path, progress=None, chunk=SHA256_CHUNK):
 def cli_detect_kind(iso_path):
     """Return (kind, method): kind is one of the ISO_KIND_* values (windows, linux, chromeos or unknown).
 
-    Uses detect_iso_kind() when the engine provides it (reads the ISO), then the hybrid-image
-    boot signature. The FILE NAME is never used: a guess from the name could select the
-    destructive Windows mode for an unrelated image ("darwin-linux.img" contains "win"), so
-    content that cannot be recognised stays "unknown" and the user must pass --mode.
+    Uses detect_iso_kind() (reads the ISO), then the hybrid-image boot signature. The FILE NAME is never
+    used: a guess from the name could select the destructive Windows mode for an unrelated image
+    ("darwin-linux.img" contains "win"), so content that cannot be recognised stays "unknown" and the
+    user must pass --mode.
     """
-    detector = globals().get("detect_iso_kind")
-    if callable(detector):
-        try:
-            kind = detector(iso_path)
-        except Exception:
-            kind = None
-        if isinstance(kind, str) and kind.lower() in KIND_MODE:
-            return kind.lower(), "content"
+    kind = detect_iso_kind(iso_path)  # never raises
+    if kind in KIND_MODE:
+        return kind, "content"
     try:
         validate_hybrid_iso(iso_path)
         return ISO_KIND_LINUX, "boot-signature"
@@ -5317,9 +5311,7 @@ def _is_interactive():
 
 
 def _is_verification_failure(exc):
-    cls = globals().get("VerificationError")
-    if isinstance(cls, type) and isinstance(exc, cls):
-        return True
+    """True for the engine's "Verification FAILED" / "could not complete the verification" errors."""
     text = str(exc).lower()
     return "verification failed" in text or "could not complete the verification" in text
 
@@ -5355,17 +5347,6 @@ def _print_plan(plan, to_stdout):
     emit("  Steps:")
     for i, step in enumerate(plan["steps"], 1):
         emit(f"    {i}. {step}")
-
-
-def _engine_kwargs(cancel_event):
-    """Pass cancel_event to build_usb only when the engine accepts it."""
-    try:
-        params = list(inspect.signature(build_usb).parameters.values())
-    except (TypeError, ValueError):
-        return {}, False
-    if any(p.name == "cancel_event" or p.kind is p.VAR_KEYWORD for p in params):
-        return {"cancel_event": cancel_event}, True
-    return {}, False
 
 
 def _list_disks():
@@ -5575,11 +5556,10 @@ def _run_write(args, plan, result):
     progress = CliProgress()
     log = CliLogger(progress, verbose=args.verbose)
     cancel = threading.Event()
-    kwargs, supports_cancel = _engine_kwargs(cancel)
     state = {"interrupted": False}
 
     def on_sigint(_signum, _frame):
-        if state["interrupted"] or not supports_cancel:
+        if state["interrupted"]:
             raise KeyboardInterrupt
         state["interrupted"] = True
         cancel.set()
@@ -5599,7 +5579,7 @@ def _run_write(args, plan, result):
         pin_target_identity(plan["disk"]["id"], plan.get("identity"))
         ejected = build_usb(plan["iso"], plan["disk"]["id"], log, priv,
                             expected_size=plan["disk"].get("size"), mode=plan["mode"],
-                            progress=progress, eject=plan["eject"], **kwargs)
+                            progress=progress, eject=plan["eject"], cancel_event=cancel)
     except KeyboardInterrupt as e:
         state["interrupted"] = True
         failure = e
