@@ -272,7 +272,7 @@ jobs:
           if [ "$PRE" = "true" ]; then FLAGS+=(--prerelease); fi
 
           gh release create "$VERSAO" \
-            --title "EPMA USB Creator $VERSAO" \
+            --title "EPMA USB CREATOR $VERSAO" \
             --notes-file notas.md \
             "${FLAGS[@]}" \
             pacote/win11_usb_creator.py \

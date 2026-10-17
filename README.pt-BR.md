@@ -14,6 +14,8 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPLv3-blue)
 ![Plataformas](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
+[![Release](https://img.shields.io/github/v/release/1985epma/epma-windows-usb-creator)](https://github.com/1985epma/epma-windows-usb-creator/releases/latest)
+[![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
 
 <p align="center">
   <img src="docs/images/interface.png" alt="Janela do EPMA USB CREATOR: quatro cartões de tipo de imagem (Google Chrome, Windows 11, Linux, Other ISO), a lista de pendrives, o arquivo da imagem com a conferência SHA-256 e o botão Create Bootable USB Drive" width="620">
@@ -25,6 +27,7 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 ## Índice
 
 - [Recursos](#recursos)
+- [Novidades da 1.1.0](#novidades-da-110)
 - [Como funciona](#como-funciona)
 - [Requisitos](#requisitos)
 - [Instalação](#instalação)
@@ -57,6 +60,18 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos quatro cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela.
+
+## Novidades da 1.1.0
+
+- **Uma janela só, com quatro cartões** (Google Chrome, Windows 11, Linux, Other ISO), em vez de telas separadas.
+- **ChromeOS Flex**: baixado do Google, extraído com segurança e gravado no pendrive.
+- **Gravação verificada**: o pendrive é relido e comparado antes de ser ejetado, e o eject é confiável.
+- **Modo linha de comando** com `--dry-run`, saída JSON e códigos de saída documentados.
+- **Mais proteção contra apagar o disco errado**: modelo e volumes exibidos, confirmação digitada para discos de risco, reconferência do número de série, dependências checadas antes de apagar qualquer coisa.
+- **Ajuda integrada** (**F1**) e botão **Cancel** para a operação inteira.
+- Funciona em Python até a versão **3.15**.
+
+Todas as mudanças estão no [CHANGELOG](CHANGELOG.md); os downloads ficam na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases).
 
 ## Como funciona
 
@@ -116,6 +131,19 @@ O Homebrew instala sozinho o `wimlib` e um Python com Tkinter, então não há
 mais nada para instalar. O `brew trust` é exigido pelo Homebrew para qualquer
 tap de terceiros — é uma confirmação única de que você aceita código deste
 tap.
+
+### A partir de um release
+
+Cada [release](https://github.com/1985epma/epma-windows-usb-creator/releases) traz o programa, os checksums e a lista de componentes (SBOM). Baixe, confira e execute:
+
+```bash
+V=v1.1.0
+curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/win11_usb_creator.py
+curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/SHA256SUMS.txt
+grep ' win11_usb_creator.py$' SHA256SUMS.txt | shasum -a 256 -c -          # deve imprimir: OK
+gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator   # prova que o GitHub o gerou a partir deste repositório
+python3 win11_usb_creator.py
+```
 
 ### A partir do código-fonte
 
@@ -322,4 +350,4 @@ O texto completo da licença está em [LICENSE](LICENSE) e também disponível e
 
 ---
 
-> **Aviso:** Windows e Windows 11 são marcas registradas da Microsoft Corporation. Este projeto não é afiliado à Microsoft. A ISO é baixada exclusivamente dos servidores oficiais da Microsoft, e seu uso está sujeito aos termos de licenciamento da Microsoft.
+> **Aviso:** Windows e Windows 11 são marcas registradas da Microsoft Corporation. Google, Chrome, ChromeOS e ChromeOS Flex são marcas da Google LLC. Este projeto não é afiliado à Microsoft nem ao Google. A ISO é baixada exclusivamente dos servidores oficiais da Microsoft, e seu uso está sujeito aos termos de licenciamento da Microsoft.

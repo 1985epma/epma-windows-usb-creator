@@ -11,7 +11,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ## [Unreleased]
 
-## [1.1.0] - unreleased
+## [1.1.0] - 2026-10-17
 
 ### Added
 

@@ -11,6 +11,8 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 ![License](https://img.shields.io/badge/license-GPLv3-blue)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
+[![Release](https://img.shields.io/github/v/release/1985epma/epma-windows-usb-creator)](https://github.com/1985epma/epma-windows-usb-creator/releases/latest)
+[![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
 
 <p align="center">
   <img src="docs/images/interface.png" alt="EPMA USB CREATOR window: four image-type cards (Google Chrome, Windows 11, Linux, Other ISO), the USB drive list, the image file with its SHA-256 check, and the Create Bootable USB Drive button" width="620">
@@ -22,6 +24,7 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 ## Table of contents
 
 - [Features](#features)
+- [New in 1.1.0](#new-in-110)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -54,6 +57,18 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its four cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
 - **Real-time log** of every command executed, inside the application window.
+
+## New in 1.1.0
+
+- **One window, four cards** (Google Chrome, Windows 11, Linux, Other ISO), instead of separate screens.
+- **ChromeOS Flex**: downloaded from Google, extracted safely and written to the drive.
+- **Verified writes**: the drive is read back and compared before it is ejected, and the eject is reliable.
+- **Command line mode** with `--dry-run`, JSON output and documented exit codes.
+- **More protection against erasing the wrong disk**: model and volumes shown, typed confirmation for risky drives, serial-number re-check, dependencies checked before anything is erased.
+- **Built-in help** (**F1**) and a **Cancel** button for the whole operation.
+- Runs on Python up to **3.15**.
+
+Every change is listed in the [CHANGELOG](CHANGELOG.md); downloads are on the [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases) page.
 
 ## How it works
 
@@ -113,6 +128,19 @@ Homebrew pulls in `wimlib` and a Python build with Tkinter automatically, so
 there is nothing else to install. `brew trust` is required by Homebrew for any
 third-party tap — it is a one-time confirmation that you accept code from this
 tap.
+
+### From a release
+
+Each [release](https://github.com/1985epma/epma-windows-usb-creator/releases) has the program, its checksums and a software bill of materials. Download, check and run:
+
+```bash
+V=v1.1.0
+curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/win11_usb_creator.py
+curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/SHA256SUMS.txt
+grep ' win11_usb_creator.py$' SHA256SUMS.txt | shasum -a 256 -c -          # must print: OK
+gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator   # proves GitHub built it from this repository
+python3 win11_usb_creator.py
+```
 
 ### From source
 
@@ -319,4 +347,4 @@ The full license text is in [LICENSE](LICENSE) and is also available at <https:/
 
 ---
 
-> **Disclaimer:** Windows and Windows 11 are registered trademarks of Microsoft Corporation. This project is not affiliated with Microsoft. The ISO is downloaded exclusively from Microsoft's official servers, and its use is subject to Microsoft's licensing terms.
+> **Disclaimer:** Windows and Windows 11 are registered trademarks of Microsoft Corporation. Google, Chrome, ChromeOS and ChromeOS Flex are trademarks of Google LLC. This project is not affiliated with Microsoft or Google. The ISO is downloaded exclusively from Microsoft's official servers, and its use is subject to Microsoft's licensing terms.
