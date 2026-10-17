@@ -176,6 +176,283 @@ CRITICAL_MOUNTPOINTS = ("/", "/boot", "/boot/efi", "/home", "/usr", "/var", "/et
 _audit_logger = None
 
 
+# ============================================================
+# Internationalization (GUI only)
+#
+# English is the default and the source language. Brazilian Portuguese is looked up in
+# PT_BR (english text -> portuguese text); an unknown text falls back to the English one,
+# so a missing translation can never break the program. Only text the GUI shows to the
+# user goes through _(): engine and CLI output, exception messages, the audit log, shell
+# scripts and anything code or tests match by substring stay in English on purpose.
+# Placeholders use str.format syntax and must be identical in both languages:
+# translate first, then format:  _("Hello {name}").format(name=name)
+# Force a language with EPMA_LANG=pt (or en); otherwise LC_ALL / LC_MESSAGES / LANG decide.
+# ============================================================
+ENV_LANG = "EPMA_LANG"
+LANG_EN = "en"
+LANG_PT = "pt"
+
+
+def detect_language(env=None):
+    """"pt" for Brazilian Portuguese, otherwise "en". `env` is a mapping (default: os.environ).
+
+    EPMA_LANG wins (en, pt, pt-BR, case-insensitive; any other value means English). Without
+    it the first non-empty of LC_ALL, LC_MESSAGES and LANG decides, as in POSIX: a value
+    starting with "pt" (pt_BR.UTF-8, pt_PT, pt) is Portuguese; C, POSIX, en_US... are English.
+    """
+    env = os.environ if env is None else env
+    forced = (env.get(ENV_LANG) or "").strip()
+    if forced:
+        return LANG_PT if forced.lower().startswith("pt") else LANG_EN
+    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
+        value = (env.get(name) or "").strip()
+        if value:
+            return LANG_PT if value.lower().startswith("pt") else LANG_EN
+    return LANG_EN
+
+
+ACTIVE_LANGUAGE = detect_language()  # decided once, at import
+
+PT_BR = {
+    # ----- tabs and tab 1 (download) -----
+    "1. Download ISO": "1. Baixar a ISO",
+    "2. Create USB drive": "2. Criar o pendrive",
+    "Microsoft only releases the direct ISO link after you pick the edition and "
+    "language on the official site. Steps:\n\n"
+    "1. Click 'Open Microsoft's official page' below.\n"
+    "2. Under 'Download Windows 11 Disk Image (ISO)', pick the\n"
+    "   'Windows 11 (multi-edition ISO)' edition and click Download.\n"
+    "3. Choose the language and confirm.\n"
+    "4. Right-click the blue 64-bit download button and choose\n"
+    "   'Copy Link Address' (do NOT click it to download directly in the browser).\n"
+    "5. Paste the link below and click 'Download ISO'.":
+        "A Microsoft só libera o link direto da ISO depois que você escolhe a edição e "
+        "o idioma no site oficial. Passo a passo:\n\n"
+        "1. Clique em 'Abrir a página oficial da Microsoft' abaixo.\n"
+        "2. Em 'Baixar a imagem de disco do Windows 11 (ISO)', escolha a\n"
+        "   edição 'Windows 11 (ISO de várias edições)' e clique em Baixar.\n"
+        "3. Escolha o idioma e confirme.\n"
+        "4. Clique com o botão direito no botão azul de download de 64 bits e escolha\n"
+        "   'Copiar endereço do link' (NÃO clique nele para baixar direto pelo navegador).\n"
+        "5. Cole o link abaixo e clique em 'Baixar a ISO'.",
+    "Open Microsoft's official page": "Abrir a página oficial da Microsoft",
+    "Direct ISO link (HTTPS only):": "Link direto da ISO (somente HTTPS):",
+    "Expected SHA-256 checksum (optional — leave empty to skip verification):":
+        "Checksum SHA-256 esperado (opcional — deixe vazio para não verificar):",
+    "Download ISO": "Baixar a ISO",
+    "Cancel": "Cancelar",
+    "OK": "OK",
+    "Already downloaded the ISO manually in your browser?": "Já baixou a ISO manualmente pelo navegador?",
+    "Select existing ISO file...": "Selecionar um arquivo ISO existente...",
+    "No ISO selected yet.": "Nenhuma ISO selecionada ainda.",
+    "Select the Windows 11 ISO file": "Selecione o arquivo ISO do Windows 11",
+    "ISO image": "Imagem ISO",
+    "Save ISO as": "Salvar a ISO como",
+    "Selected ISO: {path}": "ISO selecionada: {path}",
+    "{done} / {total} ({pct:.1f}%) — {speed}/s — ~{eta}s left":
+        "{done} / {total} ({pct:.1f}%) — {speed}/s — faltam ~{eta}s",
+    "{done} downloaded — {speed}/s": "{done} baixados — {speed}/s",
+    "Download complete.": "Download concluído.",
+    "Download failed.": "O download falhou.",
+    "Download error": "Erro no download",
+    "Invalid link": "Link inválido",
+    "Invalid checksum": "Checksum inválido",
+    "A SHA-256 checksum must be exactly 64 characters using only 0-9 and a-f.\n\n"
+    "Leave the field empty if you do not have one.":
+        "Um checksum SHA-256 deve ter exatamente 64 caracteres, usando apenas 0-9 e a-f.\n\n"
+        "Deixe o campo vazio se você não tiver um.",
+    "Unrecognised download server": "Servidor de download não reconhecido",
+    "This link points to '{host}', which is not a known Microsoft download server.\n\n"
+    "Downloading a Windows image from an unofficial source is a real risk: a tampered "
+    "image would install a compromised Windows on the target computer, and you would "
+    "have no way of noticing.\n\n"
+    "Continue anyway?":
+        "Este link aponta para '{host}', que não é um servidor de download conhecido da Microsoft.\n\n"
+        "Baixar uma imagem do Windows de uma fonte não oficial é um risco real: uma imagem "
+        "adulterada instalaria um Windows comprometido no computador de destino, e você "
+        "não teria como perceber.\n\n"
+        "Continuar mesmo assim?",
+    "Done": "Concluído",
+    "The SHA-256 checksum matches the value you supplied — the file is intact.":
+        "O checksum SHA-256 confere com o valor informado — o arquivo está íntegro.",
+    "SHA-256 of this file:\n{sha256}\n\n"
+    "No checksum was supplied, so authenticity was NOT verified. If Microsoft "
+    "publishes a checksum for this image, compare it with the value above before "
+    "writing the USB drive.":
+        "SHA-256 deste arquivo:\n{sha256}\n\n"
+        "Nenhum checksum foi informado, então a autenticidade NÃO foi verificada. Se a Microsoft "
+        "publicar um checksum para esta imagem, compare-o com o valor acima antes de "
+        "gravar o pendrive.",
+    "ISO downloaded to:\n{path}": "ISO baixada em:\n{path}",
+    "SHA-256 of the downloaded file: {sha256}": "SHA-256 do arquivo baixado: {sha256}",
+    "Image type preselected {how}: {image}.": "Tipo de imagem pré-selecionado {how}: {image}.",
+    "from the file name (the content could not be identified)":
+        "pelo nome do arquivo (não foi possível identificar o conteúdo)",
+    "from the content of the ISO": "pelo conteúdo da ISO",
+    "Linux / other hybrid ISO": "Linux / outra ISO híbrida",
+
+    # ----- ISO SHA-256 panel -----
+    "Verify the selected ISO (SHA-256)": "Verificar a ISO selecionada (SHA-256)",
+    "Expected checksum (optional) — paste the hash or the whole line from SHA256SUMS:":
+        "Checksum esperado (opcional) — cole o hash ou a linha inteira do SHA256SUMS:",
+    "Calculate SHA-256": "Calcular o SHA-256",
+    "Select an ISO file first.": "Selecione um arquivo ISO primeiro.",
+    "Calculating...": "Calculando...",
+    "Calculating... {pct:.0f}% ({done} / {total})": "Calculando... {pct:.0f}% ({done} / {total})",
+    "Calculating SHA-256 of {name}...": "Calculando o SHA-256 de {name}...",
+    "SHA-256: {digest}": "SHA-256: {digest}",
+    "SHA-256 of {name}: {digest}": "SHA-256 de {name}: {digest}",
+    "Expected SHA-256: {expected}": "SHA-256 esperado: {expected}",
+    "No expected checksum given: compare the value above yourself.":
+        "Nenhum checksum esperado foi informado: compare o valor acima por conta própria.",
+    "MATCH — the file is intact and identical to the published one.":
+        "CONFERE — o arquivo está íntegro e idêntico ao publicado.",
+    "MISMATCH — this is NOT the published file. Do not use it.":
+        "NÃO CONFERE — este NÃO é o arquivo publicado. Não use este arquivo.",
+    "Checksum comparison: {outcome}": "Comparação do checksum: {outcome}",
+    "UNVERIFIED": "NÃO VERIFICADO",
+    "MATCH": "CONFERE",
+    "MISMATCH": "NÃO CONFERE",
+    "Could not read the file ({reason}).": "Não foi possível ler o arquivo ({reason}).",
+
+    # ----- tab 2 (create the drive) -----
+    "Platform: {name}": "Plataforma: {name}",
+    "ISO: (none selected)": "ISO: (nenhuma selecionada)",
+    "ISO: {path}": "ISO: {path}",
+    "Image type:": "Tipo de imagem:",
+    "Windows 11 (GPT + FAT32, files copied)": "Windows 11 (GPT + FAT32, arquivos copiados)",
+    "Linux / other hybrid ISO (written directly)": "Linux / outra ISO híbrida (gravada diretamente)",
+    "All dependencies OK": "Todas as dependências estão OK",
+    "Missing: {tools}": "Faltando: {tools}",
+    "Install missing dependencies": "Instalar as dependências que faltam",
+    "Refresh USB drives list": "Atualizar a lista de pendrives",
+    "Could not list disks: {error}": "Não foi possível listar os discos: {error}",
+    "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
+    "Double-check that this is really your USB drive before continuing. Only USB "
+    "drives are listed — the system's internal disk is never shown.":
+        "ATENÇÃO: TODOS OS DADOS da unidade selecionada serão apagados PERMANENTEMENTE.\n"
+        "Confira bem se este é mesmo o seu pendrive antes de continuar. Só unidades USB "
+        "são listadas — o disco interno do sistema nunca aparece.",
+    "You'll be asked for your administrator (sudo) password to format the drive.":
+        "Será pedida a sua senha de administrador (sudo) para formatar a unidade.",
+    "Linux mode on macOS asks for your administrator password to write the drive.":
+        "O modo Linux no macOS pede a sua senha de administrador para gravar a unidade.",
+    "Create Bootable USB Drive": "Criar o pendrive bootável",
+
+    # ----- confirmations and creation -----
+    "Windows 11": "Windows 11",
+    "the selected Linux image": "a imagem Linux selecionada",
+    "This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.":
+        "Isto vai APAGAR PERMANENTEMENTE todos os dados de /dev/{id} e gravar {what} nele.",
+    "Confirm erasing this drive": "Confirmar o apagamento desta unidade",
+    "Final confirmation": "Confirmação final",
+    "Continue?": "Continuar?",
+    "Drive: /dev/{id}": "Unidade: /dev/{id}",
+    "Model: {model}": "Modelo: {model}",
+    "Size: {size}": "Tamanho: {size}",
+    "Contents: could not be read": "Conteúdo: não foi possível ler",
+    "Contents: no volumes found (the drive looks empty)": "Conteúdo: nenhum volume encontrado (a unidade parece vazia)",
+    "Contents that will be DESTROYED:": "Conteúdo que será DESTRUÍDO:",
+    "  - ... and {count} more": "  - ... e mais {count}",
+    "{size} used": "{size} usados",
+    "not mounted, usage unknown": "não montado, uso desconhecido",
+    "(unnamed)": "(sem nome)",
+    "This drive does not look like a spare USB stick:": "Esta unidade não parece um pendrive sobressalente:",
+    "It is large ({size}); installer sticks are usually much smaller. "
+    "This may be an external hard disk or SSD.":
+        "Ela é grande ({size}); pendrives de instalação costumam ser bem menores. "
+        "Pode ser um HD ou SSD externo.",
+    "Its model name ({model}) suggests an external hard disk or SSD.":
+        "O nome do modelo ({model}) sugere um HD ou SSD externo.",
+    "What is stored on it could not be read, so there is no way to tell what would be lost.":
+        "Não foi possível ler o que está gravado nela, então não há como saber o que seria perdido.",
+    "It holds a lot of data ({size} in use).": "Ela guarda muitos dados ({size} em uso).",
+    "Volume name(s) suggest personal data or backups: {names}.":
+        "O(s) nome(s) de volume sugere(m) dados pessoais ou backups: {names}.",
+    "It has {count} volumes, which is unusual for a USB stick.":
+        "Ela tem {count} volumes, o que é incomum para um pendrive.",
+    "To confirm, type the drive identifier exactly as shown ({expected}):":
+        "Para confirmar, digite o identificador da unidade exatamente como aparece ({expected}):",
+    "Erase this drive": "Apagar esta unidade",
+    "Administrator access is required to write /dev/{id}.":
+        "É necessário acesso de administrador para gravar em /dev/{id}.",
+    "Canceled: administrator password was not provided. The drive was not modified.":
+        "Cancelado: a senha de administrador não foi informada. A unidade não foi modificada.",
+    "It was verified against the ISO and ejected — you can unplug it now.":
+        "Ele foi verificado em relação à ISO e ejetado — já pode ser removido.",
+    "It was verified against the ISO, but could not be ejected automatically. "
+    "Eject it from the file manager before unplugging.":
+        "Ele foi verificado em relação à ISO, mas não pôde ser ejetado automaticamente. "
+        "Ejete-o pelo gerenciador de arquivos antes de removê-lo.",
+    "Bootable USB drive created successfully!": "Pendrive bootável criado com sucesso!",
+    "Canceled": "Cancelado",
+    "The operation was canceled.\n\nThe USB drive was left incomplete and unusable. "
+    "Create it again before using it.":
+        "A operação foi cancelada.\n\nO pendrive ficou incompleto e inutilizável. "
+        "Crie-o novamente antes de usá-lo.",
+    "Canceled. The drive was left unusable; create it again before use.":
+        "Cancelado. A unidade ficou inutilizável; crie-a novamente antes de usar.",
+    "Cancel the operation?": "Cancelar a operação?",
+    "Canceling now will leave the USB drive incomplete and UNUSABLE until it is created "
+    "again.\n\nDo you really want to cancel?":
+        "Cancelar agora deixará o pendrive incompleto e INUTILIZÁVEL até que ele seja criado "
+        "novamente.\n\nDeseja mesmo cancelar?",
+    "Cancel requested: stopping safely...": "Cancelamento solicitado: parando com segurança...",
+
+    # ----- progress -----
+    "Preparing the drive...": "Preparando a unidade...",
+    "Writing the image...": "Gravando a imagem...",
+    "Verifying the written image...": "Verificando a imagem gravada...",
+    "Verifying the copied files...": "Verificando os arquivos copiados...",
+    "Verifying the install image...": "Verificando a imagem de instalação...",
+    "Copying files...": "Copiando os arquivos...",
+    "Copying the install image...": "Copiando a imagem de instalação...",
+    "Hashing the ISO...": "Calculando o hash da ISO...",
+    "Splitting the install image...": "Dividindo a imagem de instalação...",
+    "Flushing data to the drive...": "Gravando os dados pendentes na unidade...",
+    "Written": "Gravado",
+    "{stage} (this can take a few minutes)": "{stage} (isto pode levar alguns minutos)",
+    " — {speed}/s — ~{minutes}m{seconds:02d}s left": " — {speed}/s — faltam ~{minutes}m{seconds:02d}s",
+    " — calculating...": " — calculando...",
+    "Done — 100%": "Concluído — 100%",
+    "Canceled.": "Cancelado.",
+    "Failed.": "Falhou.",
+
+    # ----- administrator password and errors -----
+    "Administrator password": "Senha de administrador",
+    "That password was not accepted. Try again.\n\n": "Essa senha não foi aceita. Tente novamente.\n\n",
+    "Enter your sudo/administrator password to partition and format the drive.\n"
+    "It is used only to run local disk commands and is never stored or sent anywhere.":
+        "Digite a sua senha de administrador (sudo) para particionar e formatar a unidade.\n"
+        "Ela é usada apenas para executar comandos de disco locais e nunca é guardada nem enviada a lugar nenhum.",
+    "{reason}\n\nEnter your administrator (sudo) password.\n"
+    "It is used only to run local disk commands and is never stored or sent anywhere.":
+        "{reason}\n\nDigite a sua senha de administrador (sudo).\n"
+        "Ela é usada apenas para executar comandos de disco locais e nunca é guardada nem enviada a lugar nenhum.",
+    "Wrong password": "Senha incorreta",
+    "That password was not accepted. Please try again.": "Essa senha não foi aceita. Tente novamente.",
+    "Too many incorrect attempts. Nothing was changed.": "Muitas tentativas incorretas. Nada foi alterado.",
+    "Error": "Erro",
+    "Unexpected error": "Erro inesperado",
+    "The operation could not be completed.\n\nReason: {reason}\n\n"
+    "The full technical detail was written to the log box below and to the "
+    "audit log at:\n{path}":
+        "Não foi possível concluir a operação.\n\nMotivo: {reason}\n\n"
+        "O detalhe técnico completo foi gravado na caixa de log abaixo e no "
+        "log de auditoria em:\n{path}",
+}
+
+
+def _(text):
+    """The text in the active language; unknown texts (and English) come back unchanged."""
+    if ACTIVE_LANGUAGE == LANG_PT:
+        return PT_BR.get(text, text)
+    return text
+
+
+tr = _  # alias for code where "_" is used as a throwaway variable
+
+
 def human_size(n):
     n = float(n)
     for unit in ("B", "KB", "MB", "GB", "TB"):
@@ -943,8 +1220,8 @@ def ask_password(parent, title, prompt):
 
     row = ttk.Frame(top)
     row.pack(padx=16, pady=14, anchor="e")
-    ttk.Button(row, text="Cancel", command=cancel).pack(side="left", padx=(0, 8))
-    ttk.Button(row, text="OK", command=accept).pack(side="left")
+    ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
+    ttk.Button(row, text=_("OK"), command=accept).pack(side="left")
     top.bind("<Return>", accept)
     top.bind("<Escape>", cancel)
     top.protocol("WM_DELETE_WINDOW", cancel)
@@ -985,13 +1262,13 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
 
     ttk.Label(top, text=message, justify="left", wraplength=520).pack(padx=16, pady=(16, 8), anchor="w")
     if reasons:
-        ttk.Label(top, text="This drive does not look like a spare USB stick:", foreground="#c62828",
+        ttk.Label(top, text=_("This drive does not look like a spare USB stick:"), foreground="#c62828",
                   justify="left").pack(padx=16, anchor="w")
         for reason in reasons:
             ttk.Label(top, text="\u2022 " + reason, foreground="#c62828", justify="left",
                       wraplength=500).pack(padx=(28, 16), anchor="w")
-    ttk.Label(top, text=f"To confirm, type the drive identifier exactly as shown ({expected}):",
-              justify="left", wraplength=520).pack(padx=16, pady=(12, 4), anchor="w")
+    ttk.Label(top, text=_("To confirm, type the drive identifier exactly as shown ({expected}):").format(
+        expected=expected), justify="left", wraplength=520).pack(padx=16, pady=(12, 4), anchor="w")
     entry = ttk.Entry(top, width=30)
     entry.pack(padx=16, anchor="w")
 
@@ -1008,8 +1285,8 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
 
     row = ttk.Frame(top)
     row.pack(padx=16, pady=14, anchor="e")
-    ttk.Button(row, text="Cancel", command=cancel).pack(side="left", padx=(0, 8))
-    erase_btn = ttk.Button(row, text="Erase this drive", command=accept, state="disabled")
+    ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
+    erase_btn = ttk.Button(row, text=_("Erase this drive"), command=accept, state="disabled")
     erase_btn.pack(side="left")
     entry.bind("<KeyRelease>", lambda _e: erase_btn.config(state="normal" if matches() else "disabled"))
     top.bind("<Return>", accept)
@@ -1057,16 +1334,16 @@ class PrivilegeHelper:
     def _ask_password_on_main_thread(self, retry=False):
         result = {}
         done = threading.Event()
-        prefix = "That password was not accepted. Try again.\n\n" if retry else ""
+        prefix = _("That password was not accepted. Try again.\n\n") if retry else ""
 
         def ask():
             try:
                 result["pw"] = ask_password(
                     self.app,
-                    "Administrator password",
+                    _("Administrator password"),
                     prefix +
-                    "Enter your sudo/administrator password to partition and format the drive.\n"
-                    "It is used only to run local disk commands and is never stored or sent anywhere.",
+                    _("Enter your sudo/administrator password to partition and format the drive.\n"
+                      "It is used only to run local disk commands and is never stored or sent anywhere."),
                 )
             finally:
                 done.set()  # never leave the worker thread waiting forever
@@ -1183,9 +1460,10 @@ class PrivilegeHelper:
         for attempt in range(max_attempts):
             pw = ask_password(
                 self.app,
-                "Administrator password",
-                f"{reason}\n\nEnter your administrator (sudo) password.\n"
-                "It is used only to run local disk commands and is never stored or sent anywhere.",
+                _("Administrator password"),
+                _("{reason}\n\nEnter your administrator (sudo) password.\n"
+                  "It is used only to run local disk commands and is never stored or sent anywhere.").format(
+                      reason=reason),
             )
             if pw is None:
                 return False  # canceled
@@ -1194,9 +1472,9 @@ class PrivilegeHelper:
                 pw = None  # the string is not needed any more
                 return True
             if attempt < max_attempts - 1:
-                messagebox.showerror("Wrong password", "That password was not accepted. Please try again.",
+                messagebox.showerror(_("Wrong password"), _("That password was not accepted. Please try again."),
                                      parent=self.app)
-        messagebox.showerror("Wrong password", "Too many incorrect attempts. Nothing was changed.",
+        messagebox.showerror(_("Wrong password"), _("Too many incorrect attempts. Nothing was changed."),
                              parent=self.app)
         return False
 
@@ -1318,18 +1596,27 @@ def identity_mismatch(expected, actual):
     return None
 
 
-def format_volume_line(vol):
-    """One human-readable line describing a volume, e.g. 'Untitled (FAT32, 58.0 GB, 12.3 GB used)'."""
+def _text_for(translate):
+    """`_` when the text is for the GUI, a pass-through for engine/CLI callers (always English)."""
+    return _ if translate else (lambda text: text)
+
+
+def format_volume_line(vol, translate=False):
+    """One human-readable line describing a volume, e.g. 'Untitled (FAT32, 58.0 GB, 12.3 GB used)'.
+
+    `translate=True` is for the GUI dialogs only; the default keeps the English text.
+    """
+    _ = _text_for(translate)
     bits = []
     if vol.get("filesystem"):
         bits.append(str(vol["filesystem"]))
     if vol.get("size"):
         bits.append(human_size(vol["size"]))
     if vol.get("used") is not None:
-        bits.append(f"{human_size(vol['used'])} used")
+        bits.append(_("{size} used").format(size=human_size(vol["used"])))
     elif vol.get("mountpoint") is None:
-        bits.append("not mounted, usage unknown")
-    name = vol.get("name") or "(unnamed)"
+        bits.append(_("not mounted, usage unknown"))
+    name = vol.get("name") or _("(unnamed)")
     return f"{name} ({', '.join(bits)})" if bits else name
 
 
@@ -1352,56 +1639,64 @@ def build_disk_label(dev_path, model, size, volumes):
     return " — ".join(parts)
 
 
-def assess_disk_risk(disk):
+def assess_disk_risk(disk, translate=False):
     """Return (level, reasons): level is 'high' or 'normal'; reasons explain every 'high'.
 
     High means "this does not look like a spare USB stick": it is large, holds a lot of data,
     has a name that suggests backups/personal data, looks like an external HDD/SSD, has many
     partitions, or its contents could not be read. High-risk drives need the identifier typed
     before they can be erased. A disk dict without a 'volumes' key (not inspected at all) is not
-    penalised for that; a 'volumes' of None (inspection failed) is.
+    penalised for that; a 'volumes' of None (inspection failed) is. `translate=True` (GUI dialogs
+    only) words the reasons in the active language; the default keeps them in English.
     """
+    _ = _text_for(translate)
     reasons = []
     size = disk.get("size") or 0
     if size > LARGE_DISK_BYTES:
-        reasons.append(f"It is large ({human_size(size)}); installer sticks are usually much smaller. "
-                       "This may be an external hard disk or SSD.")
+        reasons.append(_("It is large ({size}); installer sticks are usually much smaller. "
+                         "This may be an external hard disk or SSD.").format(size=human_size(size)))
     model = disk.get("model") or ""
     if model and DATA_DRIVE_MODEL_RE.search(model):
-        reasons.append(f"Its model name ({model}) suggests an external hard disk or SSD.")
+        reasons.append(_("Its model name ({model}) suggests an external hard disk or SSD.").format(model=model))
     if "volumes" in disk:
         volumes = disk["volumes"]
         if volumes is None:
-            reasons.append("What is stored on it could not be read, so there is no way to tell what would be lost.")
+            reasons.append(_("What is stored on it could not be read, "
+                             "so there is no way to tell what would be lost."))
         else:
             used = sum(v.get("used") or 0 for v in volumes)
             if used >= SUBSTANTIAL_USED_BYTES:
-                reasons.append(f"It holds a lot of data ({human_size(used)} in use).")
+                reasons.append(_("It holds a lot of data ({size} in use).").format(size=human_size(used)))
             named = [v.get("name") for v in volumes if v.get("name") and DATA_VOLUME_NAME_RE.search(v["name"])]
             if named:
-                reasons.append("Volume name(s) suggest personal data or backups: "
-                               + ", ".join(repr(n) for n in named[:3]) + ".")
+                reasons.append(_("Volume name(s) suggest personal data or backups: {names}.").format(
+                    names=", ".join(repr(n) for n in named[:3])))
             if len(volumes) >= MANY_VOLUMES:
-                reasons.append(f"It has {len(volumes)} volumes, which is unusual for a USB stick.")
+                reasons.append(_("It has {count} volumes, which is unusual for a USB stick.").format(
+                    count=len(volumes)))
     return ("high" if reasons else "normal"), reasons
 
 
-def describe_disk_for_confirmation(disk):
-    """Multi-line summary (model, size, every volume with its used space) for the final confirmation."""
-    lines = [f"Drive: /dev/{disk.get('id')}"]
+def describe_disk_for_confirmation(disk, translate=False):
+    """Multi-line summary (model, size, every volume with its used space) for the final confirmation.
+
+    `translate=True` is for the GUI dialog only; the default keeps the English text.
+    """
+    _ = _text_for(translate)
+    lines = [_("Drive: /dev/{id}").format(id=disk.get("id"))]
     if disk.get("model"):
-        lines.append(f"Model: {disk['model']}")
-    lines.append(f"Size: {human_size(disk.get('size') or 0)}")
+        lines.append(_("Model: {model}").format(model=disk["model"]))
+    lines.append(_("Size: {size}").format(size=human_size(disk.get("size") or 0)))
     volumes = disk.get("volumes")
     if volumes is None:
-        lines.append("Contents: could not be read")
+        lines.append(_("Contents: could not be read"))
     elif not volumes:
-        lines.append("Contents: no volumes found (the drive looks empty)")
+        lines.append(_("Contents: no volumes found (the drive looks empty)"))
     else:
-        lines.append("Contents that will be DESTROYED:")
-        lines.extend("  - " + format_volume_line(v) for v in volumes[:MAX_VOLUMES_SHOWN])
+        lines.append(_("Contents that will be DESTROYED:"))
+        lines.extend("  - " + format_volume_line(v, translate) for v in volumes[:MAX_VOLUMES_SHOWN])
         if len(volumes) > MAX_VOLUMES_SHOWN:
-            lines.append(f"  - ... and {len(volumes) - MAX_VOLUMES_SHOWN} more")
+            lines.append(_("  - ... and {count} more").format(count=len(volumes) - MAX_VOLUMES_SHOWN))
     return "\n".join(lines)
 
 
@@ -2525,14 +2820,14 @@ class App(_TkBase):
         nb.pack(fill="both", expand=True, padx=10, pady=10)
         self.tab1 = ttk.Frame(nb)
         self.tab2 = ttk.Frame(nb)
-        nb.add(self.tab1, text="1. Download ISO")
-        nb.add(self.tab2, text="2. Create USB drive")
+        nb.add(self.tab1, text=_("1. Download ISO"))
+        nb.add(self.tab2, text=_("2. Create USB drive"))
         self._build_tab1()
         self._build_tab2()
 
     def _build_tab1(self):
         f = self.tab1
-        instructions = (
+        instructions = _(
             "Microsoft only releases the direct ISO link after you pick the edition and "
             "language on the official site. Steps:\n\n"
             "1. Click 'Open Microsoft's official page' below.\n"
@@ -2544,11 +2839,11 @@ class App(_TkBase):
             "5. Paste the link below and click 'Download ISO'."
         )
         ttk.Label(f, text=instructions, justify="left").pack(anchor="w", padx=10, pady=(10, 10))
-        ttk.Button(f, text="Open Microsoft's official page", command=self.open_ms_page).pack(anchor="w", padx=10)
+        ttk.Button(f, text=_("Open Microsoft's official page"), command=self.open_ms_page).pack(anchor="w", padx=10)
 
         url_frame = ttk.Frame(f)
         url_frame.pack(fill="x", padx=10, pady=(15, 5))
-        ttk.Label(url_frame, text="Direct ISO link (HTTPS only):").pack(anchor="w")
+        ttk.Label(url_frame, text=_("Direct ISO link (HTTPS only):")).pack(anchor="w")
         self.url_entry = ttk.Entry(url_frame)
         self.url_entry.pack(fill="x", pady=(2, 0))
 
@@ -2556,7 +2851,7 @@ class App(_TkBase):
         sha_frame.pack(fill="x", padx=10, pady=(5, 0))
         ttk.Label(
             sha_frame,
-            text="Expected SHA-256 checksum (optional — leave empty to skip verification):",
+            text=_("Expected SHA-256 checksum (optional — leave empty to skip verification):"),
         ).pack(anchor="w")
         self.sha_entry = ttk.Entry(sha_frame)
         self.sha_entry.pack(fill="x", pady=(2, 0))
@@ -2564,9 +2859,9 @@ class App(_TkBase):
 
         btn_frame = ttk.Frame(f)
         btn_frame.pack(fill="x", padx=10, pady=5)
-        self.download_btn = ttk.Button(btn_frame, text="Download ISO", command=self.start_download)
+        self.download_btn = ttk.Button(btn_frame, text=_("Download ISO"), command=self.start_download)
         self.download_btn.pack(side="left")
-        self.cancel_btn = ttk.Button(btn_frame, text="Cancel", command=self.cancel_download, state="disabled")
+        self.cancel_btn = ttk.Button(btn_frame, text=_("Cancel"), command=self.cancel_download, state="disabled")
         self.cancel_btn.pack(side="left", padx=5)
 
         self.progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
@@ -2575,25 +2870,25 @@ class App(_TkBase):
         self.progress_label.pack(anchor="w", padx=10)
 
         ttk.Separator(f).pack(fill="x", padx=10, pady=15)
-        ttk.Label(f, text="Already downloaded the ISO manually in your browser?").pack(anchor="w", padx=10)
-        ttk.Button(f, text="Select existing ISO file...", command=self.pick_existing_iso).pack(
+        ttk.Label(f, text=_("Already downloaded the ISO manually in your browser?")).pack(anchor="w", padx=10)
+        ttk.Button(f, text=_("Select existing ISO file..."), command=self.pick_existing_iso).pack(
             anchor="w", padx=10, pady=(2, 10)
         )
 
-        self.iso_label = ttk.Label(f, text="No ISO selected yet.", foreground="blue")
+        self.iso_label = ttk.Label(f, text=_("No ISO selected yet."), foreground="blue")
         self.iso_label.pack(anchor="w", padx=10, pady=(5, 10))
 
         # Integrity check of the selected ISO; shown once an ISO is selected (see set_iso).
-        self.iso_check_frame = ttk.LabelFrame(f, text="Verify the selected ISO (SHA-256)")
+        self.iso_check_frame = ttk.LabelFrame(f, text=_("Verify the selected ISO (SHA-256)"))
         ttk.Label(
             self.iso_check_frame,
-            text="Expected checksum (optional) — paste the hash or the whole line from SHA256SUMS:",
+            text=_("Expected checksum (optional) — paste the hash or the whole line from SHA256SUMS:"),
         ).pack(anchor="w", padx=8, pady=(6, 0))
         self.iso_sha_entry = ttk.Entry(self.iso_check_frame)
         self.iso_sha_entry.pack(fill="x", padx=8, pady=(2, 4))
         sha_row = ttk.Frame(self.iso_check_frame)
         sha_row.pack(fill="x", padx=8)
-        self.iso_sha_btn = ttk.Button(sha_row, text="Calculate SHA-256", command=self.calculate_iso_sha256)
+        self.iso_sha_btn = ttk.Button(sha_row, text=_("Calculate SHA-256"), command=self.calculate_iso_sha256)
         self.iso_sha_btn.pack(side="left")
         self.iso_sha_progress = ttk.Progressbar(sha_row, orient="horizontal", mode="determinate")
         self.iso_sha_progress.pack(side="left", fill="x", expand=True, padx=(8, 0))
@@ -2604,50 +2899,52 @@ class App(_TkBase):
 
     def _build_tab2(self):
         f = self.tab2
-        ttk.Label(f, text=f"Platform: {platform_display_name()}", foreground="gray").pack(anchor="w", padx=10, pady=(10, 0))
-        self.iso_label2 = ttk.Label(f, text="ISO: (none selected)")
+        ttk.Label(f, text=_("Platform: {name}").format(name=platform_display_name()),
+                  foreground="gray").pack(anchor="w", padx=10, pady=(10, 0))
+        self.iso_label2 = ttk.Label(f, text=_("ISO: (none selected)"))
         self.iso_label2.pack(anchor="w", padx=10, pady=(0, 5))
 
         mode_frame = ttk.Frame(f)
         mode_frame.pack(fill="x", padx=10, pady=(0, 8))
-        ttk.Label(mode_frame, text="Image type:").pack(side="left")
+        ttk.Label(mode_frame, text=_("Image type:")).pack(side="left")
         self.mode_var = tk.StringVar(value=MODE_WINDOWS)
-        ttk.Radiobutton(mode_frame, text="Windows 11 (GPT + FAT32, files copied)", value=MODE_WINDOWS,
+        ttk.Radiobutton(mode_frame, text=_("Windows 11 (GPT + FAT32, files copied)"), value=MODE_WINDOWS,
                         variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
-        ttk.Radiobutton(mode_frame, text="Linux / other hybrid ISO (written directly)", value=MODE_LINUX,
+        ttk.Radiobutton(mode_frame, text=_("Linux / other hybrid ISO (written directly)"), value=MODE_LINUX,
                         variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
 
         dep_frame = ttk.Frame(f)
         dep_frame.pack(fill="x", padx=10, pady=(0, 10))
         self.dep_label = ttk.Label(dep_frame, text="")
         self.dep_label.pack(side="left")
-        self.install_deps_btn = ttk.Button(dep_frame, text="Install missing dependencies", command=self.install_dependencies)
+        self.install_deps_btn = ttk.Button(dep_frame, text=_("Install missing dependencies"),
+                                           command=self.install_dependencies)
         self.check_dependencies()
 
-        ttk.Button(f, text="Refresh USB drives list", command=self.refresh_disks).pack(anchor="w", padx=10)
+        ttk.Button(f, text=_("Refresh USB drives list"), command=self.refresh_disks).pack(anchor="w", padx=10)
         self.disk_combo = ttk.Combobox(f, state="readonly", width=90)
         self.disk_combo.pack(fill="x", padx=10, pady=5)
         self.disk_combo.bind("<<ComboboxSelected>>", lambda e: self.update_create_button_state())
 
-        warn_text = (
+        warn_text = _(
             "WARNING: ALL DATA on the selected drive will be PERMANENTLY erased.\n"
             "Double-check that this is really your USB drive before continuing. Only USB "
             "drives are listed — the system's internal disk is never shown."
         )
         if IS_LINUX:
-            warn_text += "\nYou'll be asked for your administrator (sudo) password to format the drive."
+            warn_text += "\n" + _("You'll be asked for your administrator (sudo) password to format the drive.")
         else:
-            warn_text += "\nLinux mode on macOS asks for your administrator password to write the drive."
+            warn_text += "\n" + _("Linux mode on macOS asks for your administrator password to write the drive.")
         ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=720).pack(anchor="w", padx=10, pady=10)
 
         create_row = ttk.Frame(f)
         create_row.pack(anchor="w", padx=10, pady=10)
         self.create_btn = ttk.Button(
-            create_row, text="Create Bootable USB Drive", command=self.start_create_usb, state="disabled"
+            create_row, text=_("Create Bootable USB Drive"), command=self.start_create_usb, state="disabled"
         )
         self.create_btn.pack(side="left")
         self.cancel_create_btn = ttk.Button(
-            create_row, text="Cancel", command=self.cancel_create_usb, state="disabled"
+            create_row, text=_("Cancel"), command=self.cancel_create_usb, state="disabled"
         )
         self.cancel_create_btn.pack(side="left", padx=(8, 0))
 
@@ -2671,10 +2968,10 @@ class App(_TkBase):
     def check_dependencies(self):
         missing = get_missing_dependencies(self.mode_var.get())
         if not missing:
-            self.dep_label.config(text="All dependencies OK", foreground="green")
+            self.dep_label.config(text=_("All dependencies OK"), foreground="green")
             self.install_deps_btn.pack_forget()
         else:
-            self.dep_label.config(text="Missing: " + ", ".join(missing), foreground="orange")
+            self.dep_label.config(text=_("Missing: {tools}").format(tools=", ".join(missing)), foreground="orange")
             self.install_deps_btn.pack(side="left", padx=5)
 
     def install_dependencies(self):
@@ -2715,25 +3012,25 @@ class App(_TkBase):
         webbrowser.open(MS_DOWNLOAD_PAGE)
 
     def pick_existing_iso(self):
-        path = filedialog.askopenfilename(title="Select the Windows 11 ISO file", filetypes=[("ISO image", "*.iso")])
+        path = filedialog.askopenfilename(title=_("Select the Windows 11 ISO file"), filetypes=[(_("ISO image"), "*.iso")])
         if path:
             self.set_iso(path)
 
     def set_iso(self, path):
         self.iso_path.set(path)
-        self.iso_label.config(text=f"Selected ISO: {path}")
-        self.iso_label2.config(text=f"ISO: {path}")
+        self.iso_label.config(text=_("Selected ISO: {path}").format(path=path))
+        self.iso_label2.config(text=_("ISO: {path}").format(path=path))
         # Only a default: the user can still switch the image type by hand. The content of
         # the ISO decides; the file name is only the fallback when it cannot be read.
         kind = detect_iso_kind(path)
         if kind == ISO_KIND_UNKNOWN:
             kind = MODE_WINDOWS if "win" in os.path.basename(path).lower() else MODE_LINUX
-            how = "from the file name (the content could not be identified)"
+            how = _("from the file name (the content could not be identified)")
         else:
-            how = "from the content of the ISO"
+            how = _("from the content of the ISO")
         self.mode_var.set(MODE_WINDOWS if kind == ISO_KIND_WINDOWS else MODE_LINUX)
-        self.log(f"Image type preselected {how}: "
-                 f"{'Windows 11' if kind == ISO_KIND_WINDOWS else 'Linux / other hybrid ISO'}.")
+        image = _("Windows 11") if kind == ISO_KIND_WINDOWS else _("Linux / other hybrid ISO")
+        self.log(_("Image type preselected {how}: {image}.").format(how=how, image=image))
         self.on_mode_change()
         self._reset_iso_sha()
         self.iso_check_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -2742,32 +3039,33 @@ class App(_TkBase):
         try:
             url, host, untrusted_host = validate_download_url(self.url_entry.get())
         except ValueError as e:
-            messagebox.showerror("Invalid link", str(e))
+            messagebox.showerror(_("Invalid link"), str(e))
             return
 
         expected_sha = self.sha_entry.get().strip().lower()
         if expected_sha and not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
             messagebox.showerror(
-                "Invalid checksum",
-                "A SHA-256 checksum must be exactly 64 characters using only 0-9 and a-f.\n\n"
-                "Leave the field empty if you do not have one.",
+                _("Invalid checksum"),
+                _("A SHA-256 checksum must be exactly 64 characters using only 0-9 and a-f.\n\n"
+                  "Leave the field empty if you do not have one."),
             )
             return
 
         if untrusted_host and not messagebox.askyesno(
-            "Unrecognised download server",
-            f"This link points to '{host}', which is not a known Microsoft download server.\n\n"
-            "Downloading a Windows image from an unofficial source is a real risk: a tampered "
-            "image would install a compromised Windows on the target computer, and you would "
-            "have no way of noticing.\n\n"
-            "Continue anyway?",
+            _("Unrecognised download server"),
+            _("This link points to '{host}', which is not a known Microsoft download server.\n\n"
+              "Downloading a Windows image from an unofficial source is a real risk: a tampered "
+              "image would install a compromised Windows on the target computer, and you would "
+              "have no way of noticing.\n\n"
+              "Continue anyway?").format(host=host),
             icon="warning",
         ):
             audit(f"User declined download from untrusted host: {host}")
             return
 
         dest = filedialog.asksaveasfilename(
-            title="Save ISO as", defaultextension=".iso", initialfile="Win11.iso", filetypes=[("ISO image", "*.iso")]
+            title=_("Save ISO as"), defaultextension=".iso", initialfile="Win11.iso",
+            filetypes=[(_("ISO image"), "*.iso")]
         )
         if not dest:
             return
@@ -2797,43 +3095,44 @@ class App(_TkBase):
             self.progress.config(mode="determinate", value=pct)
             eta = (total - downloaded) / speed if speed > 0 else 0
             self.progress_label.config(
-                text=f"{human_size(downloaded)} / {human_size(total)} ({pct:.1f}%) — "
-                f"{human_size(speed)}/s — ~{int(eta)}s left"
+                text=_("{done} / {total} ({pct:.1f}%) — {speed}/s — ~{eta}s left").format(
+                    done=human_size(downloaded), total=human_size(total), pct=pct,
+                    speed=human_size(speed), eta=int(eta))
             )
         else:
             self.progress.config(mode="indeterminate")
-            self.progress_label.config(text=f"{human_size(downloaded)} downloaded — {human_size(speed)}/s")
+            self.progress_label.config(
+                text=_("{done} downloaded — {speed}/s").format(done=human_size(downloaded), speed=human_size(speed)))
 
     def _on_download_done(self, path, sha256, verified):
         self.download_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
-        self.progress_label.config(text="Download complete.")
+        self.progress_label.config(text=_("Download complete."))
         self.set_iso(path)
-        self.log(f"SHA-256 of the downloaded file: {sha256}")
+        self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
         if verified:
-            detail = "\n\nThe SHA-256 checksum matches the value you supplied — the file is intact."
+            detail = "\n\n" + _("The SHA-256 checksum matches the value you supplied — the file is intact.")
         else:
-            detail = (
-                "\n\nSHA-256 of this file:\n"
-                f"{sha256}\n\n"
+            detail = "\n\n" + _(
+                "SHA-256 of this file:\n{sha256}\n\n"
                 "No checksum was supplied, so authenticity was NOT verified. If Microsoft "
                 "publishes a checksum for this image, compare it with the value above before "
                 "writing the USB drive."
-            )
-        messagebox.showinfo("Done", f"ISO downloaded to:\n{path}{detail}")
+            ).format(sha256=sha256)
+        messagebox.showinfo(_("Done"), _("ISO downloaded to:\n{path}").format(path=path) + detail)
 
     def _on_download_error(self, msg):
         self.download_btn.config(state="normal")
         self.cancel_btn.config(state="disabled")
-        self.progress_label.config(text="Download failed.")
-        messagebox.showerror("Download error", msg)
+        self.progress_label.config(text=_("Download failed."))
+        messagebox.showerror(_("Download error"), msg)
 
     # ---------- USB drive ----------
     def refresh_disks(self):
         try:
             self.disks = get_external_disks()
         except Exception as e:
-            messagebox.showerror("Error", f"Could not list disks: {e}")
+            messagebox.showerror(_("Error"), _("Could not list disks: {error}").format(error=e))
             return
         labels = [d["label"] for d in self.disks]
         self.disk_combo["values"] = labels
@@ -2905,7 +3204,7 @@ class App(_TkBase):
     def calculate_iso_sha256(self):
         path = self.iso_path.get()
         if not path or not os.path.isfile(path):
-            self.iso_sha_result.config(text="Select an ISO file first.", foreground="#c62828")
+            self.iso_sha_result.config(text=_("Select an ISO file first."), foreground="#c62828")
             return
         try:
             expected = parse_expected_sha256(self.iso_sha_entry.get(), os.path.basename(path))
@@ -2917,8 +3216,8 @@ class App(_TkBase):
         self.iso_sha_btn.config(state="disabled")
         self.iso_sha_progress.config(value=0)
         self.iso_sha_result.config(text="", foreground="")
-        self.iso_sha_label.config(text="Calculating...")
-        self.log(f"Calculating SHA-256 of {os.path.basename(path)}...")
+        self.iso_sha_label.config(text=_("Calculating..."))
+        self.log(_("Calculating SHA-256 of {name}...").format(name=os.path.basename(path)))
         last = [0.0]
 
         def progress(done, total):
@@ -2942,24 +3241,30 @@ class App(_TkBase):
             return
         pct = done / total * 100 if total else 0
         self.iso_sha_progress.config(value=pct)
-        self.iso_sha_label.config(text=f"Calculating... {pct:.0f}% ({human_size(done)} / {human_size(total)})")
+        self.iso_sha_label.config(text=_("Calculating... {pct:.0f}% ({done} / {total})").format(
+            pct=pct, done=human_size(done), total=human_size(total)))
 
     def _on_iso_sha_done(self, job, path, digest, expected):
         if job != self._sha_job:
             return
         self.iso_sha_btn.config(state="normal")
         self.iso_sha_progress.config(value=100)
-        self.iso_sha_label.config(text=f"SHA-256: {digest}")
+        self.iso_sha_label.config(text=_("SHA-256: {digest}").format(digest=digest))
         if expected is None:
-            outcome, text, color = "unverified", "No expected checksum given: compare the value above yourself.", ""
+            outcome, text, color = "unverified", _("No expected checksum given: compare the value above yourself."), ""
+            outcome_label = _("UNVERIFIED")
         elif digest == expected:
-            outcome, text, color = "match", "MATCH — the file is intact and identical to the published one.", "#1a7f37"
+            outcome, color = "match", "#1a7f37"
+            text = _("MATCH — the file is intact and identical to the published one.")
+            outcome_label = _("MATCH")
         else:
-            outcome, text, color = "mismatch", "MISMATCH — this is NOT the published file. Do not use it.", "#c62828"
-            self.log(f"Expected SHA-256: {expected}")
+            outcome, color = "mismatch", "#c62828"
+            text = _("MISMATCH — this is NOT the published file. Do not use it.")
+            outcome_label = _("MISMATCH")
+            self.log(_("Expected SHA-256: {expected}").format(expected=expected))
         self.iso_sha_result.config(text=text, foreground=color)
-        self.log(f"SHA-256 of {os.path.basename(path)}: {digest}")
-        self.log(f"Checksum comparison: {outcome.upper()}")
+        self.log(_("SHA-256 of {name}: {digest}").format(name=os.path.basename(path), digest=digest))
+        self.log(_("Checksum comparison: {outcome}").format(outcome=outcome_label))
         audit(f"ISO SHA-256 check result={outcome}", logging.WARNING if outcome == "mismatch" else logging.INFO)
 
     def _on_iso_sha_error(self, job, exc):
@@ -2967,19 +3272,21 @@ class App(_TkBase):
             return
         self.iso_sha_btn.config(state="normal")
         self.iso_sha_label.config(text="")
-        self.iso_sha_result.config(text=f"Could not read the file ({type(exc).__name__}).", foreground="#c62828")
+        self.iso_sha_result.config(
+            text=_("Could not read the file ({reason}).").format(reason=type(exc).__name__), foreground="#c62828")
 
     def confirm_erase(self, disk, what):
         """Final confirmation: always shows model, size and contents; high-risk drives also need
         their identifier typed. Returns True to go ahead."""
-        level, reasons = assess_disk_risk(disk)
-        text = (f"This will PERMANENTLY ERASE all data on /dev/{disk['id']} and write {what} to it.\n\n"
-                + describe_disk_for_confirmation(disk))
+        level, reasons = assess_disk_risk(disk, translate=True)  # the level never depends on the language
+        text = (_("This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.").format(
+                    id=disk["id"], what=what)
+                + "\n\n" + describe_disk_for_confirmation(disk, translate=True))
         audit(f"Erase confirmation shown for /dev/{disk['id']} risk={level}")
         if level == "high":
-            ok = ask_typed_confirmation(self, "Confirm erasing this drive", text, disk["id"], reasons)
+            ok = ask_typed_confirmation(self, _("Confirm erasing this drive"), text, disk["id"], reasons)
         else:
-            ok = messagebox.askyesno("Final confirmation", text + "\n\nContinue?")
+            ok = messagebox.askyesno(_("Final confirmation"), text + "\n\n" + _("Continue?"))
         if not ok:
             audit(f"Erase of /dev/{disk['id']} declined by the user")
         return ok
@@ -2989,7 +3296,7 @@ class App(_TkBase):
         if not disk:
             return
         mode = self.mode_var.get()
-        what = "Windows 11" if mode == MODE_WINDOWS else "the selected Linux image"
+        what = _("Windows 11") if mode == MODE_WINDOWS else _("the selected Linux image")
         if not self.confirm_erase(disk, what):
             return
         # Bind the safety re-check (right before erasing) to exactly the drive that was confirmed.
@@ -2998,9 +3305,9 @@ class App(_TkBase):
         # the direct-write mode). Collect and verify the password now, before touching
         # the drive.
         if (IS_LINUX or mode == MODE_LINUX) and not self.priv.authenticate(
-                f"Administrator access is required to write /dev/{disk['id']}."):
+                _("Administrator access is required to write /dev/{id}.").format(id=disk["id"])):
             self.priv.clear_cached_password()
-            self.log("Canceled: administrator password was not provided. The drive was not modified.")
+            self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
             return
         self.create_btn.config(state="disabled")
         self.create_cancel_event.clear()
@@ -3017,18 +3324,18 @@ class App(_TkBase):
                           progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s),
                           cancel_event=self.create_cancel_event)
                 self.after(0, self._finish_create_progress, True)
-                note = ("It was verified against the ISO and ejected — you can unplug it now." if ejected else
-                        "It was verified against the ISO, but could not be ejected automatically. "
-                        "Eject it from the file manager before unplugging.")
+                note = (_("It was verified against the ISO and ejected — you can unplug it now.") if ejected else
+                        _("It was verified against the ISO, but could not be ejected automatically. "
+                          "Eject it from the file manager before unplugging."))
                 self.after(0, lambda: messagebox.showinfo(
-                    "Done", f"Bootable USB drive created successfully!\n\n{note}"))
+                    _("Done"), _("Bootable USB drive created successfully!") + f"\n\n{note}"))
             except OperationCanceled:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
                 self.after(0, self._finish_create_progress, False, True)
-                self.after(0, self.log, "Canceled. The drive was left unusable; create it again before use.")
+                self.after(0, self.log, _("Canceled. The drive was left unusable; create it again before use."))
                 self.after(0, lambda: messagebox.showinfo(
-                    "Canceled", "The operation was canceled.\n\nThe USB drive was left incomplete and "
-                    "unusable. Create it again before using it."))
+                    _("Canceled"), _("The operation was canceled.\n\nThe USB drive was left incomplete and "
+                                     "unusable. Create it again before using it.")))
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
                 self.after(0, self._finish_create_progress, False)
@@ -3051,15 +3358,15 @@ class App(_TkBase):
         if self.create_cancel_event.is_set() or str(self.cancel_create_btn.cget("state")) == "disabled":
             return
         if not messagebox.askyesno(
-            "Cancel the operation?",
-            "Canceling now will leave the USB drive incomplete and UNUSABLE until it is created "
-            "again.\n\nDo you really want to cancel?",
+            _("Cancel the operation?"),
+            _("Canceling now will leave the USB drive incomplete and UNUSABLE until it is created "
+              "again.\n\nDo you really want to cancel?"),
             icon="warning",
         ):
             return
         self.create_cancel_event.set()
         self.cancel_create_btn.config(state="disabled")
-        self.log("Cancel requested: stopping safely...")
+        self.log(_("Cancel requested: stopping safely..."))
         audit("User requested cancel of the USB creation")
 
     # ---------- USB creation progress ----------
@@ -3070,16 +3377,17 @@ class App(_TkBase):
         self._create_stage_base = 0
         self.create_progress.config(mode="indeterminate", value=0)
         self.create_progress.start(12)
-        self.create_progress_label.config(text="Preparing the drive...")
+        self.create_progress_label.config(text=_("Preparing the drive..."))
 
     def _on_create_progress(self, done, total, text):
+        text = _(text)  # the stage names come from the engine in English; same input, same output
         now = time.time()
         if not total:
             # Length unknown (e.g. comparing files): show a busy bar with what is going on.
             if str(self.create_progress.cget("mode")) != "indeterminate":
                 self.create_progress.config(mode="indeterminate", value=0)
                 self.create_progress.start(12)
-            self.create_progress_label.config(text=f"{text} (this can take a few minutes)")
+            self.create_progress_label.config(text=_("{stage} (this can take a few minutes)").format(stage=text))
             self._create_stage = None
             return
         finished = done >= total
@@ -3104,9 +3412,10 @@ class App(_TkBase):
         speed = (done - self._create_stage_base) / elapsed
         if speed > 0:
             eta = (total - done) / speed
-            tail = f" — {human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left"
+            tail = _(" — {speed}/s — ~{minutes}m{seconds:02d}s left").format(
+                speed=human_size(speed), minutes=int(eta // 60), seconds=int(eta % 60))
         else:
-            tail = " — calculating..."
+            tail = _(" — calculating...")
         self.create_progress_label.config(
             text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
 
@@ -3114,7 +3423,8 @@ class App(_TkBase):
         self._flush_log()  # show the worker's last lines before the result dialog appears
         self.create_progress.stop()
         self.create_progress.config(mode="determinate", value=100 if ok else 0)
-        self.create_progress_label.config(text="Done — 100%" if ok else ("Canceled." if canceled else "Failed."))
+        self.create_progress_label.config(
+            text=_("Done — 100%") if ok else (_("Canceled.") if canceled else _("Failed.")))
 
     def report_callback_exception(self, exc, val, tb):
         """Tk swallows exceptions raised in button handlers (they only reach stderr).
@@ -3122,19 +3432,23 @@ class App(_TkBase):
         self._report_error("Unexpected error", None, val)
 
     def _report_error(self, title, message, exc=None):
-        """Show a user-facing error without leaking internals into the dialog."""
+        """Show a user-facing error without leaking internals into the dialog.
+
+        `title` is the English text (it also goes to the audit log); the dialog shows it translated.
+        A `message` given by the caller (an engine error) is shown as it is.
+        """
         if exc is not None:
             self.log(f"ERROR [{type(exc).__name__}]: {exc}")
             audit(f"{title}: {type(exc).__name__}", logging.ERROR)
-            message = (
+            message = _(
                 "The operation could not be completed.\n\n"
-                f"Reason: {type(exc).__name__}\n\n"
+                "Reason: {reason}\n\n"
                 "The full technical detail was written to the log box below and to the "
-                f"audit log at:\n{audit_log_path()}"
-            )
+                "audit log at:\n{path}"
+            ).format(reason=type(exc).__name__, path=audit_log_path())
         else:
             self.log(f"ERROR: {message}")
-        messagebox.showerror(title, message)
+        messagebox.showerror(_(title), message)
 
 
 # ============================================================
