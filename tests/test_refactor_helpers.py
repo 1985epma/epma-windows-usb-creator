@@ -355,5 +355,100 @@ class DiskutilHelperTests(unittest.TestCase):
         self.assertEqual(app.DISKUTIL_TIMEOUT, 120)
 
 
+def _widgets(root):
+    yield root
+    for child in root.winfo_children():
+        yield from _widgets(child)
+
+
+@unittest.skipIf(app.tk is None, "Tkinter is not available")
+class ModalDialogTests(unittest.TestCase):
+    """ask_password / ask_typed_confirmation with the blocking part (_show_modal) replaced by a driver.
+
+    A real modal wait needs a visible window, so the driver presses the dialog's own buttons instead;
+    what is checked is the content, the buttons and the result each dialog returns.
+    """
+
+    def setUp(self):
+        try:
+            self.root = app.tk.Tk()
+        except app.tk.TclError as exc:
+            self.skipTest(f"no display: {exc}")
+        self.root.withdraw()
+        self.addCleanup(self.root.destroy)
+        self.shown = []
+
+    def drive(self, act):
+        """A stand-in for _show_modal: `act(top, entry, buttons)` plays the user, then the dialog closes."""
+        def fake(parent, top, focus_widget, y_offset):
+            self.shown.append((parent, str(focus_widget.cget("show")), y_offset))
+            buttons = {str(w.cget("text")): w for w in _widgets(top) if isinstance(w, app.ttk.Button)}
+            act(top, focus_widget, buttons)
+            if top.winfo_exists():
+                top.destroy()
+
+        return mock.patch.object(app, "_show_modal", fake)
+
+    def test_password_ok_returns_the_text(self):
+        def act(_top, entry, buttons):
+            entry.insert(0, "s3cret")
+            buttons["OK"].invoke()
+
+        with self.drive(act):
+            self.assertEqual(app.ask_password(self.root, "Pw", "Enter it"), "s3cret")
+        self.assertEqual((self.shown[0][0], self.shown[0][2]), (self.root, 80))
+        self.assertEqual(self.shown[0][1], "*")  # the focus goes to the masked entry
+
+    def test_password_cancel_and_close_return_none(self):
+        def cancel(_top, entry, buttons):
+            entry.insert(0, "typed but canceled")
+            buttons["Cancel"].invoke()
+
+        with self.drive(cancel):
+            self.assertIsNone(app.ask_password(self.root, "Pw", "Enter it"))
+
+        def close(top, _entry, _buttons):
+            top.tk.call(top.protocol("WM_DELETE_WINDOW"))  # the window's close button
+
+        with self.drive(close):
+            self.assertIsNone(app.ask_password(self.root, "Pw", "Enter it"))
+
+    def test_typed_confirmation_needs_the_exact_identifier(self):
+        results = []
+
+        def wrong(_top, entry, buttons):
+            entry.insert(0, "disk8")
+            self.assertEqual(str(buttons["Erase this drive"].cget("state")), "disabled")
+            buttons["Erase this drive"].invoke()  # a disabled ttk button ignores the click
+
+        def right(_top, entry, buttons):
+            entry.insert(0, " /dev/disk9 ")
+            self.assertEqual(str(buttons["Erase this drive"].cget("state")), "normal")
+            buttons["Erase this drive"].invoke()
+
+        def cancel(_top, _entry, buttons):
+            buttons["Cancel"].invoke()
+
+        for act in (wrong, right, cancel):
+            with self.drive(act):
+                results.append(app.ask_typed_confirmation(self.root, "Confirm", "Erase?", "disk9", ["big"]))
+        self.assertEqual(results, [False, True, False])
+        self.assertEqual([call[2] for call in self.shown], [60, 60, 60])
+
+    def test_buttons_helper_binds_return_escape_and_close(self):
+        top = app._new_dialog(self.root, "T")
+        self.addCleanup(top.destroy)
+        self.assertEqual(top.title(), "T")
+        calls = []
+        accept_btn = app._dialog_buttons(top, lambda _e=None: calls.append("accept"), "Go", accept_state="disabled")
+        self.assertEqual(accept_btn.cget("text"), "Go")
+        self.assertEqual(str(accept_btn.cget("state")), "disabled")
+        self.assertTrue(top.bind("<Return>"))
+        self.assertTrue(top.bind("<Escape>"))
+        top.tk.call(top.protocol("WM_DELETE_WINDOW"))
+        self.assertFalse(top.winfo_exists())
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

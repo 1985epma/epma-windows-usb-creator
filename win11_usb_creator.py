@@ -1526,16 +1526,65 @@ def platform_display_name():
     return platform.system()
 
 
-def ask_password(parent, title, prompt):
-    """Modal password prompt. Returns the text, or None if canceled. GUI thread only.
-
-    Built by hand instead of tkinter.simpledialog: on Tk 9 (current Homebrew Python on
-    macOS) simpledialog raises TclError because it calls a removed Tcl command, which
-    made the whole "Create" button fail silently.
-    """
+# ---- Modal dialogs. Built by hand instead of tkinter.simpledialog: on Tk 9 (current Homebrew Python on
+# macOS) simpledialog raises TclError because it calls a removed Tcl command, which made the whole
+# "Create" button fail silently. The three helpers below are all the two dialogs have in common. ----
+def _new_dialog(parent, title):
+    """An empty, fixed-size dialog window; the caller adds its content, buttons and then shows it."""
     top = tk.Toplevel(parent)
     top.title(title)
     top.resizable(False, False)
+    return top
+
+
+def _dialog_buttons(top, accept, accept_text, accept_state="normal"):
+    """The Cancel / accept button row. Return accepts, Escape and the window's close button cancel.
+
+    `accept(event=None)` is the caller's; cancelling just destroys the dialog. `accept_text` is already
+    translated (it is a literal `_()` at the call site). Returns the accept button.
+    """
+    def cancel(_event=None):
+        top.destroy()
+
+    row = ttk.Frame(top)
+    row.pack(padx=16, pady=14, anchor="e")
+    ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
+    accept_btn = ttk.Button(row, text=accept_text, command=accept, state=accept_state)
+    accept_btn.pack(side="left")
+    top.bind("<Return>", accept)
+    top.bind("<Escape>", cancel)
+    top.protocol("WM_DELETE_WINDOW", cancel)
+    return accept_btn
+
+
+def _show_modal(parent, top, focus_widget, y_offset):
+    """Show `top` over `parent` and block until it is closed.
+
+    Centred horizontally, `y_offset` pixels below the parent's top edge. Always on top: a prompt hidden
+    behind the main window looks like a freeze.
+    """
+    top.update_idletasks()
+    x = parent.winfo_rootx() + max((parent.winfo_width() - top.winfo_reqwidth()) // 2, 0)
+    y = parent.winfo_rooty() + y_offset
+    top.geometry(f"+{x}+{y}")
+    top.transient(parent)
+    top.attributes("-topmost", True)
+    top.lift()
+    try:
+        top.wait_visibility()
+        top.grab_set()
+    except tk.TclError:
+        pass  # grab is a nicety; the dialog still works without it
+    focus_widget.focus_force()
+    parent.wait_window(top)
+
+
+def ask_password(parent, title, prompt):
+    """Modal password prompt. Returns the text, or None if canceled. GUI thread only.
+
+    Built by hand, not with tkinter.simpledialog (see the note above _new_dialog).
+    """
+    top = _new_dialog(parent, title)
     result = {"pw": None}
 
     ttk.Label(top, text=prompt, justify="left", wraplength=420).pack(padx=16, pady=(16, 8), anchor="w")
@@ -1546,31 +1595,8 @@ def ask_password(parent, title, prompt):
         result["pw"] = entry.get()
         top.destroy()
 
-    def cancel(_event=None):
-        top.destroy()
-
-    row = ttk.Frame(top)
-    row.pack(padx=16, pady=14, anchor="e")
-    ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
-    ttk.Button(row, text=_("OK"), command=accept).pack(side="left")
-    top.bind("<Return>", accept)
-    top.bind("<Escape>", cancel)
-    top.protocol("WM_DELETE_WINDOW", cancel)
-
-    top.update_idletasks()
-    x = parent.winfo_rootx() + max((parent.winfo_width() - top.winfo_reqwidth()) // 2, 0)
-    y = parent.winfo_rooty() + 80
-    top.geometry(f"+{x}+{y}")
-    top.transient(parent)
-    top.attributes("-topmost", True)  # a prompt hidden behind the main window looks like a freeze
-    top.lift()
-    try:
-        top.wait_visibility()
-        top.grab_set()
-    except tk.TclError:
-        pass  # grab is a nicety; the dialog still works without it
-    entry.focus_force()
-    parent.wait_window(top)
+    _dialog_buttons(top, accept, _("OK"))
+    _show_modal(parent, top, entry, y_offset=80)
     return result["pw"]
 
 
@@ -1590,9 +1616,7 @@ def build_typed_confirmation_dialog(parent, title, message, expected, reasons=()
     StringVar write trace, so every way of changing the text counts: typing, a mouse paste,
     the Edit menu, drag and drop. Reacting to key releases only left it disabled after a mouse paste.
     """
-    top = tk.Toplevel(parent)
-    top.title(title)
-    top.resizable(False, False)
+    top = _new_dialog(parent, title)
     result = {"ok": False}
 
     ttk.Label(top, text=message, justify="left", wraplength=520).pack(padx=16, pady=(16, 8), anchor="w")
@@ -1616,19 +1640,9 @@ def build_typed_confirmation_dialog(parent, title, message, expected, reasons=()
             result["ok"] = True
             top.destroy()
 
-    def cancel(_event=None):
-        top.destroy()
-
-    row = ttk.Frame(top)
-    row.pack(padx=16, pady=14, anchor="e")
-    ttk.Button(row, text=_("Cancel"), command=cancel).pack(side="left", padx=(0, 8))
-    erase_btn = ttk.Button(row, text=_("Erase this drive"), command=accept, state="disabled")
-    erase_btn.pack(side="left")
+    erase_btn = _dialog_buttons(top, accept, _("Erase this drive"), accept_state="disabled")
     typed.trace_add("write", lambda *_args: erase_btn.config(state="normal" if matches() else "disabled"))
     top._typed = typed  # keep the variable alive as long as the dialog
-    top.bind("<Return>", accept)
-    top.bind("<Escape>", cancel)
-    top.protocol("WM_DELETE_WINDOW", cancel)
     return top, entry, erase_btn, result
 
 
@@ -1639,21 +1653,7 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
     confirm button stays disabled until the text matches, so Enter cannot slip through.
     """
     top, entry, _erase_btn, result = build_typed_confirmation_dialog(parent, title, message, expected, reasons)
-
-    top.update_idletasks()
-    x = parent.winfo_rootx() + max((parent.winfo_width() - top.winfo_reqwidth()) // 2, 0)
-    y = parent.winfo_rooty() + 60
-    top.geometry(f"+{x}+{y}")
-    top.transient(parent)
-    top.attributes("-topmost", True)
-    top.lift()
-    try:
-        top.wait_visibility()
-        top.grab_set()
-    except tk.TclError:
-        pass  # grab is a nicety; the dialog still works without it
-    entry.focus_force()
-    parent.wait_window(top)
+    _show_modal(parent, top, entry, y_offset=60)
     return result["ok"]
 
 
