@@ -932,23 +932,6 @@ def parse_expected_sha256(text, filename=None):
     raise ValueError("The pasted text contains several checksums. Paste only the line for your ISO file.")
 
 
-def compute_sha256(path, progress=None, chunk=SHA256_CHUNK):
-    """SHA-256 of a file by chunked reads. `progress(done, total)` is called after each chunk."""
-    digest = hashlib.sha256()
-    total = os.path.getsize(path)
-    done = 0
-    with open(path, "rb") as fh:
-        while True:
-            block = fh.read(chunk)
-            if not block:
-                break
-            digest.update(block)
-            done += len(block)
-            if progress:
-                progress(done, total)
-    return digest.hexdigest()
-
-
 def validate_disk_image(path):
     """Raise unless `path` is a raw disk image that can boot from a USB drive as-is.
 
@@ -1306,16 +1289,38 @@ def check_canceled(cancel_event, drive_touched=True, written=False):
         raise OperationCanceled("Canceled by the user.", drive_touched=drive_touched, written=written)
 
 
-def sha256_file(path, cancel_event=None, chunk=4 * 1024 * 1024):
-    """SHA-256 of a file, read in chunks (constant memory). Cancel-aware."""
+def _hash_stream(fh, digest, limit=None, check=None, on_chunk=None, chunk=SHA256_CHUNK):
+    """Feed `digest` from the open binary file `fh` in chunks (constant memory); return the bytes read.
+
+    `limit` stops after that many bytes (None: read to the end). `check()` runs before every read and
+    may raise to stop (a cancel). `on_chunk(done)` runs after every chunk. The one place where a file is
+    read in blocks for hashing: sha256_file() and the resume of a partial download both use it.
+    """
+    done = 0
+    while limit is None or done < limit:
+        if check:
+            check()
+        block = fh.read(chunk if limit is None else min(chunk, limit - done))
+        if not block:
+            break
+        digest.update(block)
+        done += len(block)
+        if on_chunk:
+            on_chunk(done)
+    return done
+
+
+def sha256_file(path, cancel_event=None, progress=None, chunk=SHA256_CHUNK):
+    """SHA-256 of a file, read in chunks (constant memory), as lowercase hex.
+
+    `cancel_event` makes it raise OperationCanceled between chunks; `progress(done, total)` is called
+    after each chunk. The one SHA-256-of-a-file routine: the GUI, the command line and the audit trail use it.
+    """
     digest = hashlib.sha256()
+    total = os.path.getsize(path) if progress else 0
     with open(path, "rb") as fh:
-        while True:
-            check_canceled(cancel_event)
-            block = fh.read(chunk)
-            if not block:
-                break
-            digest.update(block)
+        _hash_stream(fh, digest, check=lambda: check_canceled(cancel_event),
+                     on_chunk=(lambda done: progress(done, total)) if progress else None, chunk=chunk)
     return digest.hexdigest()
 
 
@@ -2957,15 +2962,9 @@ class DownloadThread(threading.Thread):
                 "file again to the same location resumes where it stopped.")
 
     def _hash_part(self, tmp_path, digest, size):
-        remaining = size
         with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW), "rb") as fh:
-            while remaining > 0:
-                self._check_cancel()
-                chunk = fh.read(min(CHUNK_SIZE, remaining))
-                if not chunk:
-                    raise OSError("the partial file is shorter than expected")
-                digest.update(chunk)
-                remaining -= len(chunk)
+            if _hash_stream(fh, digest, limit=size, check=self._check_cancel, chunk=CHUNK_SIZE) < size:
+                raise OSError("the partial file is shorter than expected")
 
     def _open(self, offset, validator):
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -4585,7 +4584,7 @@ class App(_TkBase):
 
         def worker():
             try:
-                digest = compute_sha256(path, progress)
+                digest = sha256_file(path, progress=progress)
                 self.after(0, self._on_iso_sha_done, job, path, digest, expected)
             except Exception as e:  # noqa: BLE001 - reported in the UI, never lost in the thread
                 self.after(0, self._on_iso_sha_error, job, e)
@@ -5182,21 +5181,11 @@ class CliPrivilege:
                                "Check the messages above.")
 
 
-def cli_sha256_file(path, progress=None, chunk=4 * CHUNK_SIZE):
-    """SHA-256 of a file, read in chunks; reports (done, total, text) to `progress`."""
-    total = os.path.getsize(path)
-    digest = hashlib.sha256()
-    done = 0
-    with open(path, "rb") as fh:
-        while True:
-            block = fh.read(chunk)
-            if not block:
-                break
-            digest.update(block)
-            done += len(block)
-            if progress:
-                progress(done, total, "Computing SHA-256...")
-    return digest.hexdigest()
+def cli_sha256_file(path, progress=None, chunk=SHA256_CHUNK):
+    """sha256_file() reporting (done, total, text) to `progress`, the shape CliProgress takes."""
+    return sha256_file(path, chunk=chunk,
+                       progress=(lambda done, total: progress(done, total, "Computing SHA-256...")) if progress
+                       else None)
 
 
 def cli_detect_kind(iso_path):
