@@ -37,6 +37,7 @@ isn't available) once per operation. The password is only used locally to
 run disk commands and is never stored to disk or sent anywhere.
 """
 
+import filecmp
 import hashlib
 import json
 import logging
@@ -56,7 +57,7 @@ import webbrowser
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, simpledialog
+    from tkinter import ttk, filedialog, messagebox
 except ImportError:
     _msg = "Tkinter is not available for this Python installation.\n"
     if platform.system() == "Darwin":
@@ -85,6 +86,7 @@ VOL_NAME = "WIN11USB"
 #   linux:   write the ISO byte-for-byte to the drive (hybrid ISO, like `dd`)
 MODE_WINDOWS = "windows"
 MODE_LINUX = "linux"
+VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw write back
 RAW_WRITE_BLOCK = {"mac": "4m", "linux": "4M"}  # BSD dd and GNU dd spell the unit differently
 
 LINUX_REQUIRED_TOOLS = ["parted", "mkfs.vfat", "wipefs", "partprobe", "rsync", "wimlib-imagex"]
@@ -312,7 +314,114 @@ def copy_file_with_progress(src, dst_dir, on_bytes):
     shutil.copystat(src, dst)
 
 
-def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint):
+# Reads the whole image back from the drive and compares it with the ISO, chunk by
+# chunk. It always exits 0 (run_script treats a failure as a wrong password and
+# retries); the result is the VERIFY_OK / VERIFY_FAIL marker line. Values arrive as
+# "$1".."$4", never pasted into the text.
+VERIFY_RAW_SCRIPT = (
+    'set -eu\n'
+    'ISO="$1"; DEV="$2"; SIZE="$3"; BS="$4"\n'
+    # Linux: make sure we read the device, not the page cache (harmless elsewhere).
+    '{ blockdev --flushbufs "$DEV"; echo 3 > /proc/sys/vm/drop_caches; } >/dev/null 2>&1 || true\n'
+    'off=0; i=0\n'
+    'while [ "$off" -lt "$SIZE" ]; do\n'
+    '  len=$(( SIZE - off ))\n'
+    '  if [ "$len" -gt "$BS" ]; then len=$BS; fi\n'
+    '  if ! cmp -s <(dd if="$ISO" bs="$BS" skip="$i" count=1 2>/dev/null | head -c "$len") \\\n'
+    '              <(dd if="$DEV" bs="$BS" skip="$i" count=1 2>/dev/null | head -c "$len"); then\n'
+    '    echo "VERIFY_FAIL $off"; exit 0\n'
+    '  fi\n'
+    '  off=$((off + len)); i=$((i + 1))\n'
+    '  echo "VERIFY_PROGRESS $off"\n'
+    'done\n'
+    'echo "VERIFY_OK"\n'
+    'exit 0\n'
+)
+
+
+def verify_raw_write(iso_path, device_path, log, priv, progress):
+    """Read the drive back and compare it byte-for-byte with the ISO. Raises on any mismatch."""
+    total = os.path.getsize(iso_path)
+    log("Verifying the written image: reading the drive back and comparing it with the ISO...")
+    result = {}
+    last = [0.0]
+
+    def watch(line):
+        line = line.strip()
+        m = re.fullmatch(r"VERIFY_PROGRESS (\d+)", line)
+        if m:
+            now = time.time()
+            if progress and (now - last[0] >= 0.5 or int(m.group(1)) >= total):
+                last[0] = now
+                progress(min(int(m.group(1)), total), total, "Verifying the written image...")
+            return
+        if line == "VERIFY_OK":
+            result["ok"] = True
+        elif line.startswith("VERIFY_FAIL"):
+            result["ok"] = False
+            result["offset"] = line.split()[-1]
+        else:
+            log(line)
+
+    priv.run_script(VERIFY_RAW_SCRIPT, watch,
+                    args=[iso_path, device_path, str(total), str(VERIFY_CHUNK)])
+    if result.get("ok") is None:
+        raise RuntimeError("Could not complete the verification of the written drive. "
+                           "Do not trust this drive; run the creation again.")
+    if not result["ok"]:
+        audit(f"VERIFICATION FAILED at byte {result['offset']}", logging.ERROR)
+        raise RuntimeError(
+            f"Verification FAILED: the data on the drive differs from the ISO (first difference "
+            f"near byte {result['offset']}).\n\nThe drive was NOT ejected and should not be used. "
+            "Try again, and if it fails again, the USB drive or its port may be faulty.")
+    audit("Verification passed (raw write matches the ISO)")
+    log("Verification passed: the drive content is identical to the ISO.")
+
+
+def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress):
+    """Compare what is on the drive with the ISO. Raises on any mismatch.
+
+    Every file is compared by checksum (rsync dry run), and the install image is
+    either compared directly or checked with `wimlib-imagex verify` when it was split.
+    """
+    log("Verifying the copied files (reading them back from the drive)...")
+    if progress:
+        progress(0, 0, "Verifying the copied files...")
+    bad = []
+
+    def watch(line):
+        log(line)
+        if re.match(r"^(>f|cd|\*deleting)", line):
+            bad.append(line.strip())
+
+    run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch)
+    if bad:
+        audit(f"VERIFICATION FAILED: {len(bad)} file(s) differ", logging.ERROR)
+        raise RuntimeError(
+            f"Verification FAILED: {len(bad)} item(s) on the drive are missing or differ from the "
+            f"ISO (for example: {bad[0]}).\n\nThe drive was NOT ejected and should not be used.")
+
+    name = os.path.basename(big_file)
+    sources = os.path.join(dst_root, "sources")
+    if progress:
+        progress(0, 0, "Verifying the install image...")
+    swm = os.path.join(sources, os.path.splitext(name)[0] + ".swm")
+    if os.path.exists(swm):
+        try:
+            run_cmd(["wimlib-imagex", "verify", swm, f"--ref={sources}/{os.path.splitext(name)[0]}*.swm"], log)
+        except RuntimeError:
+            raise RuntimeError(
+                "Verification FAILED: the split install image on the drive is damaged.\n\n"
+                "The drive was NOT ejected and should not be used.") from None
+    elif not filecmp.cmp(big_file, os.path.join(sources, name), shallow=False):
+        raise RuntimeError(
+            f"Verification FAILED: {name} on the drive differs from the ISO.\n\n"
+            "The drive was NOT ejected and should not be used.")
+    audit("Verification passed (copied files match the ISO)")
+    log("Verification passed: the files on the drive match the ISO.")
+
+
+def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=None):
     """Copy the contents of a mounted Windows ISO to the drive, reporting progress.
 
     Everything except sources/install.wim|esd is copied with rsync; that file is
@@ -386,6 +495,10 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint):
     report(total, "Flushing data to the drive...")
     log("Syncing writes to disk...")
     run_cmd(["sync"], log, check=False)
+    # Remount so the check reads from the device itself and not from the system cache.
+    if reopen:
+        dst_root = reopen()
+    verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress)
 
 
 def validate_download_url(raw_url):
@@ -440,6 +553,54 @@ def platform_display_name():
     return platform.system()
 
 
+def ask_password(parent, title, prompt):
+    """Modal password prompt. Returns the text, or None if canceled. GUI thread only.
+
+    Built by hand instead of tkinter.simpledialog: on Tk 9 (current Homebrew Python on
+    macOS) simpledialog raises TclError because it calls a removed Tcl command, which
+    made the whole "Create" button fail silently.
+    """
+    top = tk.Toplevel(parent)
+    top.title(title)
+    top.resizable(False, False)
+    result = {"pw": None}
+
+    ttk.Label(top, text=prompt, justify="left", wraplength=420).pack(padx=16, pady=(16, 8), anchor="w")
+    entry = ttk.Entry(top, show="*", width=44)
+    entry.pack(padx=16, fill="x")
+
+    def accept(_event=None):
+        result["pw"] = entry.get()
+        top.destroy()
+
+    def cancel(_event=None):
+        top.destroy()
+
+    row = ttk.Frame(top)
+    row.pack(padx=16, pady=14, anchor="e")
+    ttk.Button(row, text="Cancel", command=cancel).pack(side="left", padx=(0, 8))
+    ttk.Button(row, text="OK", command=accept).pack(side="left")
+    top.bind("<Return>", accept)
+    top.bind("<Escape>", cancel)
+    top.protocol("WM_DELETE_WINDOW", cancel)
+
+    top.update_idletasks()
+    x = parent.winfo_rootx() + max((parent.winfo_width() - top.winfo_reqwidth()) // 2, 0)
+    y = parent.winfo_rooty() + 80
+    top.geometry(f"+{x}+{y}")
+    top.transient(parent)
+    top.attributes("-topmost", True)  # a prompt hidden behind the main window looks like a freeze
+    top.lift()
+    try:
+        top.wait_visibility()
+        top.grab_set()
+    except tk.TclError:
+        pass  # grab is a nicety; the dialog still works without it
+    entry.focus_force()
+    parent.wait_window(top)
+    return result["pw"]
+
+
 # ============================================================
 # Privilege escalation (Linux always; macOS only for raw writes —
 # diskutil/hdiutil need no root, but writing /dev/rdiskN does)
@@ -454,15 +615,15 @@ class PrivilegeHelper:
         done = threading.Event()
 
         def ask():
-            pw = simpledialog.askstring(
-                "Administrator password",
-                "Enter your sudo/administrator password to partition and format the drive.\n"
-                "It is used only to run local disk commands and is never stored or sent anywhere.",
-                show="*",
-                parent=self.app,
-            )
-            result["pw"] = pw
-            done.set()
+            try:
+                result["pw"] = ask_password(
+                    self.app,
+                    "Administrator password",
+                    "Enter your sudo/administrator password to partition and format the drive.\n"
+                    "It is used only to run local disk commands and is never stored or sent anywhere.",
+                )
+            finally:
+                done.set()  # never leave the worker thread waiting forever
 
         self.app.after(0, ask)
         done.wait()
@@ -499,12 +660,11 @@ class PrivilegeHelper:
         if not self.needs_password():
             return True  # already root, or pkexec will show its own prompt
         for attempt in range(max_attempts):
-            pw = simpledialog.askstring(
+            pw = ask_password(
+                self.app,
                 "Administrator password",
                 f"{reason}\n\nEnter your administrator (sudo) password.\n"
                 "It is used only to run local disk commands and is never stored or sent anywhere.",
-                show="*",
-                parent=self.app,
             )
             if pw is None:
                 return False  # canceled
@@ -641,10 +801,17 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None):
     run_cmd(["hdiutil", "attach", iso_path, "-nobrowse", "-readonly", "-mountpoint", mount_dir], log)
 
     try:
+        def reopen():
+            log("Remounting the drive to read it back from the device...")
+            run_cmd(["diskutil", "unmountDisk", f"/dev/{dev}"], log)
+            run_cmd(["diskutil", "mountDisk", f"/dev/{dev}"], log)
+            return macos_find_mountpoint_by_volname(dev, VOL_NAME)
+
         copy_windows_payload(
             mount_dir, target, log, progress,
             "wimlib-imagex not found. Install it with: brew install wimlib "
-            "(or use the 'Install missing dependencies' button on tab 2).")
+            "(or use the 'Install missing dependencies' button on tab 2).",
+            reopen=reopen)
     finally:
         log("Unmounting the ISO...")
         run_cmd(["hdiutil", "detach", mount_dir, "-force"], log, check=False)
@@ -653,9 +820,56 @@ def macos_build_usb(iso_path, dev, log, priv=None, progress=None):
         except OSError:
             pass
 
-    log("Safely ejecting the USB drive...")
-    run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False)
+    ejected = macos_eject(dev, log)
     log("Done! The USB drive is ready to install Windows 11.")
+    report_eject(ejected, log)
+    return ejected
+
+
+def macos_eject(dev, log):
+    """Eject the whole disk; if something holds it, force-unmount and retry. Returns True on success."""
+    log("Ejecting the USB drive...")
+    if run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False) == 0:
+        return True
+    log("The drive is busy — forcing the unmount and trying again...")
+    run_cmd(["diskutil", "unmountDisk", "force", f"/dev/{dev}"], log, check=False)
+    time.sleep(1)
+    return run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False) == 0
+
+
+def linux_eject(dev_name, log, priv):
+    """Flush, unmount and power the drive off. Best effort: returns True if it was ejected."""
+    log("Ejecting the USB drive (administrator privileges required)...")
+    # Always exits 0 (run_script treats a failure as a wrong password and retries);
+    # the outcome is reported through the EJECTED / NOT_EJECTED marker line.
+    script = (
+        'sync\n'
+        'for p in "$1"*; do umount "$p" 2>/dev/null || true; done\n'
+        'if command -v eject >/dev/null 2>&1 && eject "$1" 2>/dev/null; then echo EJECTED; exit 0; fi\n'
+        'if command -v udisksctl >/dev/null 2>&1 && udisksctl power-off -b "$1" 2>/dev/null; '
+        'then echo EJECTED; exit 0; fi\n'
+        'echo NOT_EJECTED\n'
+        'exit 0\n'
+    )
+    seen = []
+
+    def watch(line):
+        seen.append(line.strip())
+        log(line)
+
+    try:
+        priv.run_script(script, watch, args=[f"/dev/{dev_name}"])
+    except Exception as e:
+        log(f"Warning: could not run the eject step: {e}")
+        return False
+    return "EJECTED" in seen
+
+
+def report_eject(ejected, log):
+    if ejected:
+        log("Drive ejected — you can unplug it now.")
+    else:
+        log("Could not eject automatically. Eject the drive from the file manager before unplugging it.")
 
 
 def macos_write_raw(iso_path, dev, log, priv, progress=None):
@@ -680,10 +894,15 @@ def macos_write_raw(iso_path, dev, log, priv, progress=None):
     priv.run_script(script, make_dd_log(log, total, progress),
                     args=[iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]])
     if progress:
-        progress(total, total, "Done")
-    log("Safely ejecting the USB drive...")
-    run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False)
+        progress(total, total, "Written")
+    verify_raw_write(iso_path, f"/dev/r{dev}", log, priv, progress)
+    log("Note: macOS cannot read Linux (ISO 9660/ext) images, so this drive will not show up in "
+        "Finder, and macOS may say the disk is 'not readable' — click Ignore, never Initialize. "
+        "That is normal; the content was just verified byte-for-byte.")
+    ejected = macos_eject(dev, log)
     log("Done! The USB drive is ready to boot.")
+    report_eject(ejected, log)
+    return ejected
 
 
 # ============================================================
@@ -840,8 +1059,12 @@ def linux_write_raw(iso_path, dev_name, log, priv, progress=None):
     priv.run_script(script, make_dd_log(log, total, progress),
                     args=[iso_path, dev, RAW_WRITE_BLOCK["linux"]])
     if progress:
-        progress(total, total, "Done")
-    log("Done! The USB drive is ready to boot. It's safe to unplug it now.")
+        progress(total, total, "Written")
+    verify_raw_write(iso_path, dev, log, priv, progress)
+    ejected = linux_eject(dev_name, log, priv)
+    log("Done! The USB drive is ready to boot.")
+    report_eject(ejected, log)
+    return ejected
 
 
 def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
@@ -871,11 +1094,24 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
                     args=[dev, part, iso_path, iso_mount, usb_mount, f"{uid}:{gid}"])
 
     try:
+        def reopen():
+            log("Remounting the drive read-only to read it back from the device...")
+            remount = (
+                'set -eu\n'
+                'sync\n'
+                'umount "$2"\n'
+                '{ echo 3 > /proc/sys/vm/drop_caches; } 2>/dev/null || true\n'
+                'mount -o ro,uid="${3%%:*}",gid="${3##*:}" "$1" "$2"\n'
+            )
+            priv.run_script(remount, log, args=[part, usb_mount, f"{uid}:{gid}"])
+            return usb_mount
+
         copy_windows_payload(
             iso_mount, usb_mount, log, progress,
             "wimlib-imagex not found. Install it via your package manager "
             "(e.g. 'wimtools' on Debian/Ubuntu, 'wimlib-utils' on Fedora, 'wimlib' on "
-            "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2.")
+            "Arch/openSUSE) or use the 'Install missing dependencies' button on tab 2.",
+            reopen=reopen)
     finally:
         log("Unmounting...")
         cleanup_script = 'umount "$1" || true\numount "$2" || true\n'
@@ -889,7 +1125,10 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None):
             except OSError:
                 pass
 
-    log("Done! The USB drive is ready to install Windows 11. It's safe to unplug it now.")
+    ejected = linux_eject(dev_name, log, priv)
+    log("Done! The USB drive is ready to install Windows 11.")
+    report_eject(ejected, log)
+    return ejected
 
 
 # ============================================================
@@ -940,17 +1179,18 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
     try:
         if mode == MODE_LINUX:
             if IS_MAC:
-                macos_write_raw(iso_path, dev, log, priv, progress)
+                ejected = macos_write_raw(iso_path, dev, log, priv, progress)
             else:
-                linux_write_raw(iso_path, dev, log, priv, progress)
+                ejected = linux_write_raw(iso_path, dev, log, priv, progress)
         elif IS_MAC:
-            macos_build_usb(iso_path, dev, log, progress=progress)
+            ejected = macos_build_usb(iso_path, dev, log, progress=progress)
         else:
-            linux_build_usb(iso_path, dev, log, priv, progress)
+            ejected = linux_build_usb(iso_path, dev, log, priv, progress)
     except Exception as e:
         audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
         raise
-    audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev}")
+    audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+    return bool(ejected)
 
 
 def get_missing_dependencies(mode=MODE_WINDOWS):
@@ -1165,6 +1405,8 @@ class App(tk.Tk):
         self.create_progress_label.pack(anchor="w", padx=10)
         self._create_started = None
         self._create_last_ui = 0.0
+        self._create_stage = None
+        self._create_stage_base = 0
 
         self.log_text = tk.Text(f, height=15, state="disabled", bg="black", fg="lightgreen")
         self.log_text.pack(fill="both", expand=True, padx=10, pady=(5, 10))
@@ -1386,11 +1628,15 @@ class App(tk.Tk):
 
         def worker():
             try:
-                build_usb(iso, dev, lambda m: self.after(0, self.log, m), self.priv,
+                ejected = build_usb(iso, dev, lambda m: self.after(0, self.log, m), self.priv,
                           expected_size=expected_size, mode=mode,
                           progress=lambda d, t, s: self.after(0, self._on_create_progress, d, t, s))
                 self.after(0, self._finish_create_progress, True)
-                self.after(0, lambda: messagebox.showinfo("Done", "Bootable USB drive created successfully!"))
+                note = ("It was verified against the ISO and ejected — you can unplug it now." if ejected else
+                        "It was verified against the ISO, but could not be ejected automatically. "
+                        "Eject it from the file manager before unplugging.")
+                self.after(0, lambda: messagebox.showinfo(
+                    "Done", f"Bootable USB drive created successfully!\n\n{note}"))
             except (ValueError, RuntimeError) as e:
                 # Expected, actionable failures: the message is written for the user.
                 self.after(0, self._finish_create_progress, False)
@@ -1411,40 +1657,59 @@ class App(tk.Tk):
     def _reset_create_progress(self):
         self._create_started = None
         self._create_last_ui = 0.0
+        self._create_stage = None
+        self._create_stage_base = 0
         self.create_progress.config(mode="indeterminate", value=0)
         self.create_progress.start(12)
         self.create_progress_label.config(text="Preparing the drive...")
 
     def _on_create_progress(self, done, total, text):
         now = time.time()
-        finished = total and done >= total
+        if not total:
+            # Length unknown (e.g. comparing files): show a busy bar with what is going on.
+            if str(self.create_progress.cget("mode")) != "indeterminate":
+                self.create_progress.config(mode="indeterminate", value=0)
+                self.create_progress.start(12)
+            self.create_progress_label.config(text=f"{text} (this can take a few minutes)")
+            self._create_stage = None
+            return
+        finished = done >= total
         # Updates can arrive thousands of times (one per copied file); redraw ~5x/s.
         if not finished and now - self._create_last_ui < 0.2:
             return
         self._create_last_ui = now
-        if not total:
-            return
         if str(self.create_progress.cget("mode")) != "determinate":
             self.create_progress.stop()
             self.create_progress.config(mode="determinate")
-        if self._create_started is None:
+        if text != self._create_stage:
+            # New stage: measure speed and time left from where this stage began.
+            self._create_stage = text
             self._create_started = now
+            self._create_stage_base = done
         pct = done / total * 100
         self.create_progress.config(value=pct)
-        elapsed = max(now - self._create_started, 0.001)
-        speed = done / elapsed
         if finished:
             self.create_progress_label.config(text=f"{text}  100%")
             return
-        eta = (total - done) / speed if speed > 0 and done > 0 else 0
+        elapsed = max(now - self._create_started, 0.001)
+        speed = (done - self._create_stage_base) / elapsed
+        if speed > 0:
+            eta = (total - done) / speed
+            tail = f" — {human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left"
+        else:
+            tail = " — calculating..."
         self.create_progress_label.config(
-            text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)} — "
-                 f"{human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left")
+            text=f"{text}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
 
     def _finish_create_progress(self, ok):
         self.create_progress.stop()
         self.create_progress.config(mode="determinate", value=100 if ok else 0)
         self.create_progress_label.config(text="Done — 100%" if ok else "Failed.")
+
+    def report_callback_exception(self, exc, val, tb):
+        """Tk swallows exceptions raised in button handlers (they only reach stderr).
+        Show them, so a broken button never looks like "nothing happened"."""
+        self._report_error("Unexpected error", None, val)
 
     def _report_error(self, title, message, exc=None):
         """Show a user-facing error without leaking internals into the dialog."""

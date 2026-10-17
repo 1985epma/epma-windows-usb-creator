@@ -51,7 +51,7 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
-    "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "report_callback_exception", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
 ]
 
 print("Teste de fumaça da interface gráfica")
@@ -173,6 +173,8 @@ try:
         janela._reset_create_progress()
         janela._on_create_progress(500, 1000, "Writing the image...")
         janela._on_create_progress(1000, 1000, "Writing the image...")
+        janela._on_create_progress(0, 0, "Verifying the copied files...")   # tamanho desconhecido
+        janela._on_create_progress(500, 1000, "Verifying the written image...")
         janela._finish_create_progress(True)
         janela._finish_create_progress(False)
         print("  [OK]    progresso da criação do pendrive (indeterminado, parcial, 100%, falha)")

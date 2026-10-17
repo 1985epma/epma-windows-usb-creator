@@ -145,6 +145,18 @@ check("pré-autenticação: senha vazia é recusada sem chamar o sudo",
       app.PrivilegeHelper(None).check_password("") is False)
 check("pré-autenticação existe", hasattr(app.PrivilegeHelper, "authenticate"))
 
+print("\n=== 8. Verificação do pendrive antes do eject ===")
+check("verificação da gravação direta existe", callable(getattr(app, "verify_raw_write", None)))
+check("verificação da cópia do Windows existe", callable(getattr(app, "verify_windows_payload", None)))
+check("script de verificação recebe valores por parâmetro ($1..$4)",
+      all(p in app.VERIFY_RAW_SCRIPT for p in ('"$1"', '"$2"', '"$3"', '"$4"')))
+check("o eject só acontece depois da verificação (gravação direta)",
+      inspect.getsource(app.linux_write_raw).index("verify_raw_write(")
+      < inspect.getsource(app.linux_write_raw).index("linux_eject("))
+check("o eject só acontece depois da verificação (macOS, gravação direta)",
+      inspect.getsource(app.macos_write_raw).index("verify_raw_write(")
+      < inspect.getsource(app.macos_write_raw).index("macos_eject("))
+
 print("\n" + "=" * 62)
 if falhas:
     print(f"RESULTADO: {len(falhas)} de {total} verificações FALHARAM:")
