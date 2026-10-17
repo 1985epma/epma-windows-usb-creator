@@ -42,7 +42,7 @@ WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn", "cancel_btn",
     "progress", "progress_label", "iso_label", "iso_label2",
     "dep_label", "install_deps_btn", "disk_combo",
-    "confirm_var", "confirm_entry", "create_btn", "log_text",
+    "mode_var", "create_btn", "log_text",
 ]
 
 METODOS_OBRIGATORIOS = [
@@ -50,7 +50,7 @@ METODOS_OBRIGATORIOS = [
     "refresh_disks", "selected_disk", "update_create_button_state",
     "start_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
-    "install_dependencies", "open_ms_page",
+    "install_dependencies", "open_ms_page", "on_mode_change",
 ]
 
 print("Teste de fumaça da interface gráfica")

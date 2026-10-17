@@ -537,8 +537,8 @@ def macos_write_raw(iso_path, dev, log, priv):
     log(f"Writing the ISO to /dev/{dev} (administrator privileges required). "
         "This can take several minutes and shows no progress until it finishes...")
     # /dev/rdiskN (raw node) is several times faster than /dev/diskN.
-    script = f'set -eu\ndd if="$1" of="$2" bs={RAW_WRITE_BLOCK["mac"]}\nsync\n'
-    priv.run_script(script, log, args=[iso_path, f"/dev/r{dev}"])
+    script = 'set -eu\ndd if="$1" of="$2" bs="$3"\nsync\n'
+    priv.run_script(script, log, args=[iso_path, f"/dev/r{dev}", RAW_WRITE_BLOCK["mac"]])
     log("Safely ejecting the USB drive...")
     run_cmd(["diskutil", "eject", f"/dev/{dev}"], log, check=False)
     log("Done! The USB drive is ready to boot.")
@@ -687,14 +687,14 @@ def linux_write_raw(iso_path, dev_name, log, priv):
     validate_hybrid_iso(iso_path)
     dev = f"/dev/{dev_name}"
     log(f"Writing the ISO to {dev} (administrator privileges required)...")
-    # Values arrive as "$1"/"$2"; the glob expands only after the quoted device prefix.
+    # Values arrive as "$1".."$3"; the glob expands only after the quoted device prefix.
     script = (
         'set -eu\n'
         'for p in "$2"*; do umount "$p" 2>/dev/null || true; done\n'
-        f'dd if="$1" of="$2" bs={RAW_WRITE_BLOCK["linux"]} conv=fsync status=progress\n'
+        'dd if="$1" of="$2" bs="$3" conv=fsync status=progress\n'
         'sync\n'
     )
-    priv.run_script(script, make_progress_log(log), args=[iso_path, dev])
+    priv.run_script(script, make_progress_log(log), args=[iso_path, dev, RAW_WRITE_BLOCK["linux"]])
     log("Done! The USB drive is ready to boot. It's safe to unplug it now.")
 
 
