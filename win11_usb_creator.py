@@ -64,6 +64,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+import zipfile
 
 # Tkinter is needed by the GUI only. The engine and the command line interface work
 # without it, so a missing Tk is remembered here instead of ending the program at
@@ -98,6 +99,23 @@ APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as 
 
 MS_DOWNLOAD_PAGE = "https://www.microsoft.com/en-us/software-download/windows11"
 PROJECT_URL = "https://github.com/1985epma/epma-windows-usb-creator"
+
+# ChromeOS Flex is Google's free ChromeOS for PCs and Macs. Regular ChromeOS is not
+# distributed for generic computers, so Flex is the official image this tool offers.
+# URLs: https://support.google.com/chromeosflex/answer/11541904 (download and install) and
+# https://support.google.com/chromeosflex/answer/11552529 (requirements).
+CHROMEOS_FLEX_URL = "https://dl.google.com/chromeos-flex/images/latest.bin.zip"
+# The official address redirects to a versioned file on the same host; any other host is refused.
+CHROMEOS_FLEX_HOSTS = ("dl.google.com",)
+# Measured on the real files (2026-10): the ZIP is about 1.4 GB and the image inside it about 9.5 GB.
+# Downloading and extracting needs both on disk at once, so warn below this much free space.
+CHROMEOS_FLEX_FREE_BYTES = 12_000_000_000
+CHROMEOS_FLEX_GUIDE_URL = "https://support.google.com/chromeosflex/answer/11541904"
+CHROMEOS_FLEX_REQUIREMENTS_URL = "https://support.google.com/chromeosflex/answer/11552529"
+# Google asks for a USB drive of "16 GB or larger". Drives sold as 16 GB hold about 15.5e9
+# bytes, so this is the point below which the user is warned.
+CHROMEOS_MIN_USB_BYTES = 15_000_000_000
+DISK_IMAGE_MAX_BYTES = 64 * 1024 ** 3      # an image larger than this is not a plausible ChromeOS image
 FAT32_MAX_FILE_SIZE = 4_294_967_295  # 4GB - 1 byte
 CHUNK_SIZE = 1024 * 1024
 VOL_NAME = "WIN11USB"
@@ -107,6 +125,9 @@ VOL_NAME = "WIN11USB"
 #   linux:   write the ISO byte-for-byte to the drive (hybrid ISO, like `dd`)
 MODE_WINDOWS = "windows"
 MODE_LINUX = "linux"
+MODE_CHROMEOS = "chromeos"
+# Image types that are written byte for byte to the whole drive (no partitioning, no copying).
+RAW_MODES = (MODE_LINUX, MODE_CHROMEOS)
 LOG_MAX_LINES = 5000   # the on-screen log keeps only this many lines
 LOG_FLUSH_MS = 100     # worker log lines are queued and written to the log box this often
 VERIFY_CHUNK = 16 * 1024 * 1024  # bytes compared per step when reading a raw write back
@@ -445,6 +466,35 @@ PT_BR = {
     "Close": "Fechar",
     "Audit log": "Log de auditoria",
     "Could not open the folder: {reason}": "Não foi possível abrir a pasta: {reason}",
+    "ChromeOS Flex is ready": "O ChromeOS Flex está pronto",
+    "ChromeOS Flex": "ChromeOS Flex",
+    "Download ChromeOS Flex from Google": "Baixar o ChromeOS Flex do Google",
+    "No image selected yet.": "Nenhuma imagem selecionada ainda.",
+    "Select an ISO or disk image": "Selecione uma ISO ou imagem de disco",
+    "Download ChromeOS Flex": "Baixar o ChromeOS Flex",
+    "Save ChromeOS Flex as": "Salvar o ChromeOS Flex como",
+    "Extracting...": "Extraindo...",
+    "Ready.": "Pronto.",
+    "The disk image is ready:\n{path}\n\nNext: on tab 2, plug in a USB drive of 16 GB or larger, select it and click \"Create Bootable USB Drive\".": "A imagem de disco está pronta:\n{path}\n\nPróximo passo: na aba 2, conecte um pendrive de 16 GB ou maior, selecione-o e clique em \"Create Bootable USB Drive\".",
+    "Drive too small": "Pendrive pequeno demais",
+    "Small USB drive": "Pendrive pequeno",
+    "ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs, and the official way to run ChromeOS on a computer you already own. Google does not publish regular ChromeOS for ordinary computers.\n\nThe button below downloads Google's official image, extracts it, and prepares it for tab 2, where you choose the USB drive.": "O ChromeOS Flex é a versão gratuita do ChromeOS do Google para PCs e Macs, e a forma oficial de usar o ChromeOS em um computador que você já tem. O Google não publica o ChromeOS comum para computadores em geral.\n\nO botão abaixo baixa a imagem oficial do Google, extrai e a prepara para a aba 2, onde você escolhe o pendrive.",
+    "Before you start:\n• You need a USB drive of 16 GB or larger. Everything on it will be erased. Google notes that some drives (certain Sandisk models, for example) may not work as installers.\n• The computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM and 16 GB of internal storage, and it must be able to boot from USB.\n• Google only guarantees ChromeOS Flex on certified models; other computers may work without guarantees.": "Antes de começar:\n• Você precisa de um pendrive de 16 GB ou maior. Tudo nele será apagado. O Google avisa que alguns pendrives (certos modelos Sandisk, por exemplo) podem não funcionar como instaladores.\n• O computador onde você vai instalar precisa de processador Intel ou AMD de 64 bits, 4 GB de RAM e 16 GB de armazenamento interno, e precisa conseguir iniciar por USB.\n• O Google só garante o ChromeOS Flex em modelos certificados; outros computadores podem funcionar, sem garantia.",
+    "Already have the image (latest.bin.zip from Google, or the .bin inside it)?": "Já tem a imagem (latest.bin.zip do Google, ou o .bin que está dentro dele)?",
+    "Select existing image...": "Selecionar uma imagem existente...",
+    "Google's installation guide": "Guia de instalação do Google",
+    "Google's requirements page": "Página de requisitos do Google",
+    "ChromeOS Flex (disk image, written directly)": "ChromeOS Flex (imagem de disco, gravada diretamente)",
+    "ISO and disk images": "Imagens ISO e de disco",
+    "All files": "Todos os arquivos",
+    "ChromeOS Flex is provided by Google and is subject to Google's own terms.\n\nThis program only downloads Google's official image from its servers (dl.google.com) over HTTPS and prepares it for your USB drive. Google's installation guide: {url}\n\nDownload it now?": "O ChromeOS Flex é fornecido pelo Google e está sujeito aos termos do próprio Google.\n\nEste programa apenas baixa a imagem oficial dos servidores do Google (dl.google.com) por HTTPS e a prepara para o seu pendrive. Guia de instalação do Google: {url}\n\nBaixar agora?",
+    "ZIP archive": "Arquivo ZIP",
+    "Selected image: {path}": "Imagem selecionada: {path}",
+    "The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. Nothing was changed.": "A imagem ({image}) é maior que este pendrive ({drive}). Escolha um pendrive maior. Nada foi alterado.",
+    "Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. It may not work as an installer.\n\nContinue anyway?": "O Google pede um pendrive de 16 GB ou maior para o ChromeOS Flex, e este tem {size}. Ele pode não funcionar como instalador.\n\nContinuar mesmo assim?",
+    "Downloading...": "Baixando...",
+    "Not much free space": "Pouco espaço livre",
+    "The download (about 1.4 GB) and the extracted image (about 9.5 GB) need roughly {need} free in this folder, and only {free} is available. It may fail part-way.\n\nContinue anyway?": "O download (cerca de 1,4 GB) e a imagem extraída (cerca de 9,5 GB) precisam de aproximadamente {need} livres nesta pasta, e há só {free}. Pode falhar no meio.\n\nContinuar mesmo assim?",
 }
 
 
@@ -602,7 +652,13 @@ def validate_hybrid_iso(path):
 # ============================================================
 ISO_KIND_WINDOWS = "windows"
 ISO_KIND_LINUX = "linux"
+ISO_KIND_CHROMEOS = "chromeos"
 ISO_KIND_UNKNOWN = "unknown"
+GPT_HEADER_OFFSET = 512                 # LBA 1: "EFI PART"
+GPT_ENTRIES_OFFSET = 1024               # LBA 2: the partition entries (128 bytes each)
+GPT_ENTRY_SIZE = 128
+# ChromeOS disks always carry these partition names (kernel and root slots, user state).
+CHROMEOS_PARTITION_NAMES = {"KERN-A", "ROOT-A", "KERN-B", "ROOT-B", "STATE", "EFI-SYSTEM"}
 ISO_SECTOR = 2048
 ISO_PVD_OFFSET = 16 * ISO_SECTOR        # Primary Volume Descriptor: sector 16 (0x8000)
 ISO_DIR_MAX_BYTES = 256 * 1024          # never read more than this per directory
@@ -652,10 +708,26 @@ def _iso_has_udf(fh):
                for i in range(len(area) // ISO_SECTOR))
 
 
+def _is_chromeos_disk_image(head):
+    """True if `head` (the first sectors of a file) is a GPT disk with ChromeOS partition names."""
+    if len(head) < GPT_ENTRIES_OFFSET + GPT_ENTRY_SIZE or head[GPT_HEADER_OFFSET:GPT_HEADER_OFFSET + 8] != b"EFI PART":
+        return False
+    names = set()
+    for pos in range(GPT_ENTRIES_OFFSET, min(len(head), GPT_ENTRIES_OFFSET + 128 * GPT_ENTRY_SIZE), GPT_ENTRY_SIZE):
+        entry = head[pos:pos + GPT_ENTRY_SIZE]
+        if len(entry) < GPT_ENTRY_SIZE or not any(entry[:16]):
+            continue  # unused slot (its partition type GUID is all zeros)
+        names.add(entry[56:128].decode("utf-16-le", "ignore").split("\x00")[0].upper())
+    # ROOT-A and KERN-A are in every ChromeOS image (installer, recovery and installed disks).
+    return {"ROOT-A", "KERN-A"} <= names and len(names & CHROMEOS_PARTITION_NAMES) >= 3
+
+
 def _detect_iso_kind(path):
     file_size = os.path.getsize(path)
     with open(path, "rb") as fh:
         head = fh.read(ISO_PVD_OFFSET + ISO_SECTOR)
+        if _is_chromeos_disk_image(head):
+            return ISO_KIND_CHROMEOS
         pvd = head[ISO_PVD_OFFSET:]
         if len(pvd) < ISO_SECTOR or pvd[0] != 1 or pvd[1:6] != b"CD001":
             return ISO_KIND_UNKNOWN  # not an ISO 9660 image
@@ -695,7 +767,7 @@ def _detect_iso_kind(path):
 
 
 def detect_iso_kind(path):
-    """Classify an ISO by its content: 'windows', 'linux' (hybrid) or 'unknown'.
+    """Classify an image by its content: 'windows', 'linux' (hybrid), 'chromeos' or 'unknown'.
 
     Never raises and reads at most a few MB, so it is safe to call on any file the user
     picks. 'unknown' means "could not tell" and callers should fall back to the file name.
@@ -704,6 +776,68 @@ def detect_iso_kind(path):
         return _detect_iso_kind(path)
     except Exception:  # noqa: BLE001 - any malformed/unreadable file simply means "unknown"
         return ISO_KIND_UNKNOWN
+
+
+# ---- Extracting the disk image from Google's ZIP ----
+def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
+    """Extract the single .bin disk image from `zip_path` into `dest_dir`; return its path.
+
+    Only the file's base name is used (an entry such as "../../x.bin" cannot escape the folder),
+    it never overwrites an existing file, it refuses implausible sizes and checks the free space
+    first, and the data goes to a temporary file that is renamed only when the whole archive
+    entry was read and its CRC verified. `progress(done, total)` is called while copying.
+    """
+    try:
+        archive = zipfile.ZipFile(zip_path)
+    except (zipfile.BadZipFile, OSError):
+        raise ValueError("That is not a valid ZIP file. If the download was interrupted, download it again.") from None
+    with archive:
+        images = [i for i in archive.infolist() if not i.is_dir() and i.filename.lower().endswith(".bin")]
+        if not images:
+            raise ValueError("The ZIP file does not contain a .bin disk image.")
+        info = max(images, key=lambda i: i.file_size)
+        if not 1024 * 1024 <= info.file_size <= DISK_IMAGE_MAX_BYTES:
+            raise ValueError(f"The disk image inside the ZIP has an implausible size "
+                             f"({human_size(info.file_size)}), so it was not extracted.")
+        if not os.path.isdir(dest_dir):
+            raise ValueError(f"The folder does not exist: {dest_dir}")
+        if shutil.disk_usage(dest_dir).free < info.file_size + 256 * 1024 * 1024:
+            raise ValueError(f"Not enough free space in {dest_dir}: the disk image needs "
+                             f"{human_size(info.file_size)}.")
+        name = os.path.basename(info.filename.replace("\\", "/"))
+        if not re.fullmatch(r"[A-Za-z0-9._+-]{1,128}", name):
+            name = "chromeos_flex.bin"
+        stem, ext = os.path.splitext(name)
+        dest, n = os.path.join(dest_dir, name), 1
+        while os.path.exists(dest):
+            dest, n = os.path.join(dest_dir, f"{stem}-{n}{ext}"), n + 1
+        tmp = dest + ".part"
+        done = 0
+        try:
+            fd = os.open(tmp, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, PRIVATE_FILE_MODE)
+            with os.fdopen(fd, "wb") as out, archive.open(info) as src:
+                while True:
+                    check_canceled(cancel_event)
+                    chunk = src.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    done += len(chunk)
+                    if progress:
+                        progress(done, info.file_size)
+            if done != info.file_size:
+                raise ValueError("The disk image in the ZIP is incomplete. Download the file again.")
+            os.replace(tmp, dest)
+        except zipfile.BadZipFile:
+            raise ValueError("The ZIP file is damaged (checksum error). Download it again.") from None
+        finally:
+            if os.path.exists(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+    audit(f"Extracted a disk image from a ZIP ({human_size(done)})")
+    return dest
 
 
 # ---- SHA-256 of a local file ----
@@ -748,6 +882,26 @@ def compute_sha256(path, progress=None, chunk=SHA256_CHUNK):
             if progress:
                 progress(done, total)
     return digest.hexdigest()
+
+
+def validate_disk_image(path):
+    """Raise unless `path` is a raw disk image that can boot from a USB drive as-is.
+
+    ChromeOS images are whole-disk images (a partition table plus the partitions), written to
+    the drive byte for byte. They carry the MBR boot signature like a hybrid ISO does.
+    """
+    with open(path, "rb") as fh:
+        head = fh.read(4)
+        fh.seek(510)
+        sig = fh.read(2)
+    if head == b"PK\x03\x04":
+        raise ValueError(
+            "This is the ZIP archive, not the disk image inside it. Select it with 'Select existing "
+            "ISO file...' so the program can extract the .bin file, or extract it yourself.")
+    if sig != b"\x55\xaa":
+        raise ValueError(
+            "This file is not a bootable disk image, so it cannot be written to a USB drive. "
+            "For ChromeOS Flex use the .bin file from the official latest.bin.zip.")
 
 
 def make_progress_log(log, interval=5.0):
@@ -1018,6 +1172,8 @@ def validate_download_url(raw_url):
     host = (parsed.hostname or "").lower()
     if not host:
         raise ValueError("The link has no server address.")
+    if url == CHROMEOS_FLEX_URL:
+        return url, host, False  # Google's official ChromeOS Flex image (exact address only)
     if os.environ.get(ENV_ALLOW_ANY_HOST, "").strip().lower() in ("1", "true", "yes"):
         return url, host, False
     trusted = os.environ.get(ENV_TRUSTED_HOSTS)
@@ -2062,7 +2218,7 @@ def macos_write_raw(iso_path, dev, log, priv, progress=None, cancel_event=None, 
     if progress:
         progress(total, total, "Written")
     verify_raw_write(iso_path, f"/dev/r{dev}", log, priv, progress, cancel_event)
-    log("Note: macOS cannot read Linux (ISO 9660/ext) images, so this drive will not show up in "
+    log("Note: macOS cannot read Linux or ChromeOS (ISO 9660/ext) images, so this drive will not show up in "
         "Finder, and macOS may say the disk is 'not readable' — click Ignore, never Initialize. "
         "That is normal; the content was just verified byte-for-byte.")
     ejected = macos_eject(dev, log) if eject else None
@@ -2466,21 +2622,32 @@ def hash_iso_for_audit(iso_path, log, progress, cancel_event):
     return digest
 
 
-def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None,
-              cancel_event=None, eject=True):
-    if mode not in (MODE_WINDOWS, MODE_LINUX):
+def validate_image_for_mode(iso_path, mode, expected_size=None):
+    """Check, before anything is touched, that the image suits the chosen type and fits the drive."""
+    if mode != MODE_WINDOWS and mode not in RAW_MODES:
         raise ValueError(f"Unknown image type: {mode!r}")
     iso_path = validate_iso_path(iso_path)
-    validate_device_name(dev)
     if mode == MODE_LINUX:
-        validate_hybrid_iso(iso_path)  # fail before anything is touched
+        validate_hybrid_iso(iso_path)
+    elif mode == MODE_CHROMEOS:
+        validate_disk_image(iso_path)
+    if mode in RAW_MODES and expected_size and os.path.getsize(iso_path) > expected_size:
+        raise ValueError(f"The image ({human_size(os.path.getsize(iso_path))}) is larger than the "
+                         f"drive ({human_size(expected_size)}). Nothing was changed.")
+    return iso_path
+
+
+def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, progress=None,
+              cancel_event=None, eject=True):
+    iso_path = validate_image_for_mode(iso_path, mode, expected_size)
+    validate_device_name(dev)
     iso_sha = hash_iso_for_audit(iso_path, log, progress, cancel_event)
     reverify_target_disk(dev, expected_size, log)
     audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image "
           f"(iso sha256={iso_sha}, size={os.path.getsize(iso_path)})")
     try:
         with prevent_sleep(log):
-            if mode == MODE_LINUX:
+            if mode in RAW_MODES:
                 if IS_MAC:
                     ejected = macos_write_raw(iso_path, dev, log, priv, progress, cancel_event, eject)
                 else:
@@ -2502,7 +2669,7 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
 
 
 def get_missing_dependencies(mode=MODE_WINDOWS):
-    if mode == MODE_LINUX:
+    if mode in RAW_MODES:
         return [] if shutil.which("dd") else ["dd"]  # raw write needs nothing else
     if IS_MAC:
         return [] if shutil.which("wimlib-imagex") else ["wimlib-imagex"]
@@ -2539,8 +2706,9 @@ class DownloadThread(threading.Thread):
     """
 
     def __init__(self, url, dest_path, progress_cb, done_cb, error_cb, cancel_event,
-                 expected_sha256=None):
+                 expected_sha256=None, allowed_hosts=None):
         super().__init__(daemon=True)
+        self.allowed_hosts = tuple(h.lower() for h in allowed_hosts) if allowed_hosts else None
         self.url = url
         self.dest_path = dest_path
         self.progress_cb = progress_cb
@@ -2638,6 +2806,13 @@ class DownloadThread(threading.Thread):
             if final_url != self.url:
                 validate_download_url(final_url)
                 audit(f"Download redirected to host: {urllib.parse.urlparse(final_url).hostname}")
+            if self.allowed_hosts is not None:
+                final_host = (urllib.parse.urlparse(final_url).hostname or "").lower()
+                if final_host not in self.allowed_hosts:
+                    audit(f"Download REFUSED: redirected to unexpected host {final_host}", logging.WARNING)
+                    raise RuntimeError(
+                        f"The server redirected the download to an unexpected address ({final_host}), "
+                        "so it was stopped and what had arrived was discarded.")
             status = getattr(resp, "status", None) or resp.getcode()
             length = int(resp.headers.get("Content-Length", 0) or 0)
             if offset and status == 206:
@@ -2817,9 +2992,10 @@ def help_sections():
     return [
         ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
 
-## Two image types
+## Three image types
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux / other hybrid ISO — writes the ISO byte for byte to the whole drive (like dd). Use it for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images. An ISO that cannot boot from a USB drive is refused before anything is erased.
+• ChromeOS Flex — Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you (tab 3).
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
@@ -2829,6 +3005,7 @@ def help_sections():
 ## Where things are
 • Tab 1 "Download ISO": get the Windows 11 ISO, or pick an ISO you already have, and check its SHA-256.
 • Tab 2 "Create USB drive": choose the drive and write it.
+• Tab 3 "ChromeOS Flex": download Google's official ChromeOS Flex image and prepare it for tab 2.
 • Help menu: this documentation, the audit log folder, the project page and About."""),
 
         ("Quick start: Windows 11", """## 1. Get the ISO (tab 1)
@@ -2864,6 +3041,33 @@ def help_sections():
 • Click "Ignore". Never click "Initialize" — it would erase what was just written.
 • This is normal. The content was already verified byte for byte."""),
 
+        ("ChromeOS Flex", """## What it is
+• ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. It is the official way to run ChromeOS on a computer you already own: Google does not publish regular ChromeOS for ordinary computers, so this program does not offer it.
+• ChromeOS Flex is provided by Google under Google's own terms. This program only downloads Google's official image and writes it to your drive.
+
+## What you need
+• A USB drive of 16 GB or larger. Everything on it is erased. Google notes that some drives (certain Sandisk models, for example) may not work as installers.
+• On the computer you will install it on: an Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage, and the ability to boot from USB. Google only guarantees ChromeOS Flex on certified models; other computers may work without guarantees.
+• Google's guide: @GUIDE@
+• Google's requirements: @REQUIREMENTS@
+
+## Steps
+• Tab 3: click "Download ChromeOS Flex from Google" and choose where to save the file. The download is resumable. The ZIP is extracted automatically; the ZIP that this program downloaded is deleted afterwards (a ZIP you selected yourself is kept).
+• Already have latest.bin.zip, or the .bin inside it? Use "Select existing image..." (a ZIP is extracted for you).
+• Tab 2: the image type is set to "ChromeOS Flex" automatically (it is recognised by its partitions, not by its name). Plug in the drive, refresh the list, select it and click "Create Bootable USB Drive".
+• The image is written, read back and compared with the file, and the drive is ejected.
+• Boot the computer from the USB drive and follow Google's guide for the next steps.
+
+## Notes
+• The image is about 9.5 GB once extracted and the download about 1.4 GB: keep roughly 12 GB free on the computer while preparing it (a warning appears when there is less). The drive must be at least as large as the image, otherwise nothing is touched; a drive below 16 GB shows a warning first.
+• The official address redirects to a versioned file on dl.google.com. A redirect to any other server is refused and what arrived is discarded.
+• The administrator password is asked on macOS as well, because the whole drive is written directly.
+• On macOS the finished drive does not appear in Finder, as with Linux images (see "Quick start: Linux and other ISOs").
+• The download link is only accepted when it is Google's official address (@URL@).
+• Command line: fetch-chromeos downloads and extracts the image; write --mode chromeos writes it.""".replace(
+            "@GUIDE@", CHROMEOS_FLEX_GUIDE_URL).replace("@REQUIREMENTS@", CHROMEOS_FLEX_REQUIREMENTS_URL).replace(
+            "@URL@", CHROMEOS_FLEX_URL)),
+
         ("Tab 1: Download ISO", """## Direct ISO link
 • Only https:// links are accepted: an unencrypted link could be altered on the way.
 • Links to servers outside Microsoft's known download hosts (@HOSTS@) show a warning. Download Windows only from Microsoft.
@@ -2885,11 +3089,11 @@ def help_sections():
 • With no expected value it only shows the hash so you can compare it yourself.""".replace("@HOSTS@", hosts)),
 
         ("Tab 2: Create USB drive", f"""## Image type
-• Windows 11 (GPT + FAT32, files copied) or Linux / other hybrid ISO (written directly). It is preselected from the ISO contents; you can change it.
+• Windows 11 (GPT + FAT32, files copied), Linux / other hybrid ISO (written directly) or ChromeOS Flex (disk image, written directly). It is preselected from the image contents; you can change it.
 
 ## Dependencies
 • Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
-• Linux mode needs nothing extra.
+• Linux and ChromeOS Flex modes need nothing extra.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
 ## The drive list
@@ -2900,7 +3104,7 @@ def help_sections():
 • Drives that do not look like a spare stick need you to type their identifier (for example disk4). That applies to drives larger than {large_gb} GB, with {used_gb} GB or more in use, with a name that suggests backups or personal data, that look like an external hard disk or SSD, with {MANY_VOLUMES} or more volumes, or whose contents could not be read.
 
 ## Administrator password
-• Needed on Linux, and on macOS for the Linux (direct write) mode. It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• Needed on Linux, and on macOS for the direct-write modes (Linux and ChromeOS Flex). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
 • It is used only to run local disk commands. It is not stored, logged or sent anywhere.
 
 ## Progress, Cancel and the log
@@ -2922,7 +3126,7 @@ def help_sections():
 • A drive that was canceled or interrupted mid-write is not usable until written again."""),
 
         ("Verification and eject", """## Verification
-• Linux mode: the whole image is read back from the drive and compared byte for byte with the ISO.
+• Linux and ChromeOS Flex modes: the whole image is read back from the drive and compared byte for byte with the file.
 • Windows mode: the drive is unmounted and mounted again so it is read from the device, then every file is compared by checksum with the ISO. A split install image is also checked with wimlib-imagex verify.
 • Verification cannot be skipped. If anything differs, the drive is NOT ejected, the message says so, and the drive must not be used. Write it again; if it keeps failing, try another USB port or another drive.
 
@@ -2935,9 +3139,10 @@ def help_sections():
 
 ## Commands
 • list [--json] — USB drives that can be used.
-• detect ISO [--json] — prints windows, linux or unknown.
+• detect ISO [--json] — prints windows, linux, chromeos or unknown.
+• fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
-• write --iso ISO --disk DISK [--mode auto|windows|linux] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
+• write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -2974,6 +3179,18 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 ## "This ISO is not a bootable hybrid image"
 • Linux mode needs a hybrid image. Current Ubuntu, Debian, Fedora, Mint and Arch ISOs are. A Windows ISO needs the Windows mode.
 
+## "This is the ZIP archive, not the disk image inside it"
+• You selected latest.bin.zip in a place that expects the .bin. On tab 3 (or with "Select existing ISO file...") choose the ZIP and the program extracts the .bin for you.
+
+## "This file is not a bootable disk image"
+• ChromeOS Flex mode needs the .bin from Google's official latest.bin.zip. Download it again from tab 3.
+
+## "The image is larger than the drive"
+• Choose a bigger USB drive. Nothing was changed. For ChromeOS Flex Google asks for 16 GB or larger.
+
+## The ChromeOS Flex download fails or is very slow
+• Cancel and start it again: the partial file is kept and the download resumes. Google's server is the only source this program accepts for it.
+
 ## "wimlib-imagex not found"
 • Install wimlib (macOS: brew install wimlib) or use "Install missing dependencies".
 
@@ -3003,10 +3220,10 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • {ENV_LANG} — set to pt for a Brazilian Portuguese window. The default is US English whatever the system language.
 
 ## Privacy
-• No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO download you ask for."""),
+• No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO or ChromeOS Flex download you ask for."""),
 
         ("About", f"""EPMA USB CREATOR {__version__}
-Writes verified bootable USB drives from Windows 11 and Linux ISOs on macOS and Linux.
+Writes verified bootable USB drives from Windows 11, Linux and ChromeOS Flex images on macOS and Linux.
 
 Platform: {platform_display_name()}
 License: GNU General Public License v3 or later
@@ -3035,6 +3252,7 @@ class App(_TkBase):
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
         self._help_win = None
+        self.flex_cancel_event = threading.Event()
         self._build_menu()
         self._build_ui()
         self._fit_window()
@@ -3043,13 +3261,17 @@ class App(_TkBase):
     # ---------- UI ----------
     def _build_ui(self):
         nb = ttk.Notebook(self)
+        self.nb = nb
         nb.pack(fill="both", expand=True, padx=10, pady=10)
         self.tab1 = ttk.Frame(nb)
         self.tab2 = ttk.Frame(nb)
+        self.tab3 = ttk.Frame(nb)
         nb.add(self.tab1, text=_("1. Download ISO"))
         nb.add(self.tab2, text=_("2. Create USB drive"))
+        nb.add(self.tab3, text=_("ChromeOS Flex"))
         self._build_tab1()
         self._build_tab2()
+        self._build_tab3()
 
     def _build_tab1(self):
         f = self.tab1
@@ -3118,10 +3340,58 @@ class App(_TkBase):
         self.iso_sha_btn.pack(side="left")
         self.iso_sha_progress = ttk.Progressbar(sha_row, orient="horizontal", mode="determinate")
         self.iso_sha_progress.pack(side="left", fill="x", expand=True, padx=(8, 0))
-        self.iso_sha_label = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
+        self.iso_sha_label = ttk.Label(self.iso_check_frame, text="", wraplength=610, justify="left")
         self.iso_sha_label.pack(anchor="w", padx=8)
-        self.iso_sha_result = ttk.Label(self.iso_check_frame, text="", wraplength=680, justify="left")
+        self.iso_sha_result = ttk.Label(self.iso_check_frame, text="", wraplength=610, justify="left")
         self.iso_sha_result.pack(anchor="w", padx=8, pady=(0, 6))
+
+    def _build_tab3(self):
+        f = self.tab3
+        ttk.Label(
+            f, justify="left", wraplength=650,
+            text=_("ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs, and the official "
+                   "way to run ChromeOS on a computer you already own. Google does not publish regular "
+                   "ChromeOS for ordinary computers.\n\n"
+                   "The button below downloads Google's official image, extracts it, and prepares it for "
+                   "tab 2, where you choose the USB drive.")).pack(anchor="w", padx=10, pady=(12, 8))
+        ttk.Label(
+            f, justify="left", wraplength=650,
+            text=_("Before you start:\n"
+                   "\u2022 You need a USB drive of 16 GB or larger. Everything on it will be erased. "
+                   "Google notes that some drives (certain Sandisk models, for example) may not work as "
+                   "installers.\n"
+                   "\u2022 The computer you install it on needs an Intel or AMD 64-bit processor, 4 GB of RAM "
+                   "and 16 GB of internal storage, and it must be able to boot from USB.\n"
+                   "\u2022 Google only guarantees ChromeOS Flex on certified models; other computers may work "
+                   "without guarantees.")).pack(anchor="w", padx=10, pady=(0, 10))
+
+        row = ttk.Frame(f)
+        row.pack(fill="x", padx=10, pady=(0, 4))
+        self.flex_download_btn = ttk.Button(row, text=_("Download ChromeOS Flex from Google"),
+                                            command=self.start_flex_download)
+        self.flex_download_btn.pack(side="left")
+        self.flex_cancel_btn = ttk.Button(row, text=_("Cancel"), command=self.cancel_flex, state="disabled")
+        self.flex_cancel_btn.pack(side="left", padx=5)
+        self.flex_progress = ttk.Progressbar(f, orient="horizontal", mode="determinate")
+        self.flex_progress.pack(fill="x", padx=10, pady=(8, 2))
+        self.flex_progress_label = ttk.Label(f, text="")
+        self.flex_progress_label.pack(anchor="w", padx=10)
+
+        ttk.Separator(f).pack(fill="x", padx=10, pady=12)
+        ttk.Label(f, text=_("Already have the image (latest.bin.zip from Google, or the .bin inside it)?")
+                  ).pack(anchor="w", padx=10)
+        ttk.Button(f, text=_("Select existing image..."), command=self.pick_existing_iso).pack(
+            anchor="w", padx=10, pady=(2, 8))
+        self.flex_status_label = ttk.Label(f, text=_("No image selected yet."), foreground="blue",
+                                           wraplength=650, justify="left")
+        self.flex_status_label.pack(anchor="w", padx=10, pady=(0, 10))
+
+        links = ttk.Frame(f)
+        links.pack(fill="x", padx=10)
+        ttk.Button(links, text=_("Google's installation guide"),
+                   command=lambda: webbrowser.open(CHROMEOS_FLEX_GUIDE_URL)).pack(side="left")
+        ttk.Button(links, text=_("Google's requirements page"),
+                   command=lambda: webbrowser.open(CHROMEOS_FLEX_REQUIREMENTS_URL)).pack(side="left", padx=5)
 
     def _build_tab2(self):
         f = self.tab2
@@ -3138,6 +3408,10 @@ class App(_TkBase):
                         variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
         ttk.Radiobutton(mode_frame, text=_("Linux / other hybrid ISO (written directly)"), value=MODE_LINUX,
                         variable=self.mode_var, command=self.on_mode_change).pack(side="left", padx=(8, 0))
+        flex_row = ttk.Frame(f)
+        flex_row.pack(fill="x", padx=(86, 10), pady=(0, 8))
+        ttk.Radiobutton(flex_row, text=_("ChromeOS Flex (disk image, written directly)"), value=MODE_CHROMEOS,
+                        variable=self.mode_var, command=self.on_mode_change).pack(side="left")
 
         dep_frame = ttk.Frame(f)
         dep_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -3161,7 +3435,7 @@ class App(_TkBase):
             warn_text += "\n" + _("You'll be asked for your administrator (sudo) password to format the drive.")
         else:
             warn_text += "\n" + _("Linux mode on macOS asks for your administrator password to write the drive.")
-        ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=720).pack(anchor="w", padx=10, pady=10)
+        ttk.Label(f, text=warn_text, foreground="red", justify="left", wraplength=650).pack(anchor="w", padx=10, pady=10)
 
         create_row = ttk.Frame(f)
         create_row.pack(anchor="w", padx=10, pady=10)
@@ -3238,9 +3512,128 @@ class App(_TkBase):
         webbrowser.open(MS_DOWNLOAD_PAGE)
 
     def pick_existing_iso(self):
-        path = filedialog.askopenfilename(title=_("Select the Windows 11 ISO file"), filetypes=[(_("ISO image"), "*.iso")])
-        if path:
+        path = filedialog.askopenfilename(
+            title=_("Select an ISO or disk image"),
+            filetypes=[(_("ISO and disk images"), "*.iso *.bin *.img *.zip"), (_("All files"), "*")])
+        if not path:
+            return
+        if path.lower().endswith(".zip"):
+            # Google distributes ChromeOS Flex as latest.bin.zip: extract the .bin next to it.
+            self.nb.select(self.tab3)
+            self._extract_flex_image(path, delete_zip=False)
+        else:
             self.set_iso(path)
+
+    # ---------- ChromeOS Flex (download from Google, extract, hand over to tab 2) ----------
+    def start_flex_download(self):
+        if not messagebox.askyesno(
+            _("Download ChromeOS Flex"),
+            _("ChromeOS Flex is provided by Google and is subject to Google's own terms.\n\n"
+              "This program only downloads Google's official image from its servers "
+              "(dl.google.com) over HTTPS and prepares it for your USB drive. Google's installation "
+              "guide: {url}\n\nDownload it now?").format(url=CHROMEOS_FLEX_GUIDE_URL),
+        ):
+            return
+        dest = filedialog.asksaveasfilename(
+            title=_("Save ChromeOS Flex as"), defaultextension=".zip", initialfile="chromeos_flex_latest.bin.zip",
+            filetypes=[(_("ZIP archive"), "*.zip")])
+        if not dest:
+            return
+        try:
+            free = shutil.disk_usage(os.path.dirname(os.path.abspath(dest))).free
+        except OSError:
+            free = None
+        if free is not None and free < CHROMEOS_FLEX_FREE_BYTES and not messagebox.askyesno(
+                _("Not much free space"),
+                _("The download (about 1.4 GB) and the extracted image (about 9.5 GB) need roughly "
+                  "{need} free in this folder, and only {free} is available. It may fail part-way.\n\n"
+                  "Continue anyway?").format(need=human_size(CHROMEOS_FLEX_FREE_BYTES), free=human_size(free)),
+                icon="warning"):
+            return
+        audit("ChromeOS Flex download started (dl.google.com)")
+        self.flex_cancel_event.clear()
+        self.flex_download_btn.config(state="disabled")
+        self.flex_cancel_btn.config(state="normal")
+        self.flex_progress.config(mode="determinate", value=0)
+        DownloadThread(
+            CHROMEOS_FLEX_URL, dest,
+            progress_cb=lambda d, t, sp: self.after(0, self._on_flex_progress, d, t, sp, _("Downloading...")),
+            done_cb=lambda p, h, v: self.after(0, self._on_flex_downloaded, p, h),
+            error_cb=lambda e: self.after(0, self._on_flex_error, e),
+            cancel_event=self.flex_cancel_event, allowed_hosts=CHROMEOS_FLEX_HOSTS,
+        ).start()
+
+    def cancel_flex(self):
+        self.flex_cancel_event.set()
+
+    def _on_flex_progress(self, done, total, speed, stage):
+        if total:
+            pct = done / total * 100
+            self.flex_progress.config(mode="determinate", value=pct)
+            tail = ""
+            if speed and speed > 0:
+                eta = (total - done) / speed
+                tail = f" — {human_size(speed)}/s — ~{int(eta // 60)}m{int(eta % 60):02d}s left"
+            self.flex_progress_label.config(
+                text=f"{stage}  {pct:.1f}% — {human_size(done)} / {human_size(total)}{tail}")
+        else:
+            self.flex_progress.config(mode="indeterminate")
+            self.flex_progress_label.config(text=f"{stage}  {human_size(done)}")
+
+    def _on_flex_downloaded(self, path, sha256):
+        self.log(_("SHA-256 of the downloaded file: {sha256}").format(sha256=sha256))
+        self._extract_flex_image(path, delete_zip=True)
+
+    def _extract_flex_image(self, zip_path, delete_zip):
+        """Extract the .bin from `zip_path` in a worker thread, then select it for writing."""
+        self.flex_cancel_event.clear()
+        self.flex_download_btn.config(state="disabled")
+        self.flex_cancel_btn.config(state="normal")
+        self.flex_progress.config(mode="determinate", value=0)
+        self.flex_progress_label.config(text=_("Extracting..."))
+        folder = os.path.dirname(os.path.abspath(zip_path))
+
+        def worker():
+            try:
+                image = extract_disk_image(
+                    zip_path, folder,
+                    progress=lambda d, t: self.after(0, self._on_flex_progress, d, t, 0, _("Extracting...")),
+                    cancel_event=self.flex_cancel_event)
+            except OperationCanceled:
+                self.after(0, self._on_flex_error, _("Canceled."))
+            except (ValueError, OSError, RuntimeError) as e:
+                self.after(0, self._on_flex_error, str(e))
+            except Exception as e:  # noqa: BLE001 - shown in a dialog, never lost
+                self.after(0, self._on_flex_error, f"{type(e).__name__}: {e}")
+            else:
+                self.after(0, self._on_flex_extracted, image, zip_path, delete_zip)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_flex_extracted(self, image, zip_path, delete_zip):
+        self.flex_download_btn.config(state="normal")
+        self.flex_cancel_btn.config(state="disabled")
+        self.flex_progress.config(mode="determinate", value=100)
+        self.flex_progress_label.config(text=_("Ready."))
+        if delete_zip:
+            try:
+                os.remove(zip_path)  # only the archive this program downloaded itself
+            except OSError:
+                pass
+        self.set_iso(image)
+        self.flex_status_label.config(text=_("Selected image: {path}").format(path=image))
+        messagebox.showinfo(
+            _("ChromeOS Flex is ready"),
+            _("The disk image is ready:\n{path}\n\nNext: on tab 2, plug in a USB drive of 16 GB or larger, "
+              "select it and click \"Create Bootable USB Drive\".").format(path=image))
+        self.nb.select(self.tab2)
+
+    def _on_flex_error(self, msg):
+        self.flex_download_btn.config(state="normal")
+        self.flex_cancel_btn.config(state="disabled")
+        self.flex_progress.config(mode="determinate", value=0)
+        self.flex_progress_label.config(text=_("Failed."))
+        messagebox.showerror(_("ChromeOS Flex"), msg)
 
     # ---------- Help menu and built-in documentation ----------
     def _build_menu(self):
@@ -3375,8 +3768,9 @@ class App(_TkBase):
             how = _("from the file name (the content could not be identified)")
         else:
             how = _("from the content of the ISO")
-        self.mode_var.set(MODE_WINDOWS if kind == ISO_KIND_WINDOWS else MODE_LINUX)
-        image = _("Windows 11") if kind == ISO_KIND_WINDOWS else _("Linux / other hybrid ISO")
+        self.mode_var.set({ISO_KIND_WINDOWS: MODE_WINDOWS, ISO_KIND_CHROMEOS: MODE_CHROMEOS}.get(kind, MODE_LINUX))
+        image = {ISO_KIND_WINDOWS: _("Windows 11"), ISO_KIND_CHROMEOS: _("ChromeOS Flex")}.get(
+            kind, _("Linux / other hybrid ISO"))
         self.log(_("Image type preselected {how}: {image}.").format(how=how, image=image))
         self.on_mode_change()
         self._reset_iso_sha()
@@ -3645,7 +4039,25 @@ class App(_TkBase):
         if not disk:
             return
         mode = self.mode_var.get()
-        what = _("Windows 11") if mode == MODE_WINDOWS else _("the selected Linux image")
+        what = {MODE_WINDOWS: _("Windows 11"), MODE_CHROMEOS: _("ChromeOS Flex")}.get(
+            mode, _("the selected Linux image"))
+        if mode in RAW_MODES:
+            try:
+                image_size = os.path.getsize(self.iso_path.get())
+            except OSError:
+                image_size = 0
+            if image_size and disk.get("size") and image_size > disk["size"]:
+                messagebox.showerror(
+                    _("Drive too small"),
+                    _("The image ({image}) is larger than this drive ({drive}). Choose a bigger drive. "
+                      "Nothing was changed.").format(image=human_size(image_size), drive=human_size(disk["size"])))
+                return
+        if mode == MODE_CHROMEOS and (disk.get("size") or 0) < CHROMEOS_MIN_USB_BYTES and not messagebox.askyesno(
+                _("Small USB drive"),
+                _("Google asks for a USB drive of 16 GB or larger for ChromeOS Flex, and this one is {size}. "
+                  "It may not work as an installer.\n\nContinue anyway?").format(size=human_size(disk["size"])),
+                icon="warning"):
+            return
         if not self.confirm_erase(disk, what):
             return
         # Bind the safety re-check (right before erasing) to exactly the drive that was confirmed.
@@ -3653,7 +4065,7 @@ class App(_TkBase):
         # Writing the drive needs administrator rights (always on Linux; on macOS only for
         # the direct-write mode). Collect and verify the password now, before touching
         # the drive.
-        if (IS_LINUX or mode == MODE_LINUX) and not self.priv.authenticate(
+        if (IS_LINUX or mode in RAW_MODES) and not self.priv.authenticate(
                 _("Administrator access is required to write /dev/{id}.").format(id=disk["id"])):
             self.priv.clear_cached_password()
             self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
@@ -4060,7 +4472,7 @@ def cli_detect_kind(iso_path):
             kind = detector(iso_path)
         except Exception:
             kind = None
-        if isinstance(kind, str) and kind.lower() in (MODE_WINDOWS, MODE_LINUX):
+        if isinstance(kind, str) and kind.lower() in (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS):
             return kind.lower(), "content"
     if "win" in os.path.basename(iso_path).lower():
         return MODE_WINDOWS, "filename"
@@ -4091,9 +4503,9 @@ def _disk_summary(disk):
 
 def _write_steps(mode, disk_id, eject):
     steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive"]
-    if mode == MODE_LINUX:
-        steps += [f"Unmount /dev/{disk_id} and write the ISO to it byte for byte",
-                  "Read the drive back and compare it with the ISO"]
+    if mode in RAW_MODES:
+        steps += [f"Unmount /dev/{disk_id} and write the image to it byte for byte",
+                  "Read the drive back and compare it with the image"]
     else:
         steps += [f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{VOL_NAME}')",
                   "Copy the ISO contents (install.wim is split when it exceeds 4 GB)",
@@ -4197,6 +4609,67 @@ def cmd_sha256(args):
     return EXIT_OK
 
 
+def download_file_blocking(url, dest, progress=None, cancel_event=None):
+    """Run DownloadThread to completion in the calling thread; return the SHA-256 of the file.
+
+    Raises RuntimeError with the user-facing reason when the download fails.
+    """
+    result = {}
+
+    def on_done(_path, sha256, _verified):
+        result["sha256"] = sha256
+
+    def on_error(message):
+        result["error"] = message
+
+    worker = DownloadThread(url, dest, progress_cb=(lambda d, t, _s: progress(d, t, "Downloading")) if progress
+                            else (lambda *_a: None),
+                            done_cb=on_done, error_cb=on_error,
+                            cancel_event=cancel_event or threading.Event(),
+                            allowed_hosts=CHROMEOS_FLEX_HOSTS if url == CHROMEOS_FLEX_URL else None)
+    worker.start()
+    worker.join()
+    if "error" in result:
+        raise RuntimeError(result["error"])
+    return result["sha256"]
+
+
+def cmd_fetch_chromeos(args):
+    """Download ChromeOS Flex from Google and extract the disk image (nothing is written to a drive)."""
+    dest_dir = os.path.realpath(os.path.expanduser(args.dest or "."))
+    if not os.path.isdir(dest_dir):
+        raise CliError(f"Not a folder: {dest_dir}")
+    zip_path = os.path.join(dest_dir, "chromeos_flex_latest.bin.zip")
+    if os.path.exists(zip_path) and not os.path.exists(zip_path + ".part"):
+        raise CliError(f"{zip_path} already exists. Remove it, or use '{CLI_PROG} write' with the extracted "
+                       ".bin file.")
+    _err("ChromeOS Flex is provided by Google under Google's own terms: "
+         f"{CHROMEOS_FLEX_GUIDE_URL}")
+    free = shutil.disk_usage(dest_dir).free
+    if free < CHROMEOS_FLEX_FREE_BYTES:
+        _warn(f"Downloading and extracting needs roughly {human_size(CHROMEOS_FLEX_FREE_BYTES)} free; "
+              f"{human_size(free)} is available in {dest_dir}.")
+    progress = CliProgress()
+    try:
+        sha256 = download_file_blocking(CHROMEOS_FLEX_URL, zip_path, progress)
+        image = extract_disk_image(zip_path, dest_dir, progress=lambda d, t: progress(d, t, "Extracting"))
+    except (RuntimeError, ValueError, OSError) as e:
+        progress.finish()
+        raise CliError(str(e)) from None
+    progress.finish()
+    if not args.keep_zip:
+        try:
+            os.remove(zip_path)
+        except OSError:
+            pass
+    if args.json:
+        _out(json.dumps({"image": image, "zip_sha256": sha256, "kept_zip": bool(args.keep_zip)}, indent=2))
+    else:
+        _out(image)
+    _err(f"Done. Write it with: {CLI_PROG} write --iso {image} --disk <DISKID> --mode chromeos")
+    return EXIT_OK
+
+
 def _prepare_write(args):
     """Validate everything and build the plan. Raises CliError; touches nothing."""
     try:
@@ -4216,18 +4689,21 @@ def _prepare_write(args):
     detected, _method = cli_detect_kind(iso)
     if mode == MODE_AUTO:
         if detected == KIND_UNKNOWN:
-            raise CliError("Could not tell whether this is a Windows or a Linux ISO. "
-                           "Pass --mode windows or --mode linux.", EXIT_USAGE)
+            raise CliError("Could not tell what kind of image this is. "
+                           "Pass --mode windows, --mode linux or --mode chromeos.", EXIT_USAGE)
         mode = detected
-    elif detected in (MODE_WINDOWS, MODE_LINUX) and detected != mode:
+    elif detected in (MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS) and detected != mode:
         _warn(f"This ISO looks like a {detected} image but --mode {mode} was requested.")
     iso_size = os.path.getsize(iso)
     size = disk.get("size") or 0
-    if mode == MODE_LINUX:
+    if mode in RAW_MODES:
         try:
-            validate_hybrid_iso(iso)
+            (validate_disk_image if mode == MODE_CHROMEOS else validate_hybrid_iso)(iso)
         except ValueError as e:
             raise CliError(str(e)) from None
+        if mode == MODE_CHROMEOS and size and size < CHROMEOS_MIN_USB_BYTES:
+            _warn(f"Google asks for a USB drive of 16 GB or larger for ChromeOS Flex; this one is "
+                  f"{human_size(size)}.")
         if size and iso_size > size:
             raise CliError(f"The ISO ({human_size(iso_size)}) is larger than the drive ({human_size(size)}).")
     elif size and iso_size > size:
@@ -4257,7 +4733,7 @@ def _confirm_write(args, plan):
 
 
 def _run_write(args, plan, result):
-    needs_priv = IS_LINUX or plan["mode"] == MODE_LINUX
+    needs_priv = IS_LINUX or plan["mode"] in RAW_MODES
     priv = CliPrivilege()
     progress = CliProgress()
     log = CliLogger(progress, verbose=args.verbose)
@@ -4356,7 +4832,8 @@ def cmd_write(args):
     return code
 
 
-COMMANDS = {"list": cmd_list, "detect": cmd_detect, "sha256": cmd_sha256, "write": cmd_write}
+COMMANDS = {"list": cmd_list, "detect": cmd_detect, "sha256": cmd_sha256, "write": cmd_write,
+            "fetch-chromeos": cmd_fetch_chromeos}
 
 
 def build_cli_parser():
@@ -4365,7 +4842,7 @@ def build_cli_parser():
                         help="show Python tracebacks for unexpected errors")
     parser = argparse.ArgumentParser(
         prog=CLI_PROG, allow_abbrev=False,
-        description="Create bootable USB drives from Windows 11 or hybrid Linux ISOs. "
+        description="Create bootable USB drives from Windows 11, hybrid Linux ISOs or ChromeOS Flex. "
                     "Run without arguments to open the graphical interface.",
         epilog=(
             "exit codes:\n"
@@ -4392,21 +4869,26 @@ def build_cli_parser():
     add("gui", "open the graphical interface (the default with no arguments)")
     p = add("list", "list the USB drives that can be written")
     p.add_argument("--json", action="store_true", help="machine-readable output")
-    p = add("detect", "tell whether an ISO is a windows or linux image (or unknown)")
+    p = add("detect", "tell whether an image is windows, linux or chromeos (or unknown)")
     p.add_argument("iso", metavar="ISO")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p = add("sha256", "compute the SHA-256 of a file, optionally comparing it with a known value")
     p.add_argument("iso", metavar="ISO")
     p.add_argument("--expected", metavar="HASH", help="expected SHA-256; exit code 3 if it differs")
     p.add_argument("--json", action="store_true", help="machine-readable output")
-    p = add("write", "write an ISO to a USB drive, verify it and eject",
+    p = add("fetch-chromeos", "download ChromeOS Flex from Google and extract the disk image (does not write a drive)")
+    p.add_argument("--dest", metavar="DIR", help="folder for the image (default: the current folder)")
+    p.add_argument("--keep-zip", action="store_true", help="keep latest.bin.zip after extracting it")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p = add("write", "write an ISO or disk image to a USB drive, verify it and eject",
             epilog="The drive is ERASED. Use --dry-run first to see the plan without changing anything.")
-    p.add_argument("--iso", required=True, metavar="ISO", help="path of the ISO image")
+    p.add_argument("--iso", required=True, metavar="ISO",
+                   help="path of the ISO or disk image (.bin for ChromeOS Flex; use fetch-chromeos to get it)")
     p.add_argument("--disk", required=True, metavar="DISKID",
                    help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
-    p.add_argument("--mode", choices=[MODE_AUTO, MODE_WINDOWS, MODE_LINUX], default=MODE_AUTO,
+    p.add_argument("--mode", choices=[MODE_AUTO, MODE_WINDOWS, MODE_LINUX, MODE_CHROMEOS], default=MODE_AUTO,
                    help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
-                        "auto: detect (default)")
+                        "chromeos: raw write of a ChromeOS Flex disk image; auto: detect (default)")
     p.add_argument("--yes", action="store_true",
                    help="do not ask for confirmation (required when not in an interactive terminal)")
     p.add_argument("--dry-run", action="store_true", help="print the plan and exit without touching anything")

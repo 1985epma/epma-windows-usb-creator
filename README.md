@@ -2,7 +2,7 @@
 
 **English** · [Português](README.pt-BR.md)
 
-Cross-platform application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
+Cross-platform application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) and **Google's ChromeOS Flex** directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
 
 It has a graphical interface (US English) and a [command line mode](#command-line).
 
@@ -36,7 +36,8 @@ Written in pure Python with Tkinter — **zero third-party Python dependencies**
 - **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
 - **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing.
-- **Two image types**: *Windows 11* (GPT + FAT32, files copied) or *Linux / other hybrid ISO* (written byte-for-byte, like `dd`). The type is detected from the ISO's **contents**, not its file name, and you can always change it.
+- **Three image types**: *Windows 11* (GPT + FAT32, files copied), *Linux / other hybrid ISO* and *ChromeOS Flex* (both written byte-for-byte, like `dd`). The type is detected from the image's **contents**, not its file name, and you can always change it.
+- **ChromeOS Flex**: a dedicated tab downloads Google's official image (`dl.google.com`, HTTPS, resumable), extracts it safely from the ZIP and prepares it for the USB drive. Regular ChromeOS is not distributed for ordinary PCs, so Flex — Google's free ChromeOS for PCs and Macs — is the official option.
 - **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
 - **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
 - **Progress bar** with percentage, speed and time remaining for writing and verifying; a **Cancel** button for the whole operation.
@@ -155,6 +156,7 @@ If you already downloaded the ISO manually, use **"Select existing ISO file..."*
 4. Choose the **image type** (it is suggested from the ISO file name):
    - **Windows 11** — GPT + FAT32, ISO files copied (`install.wim` split when over 4 GB).
    - **Linux / other hybrid ISO** — the ISO is written byte-for-byte to the drive (like `dd`). Use this for Ubuntu, Debian, Fedora, Mint, Arch, etc. Select the ISO with *Select existing ISO file...* on tab 1. ISOs without a boot signature are refused before anything is erased.
+   - **ChromeOS Flex** — Google's disk image, also written byte-for-byte. Get it on the *ChromeOS Flex* tab (see below). The drive must be at least as large as the image (Google asks for 16 GB or larger).
 5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written to it, verified and ejected.
 6. Use **Cancel** to stop an operation in progress. The drive is then left unusable until written again.
 
@@ -166,6 +168,16 @@ The interface is always in US English. A Brazilian Portuguese translation exists
 
 The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
 
+### Tab 3 — ChromeOS Flex
+
+[ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) is Google's free version of ChromeOS for PCs and Macs. This program does not offer regular ChromeOS because Google does not publish it for ordinary computers.
+
+1. Click **"Download ChromeOS Flex from Google"** and choose where to save the file. The ZIP is extracted automatically (and the ZIP the program downloaded is deleted). Already have `latest.bin.zip` or the `.bin` inside it? Use **"Select existing image..."** — a ZIP is extracted for you.
+2. On tab 2 the image type becomes **ChromeOS Flex** by itself (the image is recognised by its partitions). Plug in a USB drive of **16 GB or larger** (Google's requirement), select it and click **"Create Bootable USB Drive"**.
+3. Boot the target computer from the drive and follow [Google's guide](https://support.google.com/chromeosflex/answer/11541904).
+
+Google lists these requirements for the computer: Intel or AMD 64-bit processor, 4 GB of RAM, 16 GB of internal storage and USB boot; it only guarantees certified models ([requirements](https://support.google.com/chromeosflex/answer/11552529)). Google also notes that some USB drives may not work as installers. ChromeOS Flex is provided by Google under Google's own terms.
+
 ### Command line
 
 The same engine is available without the window (no Tkinter needed):
@@ -173,10 +185,12 @@ The same engine is available without the window (no Tkinter needed):
 ```bash
 epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
 python3 win11_usb_creator.py list                       # USB drives that can be used (--json available)
-python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | unknown
+python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | chromeos | unknown
 python3 win11_usb_creator.py sha256 ubuntu.iso --expected <hash>
 python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4 --dry-run   # show the plan, change nothing
 python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # asks you to type the disk id
+python3 win11_usb_creator.py fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: download + extract
+python3 win11_usb_creator.py write --iso ~/Downloads/<image>.bin --disk disk4 --mode chromeos
 ```
 
 `write` always verifies the drive and requires you to type the disk identifier (or pass `--yes` when there is no terminal). It never offers a way to skip verification. Run with no arguments to open the window.

@@ -46,6 +46,8 @@ class StructureTests(unittest.TestCase):
     def test_no_unformatted_placeholders_are_left(self):
         self.assertNotRegex(all_text(), r"\{[A-Za-z_]+\}")
         self.assertNotIn("@HOSTS@", all_text())
+        for marker in ("@GUIDE@", "@REQUIREMENTS@", "@URL@"):
+            self.assertNotIn(marker, all_text())
         self.assertNotIn("noqa", all_text())  # a lint comment must never end up inside the text
 
 
@@ -136,6 +138,34 @@ class MatchesTheCodeTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertIn(message, source)
                 self.assertIn(message, documentation)
+
+
+class ChromeOSSectionTests(unittest.TestCase):
+    def test_the_section_exists_and_uses_the_real_addresses(self):
+        text = sections()["ChromeOS Flex"]
+        for url in (app.CHROMEOS_FLEX_URL, app.CHROMEOS_FLEX_GUIDE_URL, app.CHROMEOS_FLEX_REQUIREMENTS_URL):
+            with self.subTest(url=url):
+                self.assertIn(url, text)
+
+    def test_it_says_regular_chromeos_is_not_offered_and_what_is_required(self):
+        text = sections()["ChromeOS Flex"]
+        self.assertIn("does not publish regular ChromeOS", text)
+        self.assertIn("16 GB or larger", text)
+        self.assertIn("4 GB of RAM", text)
+
+    def test_the_overview_and_command_line_mention_it(self):
+        self.assertIn("ChromeOS Flex", sections()["Overview"])
+        self.assertIn("Tab 3", sections()["Overview"])
+        self.assertRegex(sections()["Command line"], r"(?m)^• fetch-chromeos ")
+        self.assertIn("--mode auto|windows|linux|chromeos", sections()["Command line"])
+
+    def test_the_ui_strings_it_quotes_exist(self):
+        import inspect
+        source = inspect.getsource(app)
+        for label in ("Download ChromeOS Flex from Google", "Select existing image...",
+                      "Create Bootable USB Drive", "ChromeOS Flex (disk image, written directly)"):
+            with self.subTest(label=label):
+                self.assertIn(label, source)
 
 
 class AboutAndProjectTests(unittest.TestCase):

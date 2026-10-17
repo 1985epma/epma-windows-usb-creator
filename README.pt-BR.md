@@ -5,7 +5,7 @@
 > A versão oficial deste documento é o [README.md em inglês](README.md). Esta
 > tradução é mantida por conveniência e pode ficar desatualizada em relação a ela.
 
-Aplicação multiplataforma (**macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
+Aplicação multiplataforma (**macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) e o **ChromeOS Flex do Google** direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
 
 Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
@@ -38,7 +38,8 @@ Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python e
 - **Formatação automática** do pendrive como GPT + FAT32 com rótulo `WIN11USB` (compatível com boot UEFI, sem precisar desativar o Secure Boot).
 - **Divisão automática do `install.wim` / `install.esd`**: esses arquivos costumam passar de 4 GB, o limite do FAT32. A aplicação detecta o caso e divide o arquivo em `.swm` usando `wimlib-imagex`.
 - **Instalação automática de dependências**: detecta o gerenciador de pacotes (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) ou o Homebrew no macOS e instala o que estiver faltando.
-- **Dois tipos de imagem**: *Windows 11* (GPT + FAT32, arquivos copiados) ou *Linux / outra ISO híbrida* (gravada byte a byte, como o `dd`). O tipo é detectado pelo **conteúdo** da ISO, não pelo nome do arquivo, e você sempre pode trocá-lo.
+- **Três tipos de imagem**: *Windows 11* (GPT + FAT32, arquivos copiados), *Linux / outra ISO híbrida* e *ChromeOS Flex* (os dois últimos gravados byte a byte, como o `dd`). O tipo é detectado pelo **conteúdo** da imagem, não pelo nome do arquivo, e você sempre pode trocá-lo.
+- **ChromeOS Flex**: uma aba dedicada baixa a imagem oficial do Google (`dl.google.com`, HTTPS, com retomada), extrai do ZIP com segurança e a prepara para o pendrive. O ChromeOS comum não é distribuído para PCs em geral; por isso o Flex — o ChromeOS gratuito do Google para PCs e Macs — é a opção oficial.
 - **Gravação verificada**: depois de gravar, o pendrive é relido e comparado com a ISO (byte a byte nas imagens Linux; checksum e `wimlib-imagex verify` no Windows). Se algo for diferente, o pendrive **não** é ejetado e você é avisado para não usá-lo.
 - **Eject confiável** depois da verificação, com mensagem clara se o sistema recusar.
 - **Barra de progresso** com porcentagem, velocidade e tempo restante na gravação e na verificação; botão **Cancelar** para a operação inteira.
@@ -125,6 +126,7 @@ Se você já baixou a ISO manualmente, use **"Select existing ISO file..."** e p
 4. Escolha o **tipo de imagem** (é sugerido pelo nome do arquivo ISO):
    - **Windows 11** — GPT + FAT32, arquivos da ISO copiados (`install.wim` dividido quando passa de 4 GB).
    - **Linux / outra ISO híbrida** — a ISO é gravada byte a byte no pendrive (como o `dd`). Use para Ubuntu, Debian, Fedora, Mint, Arch etc. Selecione a ISO em *Select existing ISO file...* na aba 1. ISOs sem assinatura de boot são recusadas antes de apagar qualquer coisa.
+   - **ChromeOS Flex** — imagem de disco do Google, também gravada byte a byte. Obtenha-a na aba *ChromeOS Flex* (veja abaixo). O pendrive precisa ser do tamanho da imagem ou maior (o Google pede 16 GB ou mais).
 5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado.
 6. Use **Cancel** para interromper uma operação em andamento. O pendrive fica inutilizável até ser gravado de novo.
 
@@ -136,6 +138,16 @@ A interface é sempre em inglês americano. Existe uma tradução em português,
 
 O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe pelo log na parte inferior da janela.
 
+### Aba 3 — ChromeOS Flex
+
+O [ChromeOS Flex](https://support.google.com/chromeosflex/answer/11541904) é a versão gratuita do ChromeOS do Google para PCs e Macs. O programa não oferece o ChromeOS comum porque o Google não o publica para computadores em geral.
+
+1. Clique em **"Download ChromeOS Flex from Google"** e escolha onde salvar. O ZIP é extraído automaticamente (e o ZIP que o programa baixou é apagado). Já tem o `latest.bin.zip` ou o `.bin` de dentro dele? Use **"Select existing image..."** — um ZIP é extraído para você.
+2. Na aba 2 o tipo de imagem vira **ChromeOS Flex** sozinho (a imagem é reconhecida pelas partições). Conecte um pendrive de **16 GB ou maior** (exigência do Google), selecione-o e clique em **"Create Bootable USB Drive"**.
+3. Inicie o computador de destino pelo pendrive e siga o [guia do Google](https://support.google.com/chromeosflex/answer/11541904).
+
+O Google lista estes requisitos para o computador: processador Intel ou AMD de 64 bits, 4 GB de RAM, 16 GB de armazenamento interno e boot por USB; só garante modelos certificados ([requisitos](https://support.google.com/chromeosflex/answer/11552529)). O Google também avisa que alguns pendrives podem não funcionar como instaladores. O ChromeOS Flex é fornecido pelo Google sob os termos do próprio Google.
+
 ### Linha de comando
 
 O mesmo motor está disponível sem a janela (não precisa de Tkinter):
@@ -143,10 +155,12 @@ O mesmo motor está disponível sem a janela (não precisa de Tkinter):
 ```bash
 epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
 python3 win11_usb_creator.py list                       # pendrives USB utilizáveis (--json disponível)
-python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | unknown
+python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | chromeos | unknown
 python3 win11_usb_creator.py sha256 ubuntu.iso --expected <hash>
 python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4 --dry-run   # mostra o plano, não altera nada
 python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # pede para digitar o id do disco
+python3 win11_usb_creator.py fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: baixar + extrair
+python3 win11_usb_creator.py write --iso ~/Downloads/<imagem>.bin --disk disk4 --mode chromeos
 ```
 
 O `write` sempre verifica o pendrive e exige que você digite o identificador do disco (ou `--yes` quando não há terminal). Não existe opção para pular a verificação. Sem argumentos, abre a janela.

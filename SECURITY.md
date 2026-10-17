@@ -133,7 +133,20 @@ verify` for split images) after remounting in Windows mode. On any difference th
 operation stops **without ejecting** and the drive is reported as unusable.
 Verification cannot be skipped, in the window or in the command line.
 
-### 10. High-risk drives need a typed confirmation
+### 10. ChromeOS Flex download and extraction
+
+The ChromeOS Flex image is accepted only from Google's official address
+(`https://dl.google.com/chromeos-flex/images/latest.bin.zip`, matched exactly and over
+HTTPS); any other address, including other `dl.google.com` paths, still gets the
+unrecognised-server warning. Google's address redirects to a versioned file; the redirect must
+stay on `dl.google.com`, otherwise the download is stopped and what arrived is discarded. The ZIP is extracted with a hardened routine: only the base
+name of the entry is used (no path traversal), the name is restricted to safe characters,
+existing files are never overwritten, implausible sizes are refused, free space is checked
+first, the CRC is verified, and the file only appears under its final name when the whole
+entry was read. The program has no official checksum to compare the download with, so the
+SHA-256 of the file is shown in the log for you to keep.
+
+### 11. High-risk drives need a typed confirmation
 
 The drive list and the final dialog show the model, size and volumes. A drive that
 is large (> 256 GB), holds a lot of data or looks like a backup disk additionally

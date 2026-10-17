@@ -46,6 +46,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   kept when the network drops.
 - **Audit log:** rotation (1 MB × 5, files stay `0600`) and the SHA-256 of the ISO that was
   written.
+- **ChromeOS Flex** (Google's free ChromeOS for PCs and Macs): a new tab downloads the official image from `dl.google.com` (HTTPS, resumable), extracts it from the ZIP with a hardened routine, and a third image type writes it to the USB drive byte for byte, with the same read-back verification and eject. The image is recognised by its GPT partition names. `fetch-chromeos` and `write --mode chromeos` on the command line. Google asks for a USB drive of 16 GB or larger, which is checked and warned about.
 - **Help menu** with built-in documentation (F1): quick starts for Windows and Linux ISOs, both tabs, safety, verification and eject, command line, troubleshooting, files and settings, plus About, the audit log folder and the project page. Tests check it against the code (commands, exit codes, thresholds, messages).
 - Unit test suite (`tests/`, standard library only) and a per-distribution package probe.
 - Release engineering: end-to-end tests against loop devices (Linux CI), ShellCheck over the

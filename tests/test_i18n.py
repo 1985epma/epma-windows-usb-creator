@@ -217,6 +217,8 @@ class SourceCoverageTests(unittest.TestCase):
                 stages.add(arg.value)
         # CLI-only stage name, never shown by the GUI.
         stages.discard("Computing SHA-256...")
+        stages.discard("Downloading")  # command line only (fetch-chromeos)
+        stages.discard("Extracting")
         self.assertGreaterEqual(len(stages), 8)
         missing = sorted(s for s in stages if s not in app.PT_BR)
         self.assertEqual(missing, [], "progress stage texts without a PT_BR entry")

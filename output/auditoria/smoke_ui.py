@@ -42,7 +42,8 @@ WIDGETS_OBRIGATORIOS = [
     "url_entry", "sha_entry", "download_btn", "cancel_btn",
     "progress", "progress_label", "iso_label", "iso_label2",
     "dep_label", "install_deps_btn", "disk_combo",
-    "mode_var", "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
+    "nb", "tab3", "flex_download_btn", "flex_cancel_btn", "flex_progress", "flex_progress_label",
+    "flex_status_label", "mode_var", "create_btn", "cancel_create_btn", "create_progress", "create_progress_label", "log_text",
     "iso_check_frame", "iso_sha_entry", "iso_sha_btn", "iso_sha_progress", "iso_sha_label", "iso_sha_result",
 ]
 
@@ -52,7 +53,8 @@ METODOS_OBRIGATORIOS = [
     "start_create_usb", "cancel_create_usb", "log", "_report_error", "_on_download_done",
     "_on_download_error", "_on_progress", "check_dependencies",
     "install_dependencies", "open_ms_page", "on_mode_change",
-    "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
+    "start_flex_download", "cancel_flex", "_on_flex_progress", "_extract_flex_image", "_on_flex_extracted",
+    "_on_flex_error", "report_callback_exception", "_fit_window", "_build_menu", "show_help", "show_about", "_on_create_progress", "_reset_create_progress", "_finish_create_progress",
     "log_threadsafe", "_flush_log", "confirm_erase", "calculate_iso_sha256",
 ]
 
@@ -196,6 +198,19 @@ try:
     except Exception as e:
         print(f"  [FALHA] progresso da criação: {type(e).__name__}: {e}")
         falhas.append("progresso da criação")
+
+    try:
+        # aba ChromeOS Flex: barra de progresso, erro e troca do tipo de imagem para ChromeOS
+        janela._on_flex_progress(500, 1000, 250.0, "Downloading...")
+        janela._on_flex_progress(500, 0, 0, "Extracting...")
+        janela._on_flex_error("mensagem de erro de exemplo")          # messagebox silencioso
+        janela.mode_var.set(app.MODE_CHROMEOS)
+        janela.on_mode_change()
+        assert [str(t) for t in janela.nb.tabs()].__len__() == 3, "a terceira aba não existe"
+        print("  [OK]    aba ChromeOS Flex (progresso, erro e tipo de imagem)")
+    except Exception as e:
+        print(f"  [FALHA] aba ChromeOS Flex: {type(e).__name__}: {e}")
+        falhas.append("aba ChromeOS Flex")
 
     try:
         assert str(janela.cget("menu")), "a barra de menus (Help) não foi criada"
