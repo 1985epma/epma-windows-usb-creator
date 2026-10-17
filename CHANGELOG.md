@@ -41,7 +41,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 - **ISO type detected from its contents** (ISO 9660 / UDF markers) instead of the file name.
 - **Command line mode:** `list`, `detect`, `sha256`, `write` (`--dry-run`, `--yes`, `--json`,
   `--no-eject`), `--version`, documented exit codes. The engine now imports without Tkinter.
-- **Portuguese (pt-BR) interface**, selected from `LANG` or `EPMA_LANG`.
+- The interface is always US English. A Portuguese (pt-BR) translation is available only when `EPMA_LANG=pt` is set explicitly; the system locale is never consulted.
 - **Resumable downloads** with `Range`/`If-Range` and automatic retries; the partial file is
   kept when the network drops.
 - **Audit log:** rotation (1 MB × 5, files stay `0600`) and the SHA-256 of the ISO that was

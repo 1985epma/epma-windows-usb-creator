@@ -35,15 +35,13 @@ class DetectLanguageTests(unittest.TestCase):
         env = {"EPMA_LANG": "", "LC_ALL": "", "LC_MESSAGES": "", "LANG": ""}
         self.assertEqual(app.detect_language(env), "en")
 
-    def test_lang_portuguese(self):
-        self.assertEqual(app.detect_language({"LANG": "pt_BR.UTF-8"}), "pt")
-        self.assertEqual(app.detect_language({"LANG": "pt_PT"}), "pt")
-        self.assertEqual(app.detect_language({"LANG": "pt"}), "pt")
-
-    def test_lang_english_and_others(self):
-        for value in ("en_US.UTF-8", "C", "POSIX", "de_DE.UTF-8", "es_ES"):
-            with self.subTest(value=value):
-                self.assertEqual(app.detect_language({"LANG": value}), "en")
+    def test_the_system_locale_is_never_used(self):
+        # The interface is always US English; a Portuguese system must not change it.
+        for env in ({"LANG": "pt_BR.UTF-8"}, {"LC_ALL": "pt_BR"}, {"LC_MESSAGES": "pt_PT"}, {"LANG": "pt"},
+                    {"LANG": "pt_BR.UTF-8", "LC_ALL": "pt_BR.UTF-8", "LC_MESSAGES": "pt_BR.UTF-8"},
+                    {"LANG": "en_US.UTF-8"}, {"LANG": "C"}, {"LANG": "de_DE.UTF-8"}):
+            with self.subTest(env=env):
+                self.assertEqual(app.detect_language(env), "en")
 
     def test_epma_lang_values(self):
         for value in ("pt", "pt-BR", "PT-br", "pt_BR", " pt "):
@@ -53,16 +51,9 @@ class DetectLanguageTests(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertEqual(app.detect_language({"EPMA_LANG": value}), "en")
 
-    def test_epma_lang_wins_over_the_locale(self):
+    def test_epma_lang_is_the_only_way_to_get_portuguese(self):
         self.assertEqual(app.detect_language({"EPMA_LANG": "en", "LANG": "pt_BR.UTF-8", "LC_ALL": "pt_BR"}), "en")
         self.assertEqual(app.detect_language({"EPMA_LANG": "pt", "LANG": "en_US.UTF-8", "LC_ALL": "C"}), "pt")
-
-    def test_posix_locale_precedence(self):
-        # LC_ALL beats LC_MESSAGES beats LANG; the first non-empty one decides.
-        self.assertEqual(app.detect_language({"LC_ALL": "en_US.UTF-8", "LANG": "pt_BR.UTF-8"}), "en")
-        self.assertEqual(app.detect_language({"LC_ALL": "pt_BR.UTF-8", "LANG": "en_US.UTF-8"}), "pt")
-        self.assertEqual(app.detect_language({"LC_MESSAGES": "pt_BR", "LANG": "en_US"}), "pt")
-        self.assertEqual(app.detect_language({"LC_ALL": "", "LC_MESSAGES": "", "LANG": "pt_BR"}), "pt")
 
     def test_default_environment_is_os_environ(self):
         with mock.patch.dict(os.environ, {"EPMA_LANG": "pt"}):

@@ -154,7 +154,7 @@ are no secrets, passwords, or API keys in this project.
 | `WIN11USB_TRUSTED_ISO_HOSTS` | Optional | Comma-separated list of trusted download hosts, replacing the default Microsoft list. |
 | `WIN11USB_ALLOW_ANY_DOWNLOAD_HOST` | Optional | Set to `1` to disable the unrecognised-server warning. **Reduces security.** |
 | `WIN11USB_EXPECTED_SHA256` | Optional | Pre-fills the expected checksum field. |
-| `EPMA_LANG` | Optional | Interface language: `en` or `pt` (default: follows `LANG`). |
+| `EPMA_LANG` | Optional | Set to `pt` to show the interface in Brazilian Portuguese. The default (and any other value) is US English; the system locale is not used. |
 
 How to set one (macOS/Linux, in a terminal):
 

@@ -7,7 +7,7 @@
 
 Aplicação multiplataforma (**macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
 
-Tem interface gráfica (em português e inglês) e um [modo linha de comando](#linha-de-comando).
+Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
 Escrita em Python puro com Tkinter — sem dependências de bibliotecas Python externas.
 
@@ -131,7 +131,7 @@ Se você já baixou a ISO manualmente, use **"Select existing ISO file..."** e p
 >
 > **macOS e imagens Linux:** o macOS não lê imagens Linux (ISO 9660/ext). Por isso o pendrive pronto **não aparece no Finder** e o macOS pode dizer que o disco "não pôde ser lido". Clique em **Ignorar** — nunca em *Inicializar*. O conteúdo já foi verificado contra a ISO.
 
-A interface segue o idioma do sistema (português se `LANG` começar com `pt`). Para forçar: `EPMA_LANG=pt` ou `EPMA_LANG=en`.
+A interface é sempre em inglês americano. Existe uma tradução em português, que só é ativada explicitamente com `EPMA_LANG=pt`; o idioma do sistema nunca é usado.
 
 O processo leva vários minutos, dependendo da velocidade do pendrive. Acompanhe pelo log na parte inferior da janela.
 

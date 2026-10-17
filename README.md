@@ -4,7 +4,7 @@
 
 Cross-platform application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
 
-It has a graphical interface (English and Brazilian Portuguese) and a [command line mode](#command-line).
+It has a graphical interface (US English) and a [command line mode](#command-line).
 
 Written in pure Python with Tkinter — **zero third-party Python dependencies**.
 
@@ -161,7 +161,7 @@ If you already downloaded the ISO manually, use **"Select existing ISO file..."*
 >
 > **macOS and Linux images:** macOS cannot read Linux (ISO 9660/ext) images, so the finished drive will **not appear in Finder**, and macOS may say the disk is "not readable". Click **Ignore** — never *Initialize*. The content was already verified against the ISO.
 
-The interface follows your system language (Portuguese if `LANG` starts with `pt`). Force one with `EPMA_LANG=pt` or `EPMA_LANG=en`.
+The interface is always in US English. A Brazilian Portuguese translation exists and can be switched on explicitly with `EPMA_LANG=pt`; the system language is never used.
 
 The process takes several minutes depending on the speed of your USB drive. Follow along in the log at the bottom of the window.
 

@@ -194,21 +194,15 @@ LANG_PT = "pt"
 
 
 def detect_language(env=None):
-    """"pt" for Brazilian Portuguese, otherwise "en". `env` is a mapping (default: os.environ).
+    """"en" (US English) unless Portuguese is requested explicitly. `env` defaults to os.environ.
 
-    EPMA_LANG wins (en, pt, pt-BR, case-insensitive; any other value means English). Without
-    it the first non-empty of LC_ALL, LC_MESSAGES and LANG decides, as in POSIX: a value
-    starting with "pt" (pt_BR.UTF-8, pt_PT, pt) is Portuguese; C, POSIX, en_US... are English.
+    The interface is always in English. The system locale (LANG, LC_*) is deliberately NOT
+    consulted: only EPMA_LANG=pt (or pt-BR, case-insensitive) switches the window to
+    Brazilian Portuguese. Any other value, or none, means English.
     """
     env = os.environ if env is None else env
     forced = (env.get(ENV_LANG) or "").strip()
-    if forced:
-        return LANG_PT if forced.lower().startswith("pt") else LANG_EN
-    for name in ("LC_ALL", "LC_MESSAGES", "LANG"):
-        value = (env.get(name) or "").strip()
-        if value:
-            return LANG_PT if value.lower().startswith("pt") else LANG_EN
-    return LANG_EN
+    return LANG_PT if forced.lower().startswith("pt") else LANG_EN
 
 
 ACTIVE_LANGUAGE = detect_language()  # decided once, at import
