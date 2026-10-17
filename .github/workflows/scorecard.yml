@@ -1,0 +1,74 @@
+# =============================================================================
+# OpenSSF Scorecard — nota pública de boas práticas de segurança da cadeia de
+# suprimentos (ações fixadas por SHA, permissões mínimas, política de segurança,
+# revisão de código, análise estática, dependências atualizadas...).
+#
+# Roda a cada push na main, uma vez por semana e quando a regra de proteção de
+# branch muda. O resultado vai para a aba Security > Code scanning (formato
+# SARIF) e, por ser um repositório público, também para o selo público em
+# https://scorecard.dev (publish_results).
+#
+# PERMISSÕES: as mínimas que a ação documenta. Nenhuma de escrita no código.
+#   security-events: write   enviar o SARIF para a aba Security
+#   id-token: write          provar à API do Scorecard de qual repositório vem
+#                            o resultado (necessário para publish_results)
+#   contents/actions: read   ler o repositório e as configurações dos workflows
+#
+# OBSERVAÇÃO: a verificação "Branch-Protection" só enxerga as regras com um token
+# de administrador (input repo_token). Sem ele essa linha fica "inconclusiva";
+# isso não afeta as demais.
+# =============================================================================
+
+name: Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    # Toda terça-feira às 05:30 (UTC)
+    - cron: '30 5 * * 2'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Nada por padrão; cada job declara só o que precisa.
+permissions: {}
+
+concurrency:
+  group: scorecard-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analise:
+    name: Análise do Scorecard
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      id-token: write
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rodar o Scorecard
+        uses: ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e # v2.5.0
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Guardar o resultado
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 30
+
+      - name: Enviar o resultado para a aba Security
+        uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+        with:
+          sarif_file: results.sarif
+          category: scorecard

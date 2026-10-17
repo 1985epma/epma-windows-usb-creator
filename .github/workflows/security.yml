@@ -50,25 +50,25 @@ jobs:
   # ===========================================================================
   guarda-regressao:
     name: 'Camada 1: guarda de regressão'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Autoteste do guarda ("quem vigia o vigia?")
         # Roda ANTES do guarda de propósito: confirma que o guarda realmente
         # detecta regressões. Um verificador que aprova tudo é pior que nenhum.
         # Ele quebra o código de propósito numa cópia temporária e confere que
-        # o guarda reclama de cada uma das 13 regressões.
+        # o guarda reclama de cada uma das regressões simuladas (13 na versão 1.1.0).
         run: python output/auditoria/teste_do_guarda.py
 
-      - name: Guarda de segurança (24 proteções da auditoria)
+      - name: Guarda de segurança (proteções da auditoria)
         run: python output/auditoria/guard_seguranca.py
 
       - name: Verificar dependências de terceiros
@@ -82,16 +82,16 @@ jobs:
   # ===========================================================================
   sast-bandit:
     name: 'Camada 2: Bandit (SAST)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Instalar o Bandit
         run: pip install --disable-pip-version-check "bandit[toml]==1.9.4"
@@ -116,7 +116,7 @@ jobs:
 
       - name: Guardar o relatório
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: bandit-relatorio
           path: bandit-relatorio.json
@@ -127,16 +127,16 @@ jobs:
   # ===========================================================================
   sast-semgrep:
     name: 'Camada 2: Semgrep (SAST)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Instalar o Semgrep
         run: pip install --disable-pip-version-check semgrep
@@ -158,7 +158,7 @@ jobs:
       - name: Guardar o relatório
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: semgrep-relatorio
           path: semgrep.sarif
@@ -169,7 +169,7 @@ jobs:
   # ===========================================================================
   codeql:
     name: 'Camada 2: CodeQL (SAST)'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -177,16 +177,16 @@ jobs:
       actions: read
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           languages: python
           queries: security-extended
 
       - name: Analisar
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
           category: '/language:python'
 
@@ -195,11 +195,11 @@ jobs:
   # ===========================================================================
   segredos:
     name: 'Camada 2: varredura de segredos'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Baixar o código com todo o histórico
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # fetch-depth 0 traz TODOS os commits: um segredo apagado depois
           # continua no histórico e continua vazado.
@@ -223,7 +223,7 @@ jobs:
     name: Segurança aprovada
     if: always()
     needs: [guarda-regressao, sast-bandit, sast-semgrep, codeql]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verificar o resultado das etapas anteriores

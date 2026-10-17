@@ -1,0 +1,156 @@
+# =============================================================================
+# Homebrew — atualização automática do tap depois de uma versão publicada
+#
+# O QUE ISTO FAZ, EM LINGUAGEM SIMPLES
+# ------------------------------------
+# O Homebrew só instala a partir de um "tap" (1985epma/homebrew-tap) e exige a
+# impressão digital (SHA-256) do pacote de cada versão. Antes, alguém tinha de
+# rodar Formula/update-formula.sh e copiar a fórmula para o tap à mão. Agora:
+#
+#   1. roda Formula/update-formula.sh para a tag (baixa o pacote, calcula o
+#      SHA-256 e reescreve url e sha256 da fórmula);
+#   2. copia a fórmula para o repositório do tap;
+#   3. abre um Pull Request no tap (uma branch por versão).
+#
+# É chamado pelo release.yml depois que a Release foi publicada. Também pode ser
+# disparado à mão (Actions > Homebrew tap > Run workflow) para repetir uma versão.
+#
+# CONFIGURAÇÃO ÚNICA (feita pelo dono do repositório)
+#   Crie o segredo TAP_GITHUB_TOKEN em Settings > Secrets and variables > Actions.
+#   Use um token de acesso pessoal "fine-grained" restrito ao repositório
+#   1985epma/homebrew-tap, com as permissões:
+#       Contents: Read and write    e    Pull requests: Read and write
+#   O GITHUB_TOKEN padrão NÃO serve: ele só enxerga este repositório.
+#
+#   SEM O SEGREDO este workflow não falha: ele termina com um aviso e a
+#   atualização do tap continua sendo manual (./Formula/update-formula.sh).
+# =============================================================================
+
+name: Homebrew tap
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag da versão já publicada (ex.: v1.1.0)'
+        required: true
+        type: string
+    secrets:
+      TAP_GITHUB_TOKEN:
+        description: 'Token com acesso de escrita ao repositório do tap'
+        required: false
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag da versão já publicada (ex.: v1.1.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew-tap-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  atualizar-tap:
+    name: Atualizar a fórmula no tap
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TAG: ${{ inputs.tag }}
+      TAP_REPO: 1985epma/homebrew-tap
+    steps:
+      - name: Verificar a versão e o segredo do tap
+        id: gate
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Tag inválida para o Homebrew: '$TAG'. Só versões estáveis vX.Y.Z entram no tap."
+            exit 1
+          fi
+          if [ -z "$TAP_TOKEN" ]; then
+            echo "::notice title=Homebrew não atualizado::O segredo TAP_GITHUB_TOKEN não está configurado, então o tap $TAP_REPO NÃO foi atualizado. Configure o segredo (veja o topo de homebrew-tap.yml) ou rode ./Formula/update-formula.sh $TAG e abra o PR à mão."
+            echo "### Homebrew: tap não atualizado" >> "$GITHUB_STEP_SUMMARY"
+            echo "O segredo \`TAP_GITHUB_TOKEN\` não está configurado. Rode \`./Formula/update-formula.sh $TAG\` e copie a fórmula para o tap à mão." >> "$GITHUB_STEP_SUMMARY"
+            echo "executar=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "executar=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Baixar o código da versão
+        if: steps.gate.outputs.executar == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag }}
+          persist-credentials: false
+
+      - name: Conferir que a Release existe
+        if: steps.gate.outputs.executar == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName
+
+      - name: Regenerar a fórmula (url e sha256 da versão)
+        if: steps.gate.outputs.executar == 'true'
+        # Mesma lógica usada à mão: baixa o pacote da tag, calcula o SHA-256 e
+        # reescreve as linhas url e sha256 da fórmula.
+        run: bash Formula/update-formula.sh "$TAG"
+
+      - name: Baixar o tap
+        if: steps.gate.outputs.executar == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: 1985epma/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: tap
+
+      - name: Copiar a fórmula e abrir o Pull Request
+        if: steps.gate.outputs.executar == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          mkdir -p tap/Formula
+          cp Formula/epma-windows-usb-creator.rb tap/Formula/epma-windows-usb-creator.rb
+
+          cd tap
+          if [ -z "$(git status --porcelain -- Formula/epma-windows-usb-creator.rb)" ]; then
+            echo "::notice::A fórmula do tap já está idêntica à de $TAG. Nada a fazer."
+            echo "### Homebrew: o tap já estava atualizado para $TAG" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          SHA=$(sed -n 's/^  sha256 "\([0-9a-f]\{64\}\)"$/\1/p' Formula/epma-windows-usb-creator.rb | head -1)
+          BRANCH="epma-windows-usb-creator-$TAG"
+          BASE=$(gh repo view "$TAP_REPO" --json defaultBranchRef --jq .defaultBranchRef.name)
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
+          git add Formula/epma-windows-usb-creator.rb
+          git commit -m "epma-windows-usb-creator $TAG" \
+                     -m "Automated update from $GITHUB_REPOSITORY, workflow run $GITHUB_RUN_ID. sha256: $SHA"
+          # A branch é só desta versão; reenviar (repetir o workflow) a substitui.
+          git push --force origin "$BRANCH"
+
+          if [ "$(gh pr list --repo "$TAP_REPO" --head "$BRANCH" --state open --json number --jq length)" != "0" ]; then
+            echo "::notice::Já existe um Pull Request aberto para $BRANCH; a branch foi atualizada."
+            exit 0
+          fi
+
+          BODY=$(printf '%s\n' \
+            "Automated formula update for **$TAG**." \
+            "" \
+            "- Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" \
+            "- Tarball sha256: \`$SHA\`" \
+            "- Generated by \`Formula/update-formula.sh\` in $GITHUB_REPOSITORY (workflow run $GITHUB_RUN_ID)." \
+            "" \
+            "Before merging, run \`brew style 1985epma/tap\` and" \
+            "\`brew audit --strict --online 1985epma/tap/epma-windows-usb-creator\`.")
+          URL=$(gh pr create --repo "$TAP_REPO" --base "$BASE" --head "$BRANCH" \
+                  --title "epma-windows-usb-creator $TAG" --body "$BODY")
+          echo "Pull Request aberto: $URL"
+          echo "### Homebrew: Pull Request aberto no tap" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"

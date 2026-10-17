@@ -12,6 +12,11 @@
 # "dependência do projeto".
 #
 # Este arquivo faz o GitHub avisar quando uma delas tiver atualização.
+#
+# AS AÇÕES ESTÃO FIXADAS PELO SHA COMPLETO DO COMMIT (com um comentário
+# "# vX.Y.Z" ao lado). O Dependabot entende esse formato: ele troca o SHA pelo da
+# versão nova e atualiza o comentário. Assim o SHA continua sendo revisado em um
+# Pull Request, em vez de a tag "andar" sozinha por baixo da esteira.
 # =============================================================================
 
 version: 2
@@ -24,6 +29,11 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: 'ci'
+    # Um único PR por semana com todas as ações, em vez de um PR por ação.
+    groups:
+      github-actions:
+        patterns:
+          - '*'
     labels:
       - dependencias
       - seguranca

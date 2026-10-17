@@ -3,13 +3,13 @@
 # ATENÇÃO: este arquivo NÃO declara dependências e NÃO transforma o projeto num
 # pacote instalável. Ele contém apenas configuração de ferramentas usadas na
 # esteira de CI. O projeto continua com ZERO dependências de terceiros
-# (ver requirements.txt e SECURITY.md).
+# (ver requirements.txt e SECURITY.md). Python mínimo suportado: 3.10.
 
 # ============================================================
 # Ruff — verificador de estilo e erros (roda na CI)
 # ============================================================
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 exclude = [".git", "__pycache__", ".venv", "venv"]
 
@@ -46,6 +46,12 @@ ignore = [
 # As ferramentas de auditoria executam subprocessos e manipulam caminhos de
 # arquivo maliciosos DE PROPÓSITO — é exatamente o que elas testam.
 "output/auditoria/*.py" = ["S101", "S108", "S404", "S603", "S607"]
+# Os testes (unittest e end-to-end) usam assert, sudo e caminhos temporários de propósito.
+"tests/**/*.py" = ["S101", "S108", "S311", "S404", "S603", "S607"]
+# verifica_dependencias.py keeps a deliberate "Python < 3.10" guard: the script
+# must print a friendly message instead of crashing when someone runs it on an
+# old interpreter. UP036 would flag it now that the project minimum is 3.10.
+"output/auditoria/verifica_dependencias.py" = ["UP036"]
 
 # ============================================================
 # Bandit — analisador de segurança dedicado (roda na CI)

@@ -14,10 +14,20 @@
 # tem assinatura digital; uma versão adulterada pediria a senha de
 # administrador normalmente").
 #
+# O QUE CADA VERSÃO RECEBE
+#   * SHA256SUMS.txt                impressão digital de cada arquivo
+#   * comprovante de origem         attestation SLSA emitida pelo GitHub
+#   * sbom.cdx.json                 lista de componentes (CycloneDX 1.5), também
+#                                   assinada como attestation
+#   * notas da versão               a seção correspondente do CHANGELOG.md
+#   * atualização do Homebrew       PR automático no tap (homebrew-tap.yml)
+#
 # COMO PUBLICAR UMA VERSÃO
 # ------------------------
-#   git tag v1.0.0
-#   git push origin v1.0.0
+#   1. No CHANGELOG.md, renomeie o título "## [1.1.0] - unreleased" com a data
+#      (o título precisa conter [X.Y.Z], igual à tag sem o "v").
+#   2. git tag v1.1.0
+#      git push origin v1.1.0
 #
 # O resto acontece sozinho.
 # =============================================================================
@@ -30,11 +40,17 @@ on:
   workflow_dispatch:
     inputs:
       versao:
-        description: 'Versão a publicar (ex.: v1.0.0)'
+        description: 'Versão a publicar (ex.: v1.1.0)'
         required: true
 
 permissions:
   contents: read
+
+# Uma publicação por vez; nunca cancela uma em andamento (ela pode estar no meio
+# da criação da Release).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -42,98 +58,170 @@ jobs:
   # ---------------------------------------------------------------------------
   conferencias:
     name: Conferências obrigatórias
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
-      - name: Instalar bibliotecas gráficas
+      - name: Instalar bibliotecas gráficas e ferramentas de disco
+        # python3-tk e xvfb: interface gráfica. As demais: o teste com loop
+        # devices (mesmas ferramentas que o programa usa no Linux).
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends python3-tk xvfb
+          sudo apt-get install -y --no-install-recommends \
+            python3-tk xvfb parted dosfstools rsync wimtools xorriso util-linux
 
       - name: Autoteste do guarda de segurança
         run: python output/auditoria/teste_do_guarda.py
 
-      - name: Guarda de segurança (24 proteções)
+      - name: Guarda de segurança (proteções da auditoria)
         run: python output/auditoria/guard_seguranca.py
 
       - name: Dependências de terceiros
         run: python output/auditoria/verifica_dependencias.py
 
-      - name: Testes de validação (36 verificações)
+      - name: Testes de validação
         run: python output/auditoria/testes_validacao.py
+
+      - name: Testes unitários
+        if: hashFiles('tests/test_*.py', 'tests/**/test_*.py') != ''
+        run: python -m unittest discover -s tests -t . -v
 
       - name: Teste de fumaça da interface
         run: xvfb-run -a python output/auditoria/smoke_ui.py
 
+      - name: ShellCheck nos scripts embutidos no programa
+        run: |
+          python .github/scripts/extract_shell.py "$RUNNER_TEMP/shell"
+          shellcheck --shell=bash --severity=warning --format=gcc "$RUNNER_TEMP"/shell/*.sh
+          shellcheck --shell=bash --severity=warning Formula/update-formula.sh
+
+      - name: Teste end-to-end com loop devices
+        # Usa o Python do sistema (/usr/bin/python3), que tem o Tkinter do apt.
+        env:
+          E2E_REQUIRE: '1'
+        run: /usr/bin/python3 tests/e2e/loopback_e2e.py
+
+      - name: Desanexar loop devices que sobraram
+        if: always()
+        run: sudo losetup -D || true
+
   # ---------------------------------------------------------------------------
-  # 2. Publicar a versão com impressão digital e comprovante de origem
+  # 2. Publicar a versão com impressão digital, SBOM e comprovante de origem
   # ---------------------------------------------------------------------------
   publicar:
     name: Publicar no GitHub
     needs: conferencias
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    outputs:
+      versao: ${{ steps.versao.outputs.valor }}
+      prerelease: ${{ steps.versao.outputs.prerelease }}
     permissions:
       contents: write        # criar a Release
       id-token: write        # gerar o comprovante de origem (provenance)
       attestations: write    # anexar o comprovante à versão
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Determinar a versão
         id: versao
+        # O valor digitado em "Run workflow" passa por uma variável de ambiente
+        # (nunca colado no texto do script) e é validado antes de ser usado.
+        env:
+          EVENTO: ${{ github.event_name }}
+          VERSAO_INFORMADA: ${{ inputs.versao }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            V="${{ inputs.versao }}"
+          if [ "$EVENTO" = "workflow_dispatch" ]; then
+            V="$VERSAO_INFORMADA"
           else
             V="${GITHUB_REF#refs/tags/}"
           fi
+          if ! printf '%s' "$V" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Versão inválida: '$V'. Use o formato vX.Y.Z (ex.: v1.1.0 ou v1.2.0-rc.1)."
+            exit 1
+          fi
+          case "$V" in *-*) PRE=true ;; *) PRE=false ;; esac
           echo "valor=$V" >> "$GITHUB_OUTPUT"
-          echo "Publicando versão: $V"
+          echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
+          echo "Publicando versão: $V (pré-lançamento: $PRE)"
 
       - name: Montar o pacote da versão
         run: |
           mkdir -p pacote
           cp win11_usb_creator.py pacote/
-          cp README.md README.pt-BR.md SECURITY.md LICENSE requirements.txt pacote/
+          cp README.md README.pt-BR.md SECURITY.md LICENSE CHANGELOG.md requirements.txt pacote/
           mkdir -p pacote/relatorios
           cp output/*.md pacote/relatorios/
 
+      - name: Gerar o SBOM (CycloneDX 1.5)
+        # Lista o programa (sem dependências Python) e as ferramentas do sistema
+        # que ele executa (rsync, wimlib, parted, dosfstools, util-linux...).
+        env:
+          VERSAO: ${{ steps.versao.outputs.valor }}
+        run: |
+          python3 .github/scripts/make_sbom.py \
+            --version "$VERSAO" \
+            --out pacote/sbom.cdx.json \
+            --artifact pacote/win11_usb_creator.py \
+            --commit "$GITHUB_SHA"
+
+      - name: Calcular as impressões digitais
+        run: |
           cd pacote
           # A impressão digital de cada arquivo: permite conferir que nada foi
-          # alterado entre a publicação e o download.
+          # alterado entre a publicação e o download. O programa vem SEMPRE na
+          # primeira linha (o texto da Release depende disso).
           sha256sum win11_usb_creator.py > SHA256SUMS.txt
-          sha256sum README.md SECURITY.md LICENSE >> SHA256SUMS.txt
+          sha256sum sbom.cdx.json README.md SECURITY.md LICENSE CHANGELOG.md >> SHA256SUMS.txt
           echo "--- Conteúdo de SHA256SUMS.txt ---"
           cat SHA256SUMS.txt
 
       - name: Gerar comprovante de origem (provenance)
-        # Prova criptográfica, emitida pelo próprio GitHub, de que este arquivo
-        # foi gerado por ESTA esteira, a partir DESTE código — e não montado na
-        # máquina de alguém. É o mais próximo de assinatura digital que dá para
-        # obter sem comprar um certificado (risco residual RR-02).
-        uses: actions/attest-build-provenance@v2
+        # Prova criptográfica, emitida pelo próprio GitHub, de que estes
+        # arquivos foram gerados por ESTA esteira, a partir DESTE código — e não
+        # montados na máquina de alguém. É o mais próximo de assinatura digital
+        # que dá para obter sem comprar um certificado (risco residual RR-02).
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            pacote/win11_usb_creator.py
+            pacote/sbom.cdx.json
+            pacote/SHA256SUMS.txt
+
+      - name: Anexar o SBOM ao comprovante do programa
+        # Attestation assinada que liga o programa ao seu SBOM. Verificável com:
+        #   gh attestation verify win11_usb_creator.py --repo OWNER/REPO \
+        #     --predicate-type https://cyclonedx.org/bom
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: 'pacote/win11_usb_creator.py'
+          sbom-path: 'pacote/sbom.cdx.json'
 
       - name: Criar a Release no GitHub
         env:
           GH_TOKEN: ${{ github.token }}
           VERSAO: ${{ steps.versao.outputs.valor }}
+          PRE: ${{ steps.versao.outputs.prerelease }}
         run: |
           SHA=$(awk '{print $1}' pacote/SHA256SUMS.txt | head -1)
-          cat > notas.md <<EOF
-          ## EPMA Windows 11 Creator USB — $VERSAO
 
+          # O que mudou: a seção do CHANGELOG.md desta versão, se existir.
+          if python3 .github/scripts/changelog_section.py "$VERSAO" > mudancas.md; then
+            { echo "## EPMA USB Creator — $VERSAO"; echo; echo "### O que mudou"; echo; cat mudancas.md; echo; } > notas.md
+          else
+            echo "::notice::CHANGELOG.md não tem a seção [${VERSAO#v}]; usando notas genéricas."
+            { echo "## EPMA USB Creator — $VERSAO"; echo; } > notas.md
+          fi
+
+          cat >> notas.md <<EOF
           ### Como conferir que este arquivo é autêntico
 
           Antes de executar, confira a impressão digital do arquivo baixado:
@@ -154,21 +242,59 @@ jobs:
           Você também pode verificar o comprovante de origem emitido pelo GitHub:
 
           \`\`\`bash
-          gh attestation verify win11_usb_creator.py --repo ${{ github.repository }}
+          gh attestation verify win11_usb_creator.py --repo $GITHUB_REPOSITORY
+          \`\`\`
+
+          ### Lista de componentes (SBOM)
+
+          \`sbom.cdx.json\` (CycloneDX 1.5) descreve o programa — sem dependências
+          Python, só a biblioteca padrão — e as ferramentas do sistema que ele
+          executa. Ele também está assinado:
+
+          \`\`\`bash
+          gh attestation verify win11_usb_creator.py --repo $GITHUB_REPOSITORY \\
+            --predicate-type https://cyclonedx.org/bom
           \`\`\`
 
           ### Segurança
 
-          Esta versão passou por todas as conferências automáticas da esteira:
-          guarda de regressão (24 proteções), 36 testes de validação,
-          Bandit, Semgrep, CodeQL e teste da interface gráfica.
+          Esta versão passou por todas as conferências obrigatórias da esteira de
+          publicação: autoteste e guarda de regressão da auditoria, testes de
+          validação, testes unitários, ShellCheck nos scripts que rodam como root,
+          teste da interface gráfica e teste end-to-end com loop devices (gravação
+          e verificação de verdade). A esteira de segurança (Bandit, Semgrep,
+          CodeQL, Gitleaks) roda a cada alteração e toda semana.
 
           Documentação: \`SECURITY.md\` · Relatórios completos: pasta \`relatorios/\`
           EOF
 
+          FLAGS=()
+          if [ "$PRE" = "true" ]; then FLAGS+=(--prerelease); fi
+
           gh release create "$VERSAO" \
-            --title "EPMA Windows 11 Creator USB $VERSAO" \
+            --title "EPMA USB Creator $VERSAO" \
             --notes-file notas.md \
+            "${FLAGS[@]}" \
             pacote/win11_usb_creator.py \
             pacote/SHA256SUMS.txt \
-            pacote/SECURITY.md
+            pacote/SECURITY.md \
+            pacote/sbom.cdx.json
+
+  # ---------------------------------------------------------------------------
+  # 3. Atualizar o Homebrew (só versões estáveis)
+  # ---------------------------------------------------------------------------
+  # Abre um PR no tap 1985epma/homebrew-tap. Se o segredo TAP_GITHUB_TOKEN não
+  # existir, o job termina com um aviso claro e a publicação NÃO é afetada.
+  # (Um workflow disparado pelo evento "release" não funcionaria aqui: eventos
+  # criados com o GITHUB_TOKEN não iniciam outros workflows.)
+  homebrew:
+    name: Atualizar o tap do Homebrew
+    needs: publicar
+    if: needs.publicar.outputs.prerelease != 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/homebrew-tap.yml
+    with:
+      tag: ${{ needs.publicar.outputs.versao }}
+    secrets:
+      TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}

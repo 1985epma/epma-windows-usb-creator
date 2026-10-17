@@ -12,8 +12,11 @@
 #   brew install --HEAD epma-windows-usb-creator
 #
 # MAINTAINER NOTES
-#   * After publishing a new release, refresh `url` and `sha256` by running:
-#       ./Formula/update-formula.sh v1.0.0
+#   * Publishing a release (tag v*) updates the tap AUTOMATICALLY: the "Homebrew tap"
+#     workflow runs ./Formula/update-formula.sh for the tag and opens a pull request
+#     on 1985epma/homebrew-tap (needs the repository secret TAP_GITHUB_TOKEN).
+#   * To do it by hand, refresh `url` and `sha256` by running:
+#       ./Formula/update-formula.sh v1.1.0
 #   * Validate before publishing:
 #       brew style 1985epma/tap
 #       brew audit --strict --online 1985epma/tap/epma-windows-usb-creator
@@ -53,10 +56,17 @@ class EpmaWindowsUsbCreator < Formula
       Run the application with:
         epma-windows-usb-creator
 
-      This tool ERASES the selected disk completely. It only ever lists external
-      removable drives, requires you to type the disk identifier by hand, and
-      re-verifies the target immediately before writing -- but double-check the
-      selected disk before confirming.
+      This tool ERASES the selected disk completely. Safeguards built in:
+        * only USB drives are listed -- never your internal disk;
+        * a final confirmation dialog names the drive before anything is erased
+          (for high-risk disks you must also type the disk identifier);
+        * the target is re-verified immediately before writing;
+        * afterwards the drive is read back and compared with the image, and it
+          is ejected only if that verification passes.
+      Please still double-check the selected disk before confirming.
+
+      The administrator password is asked for once, up front, before the drive
+      is touched. It is used only to run local disk commands and is never stored.
 
       Always download the Windows image from Microsoft's official website. The
       application accepts HTTPS links only and warns about unrecognised servers,

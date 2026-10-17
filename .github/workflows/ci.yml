@@ -11,6 +11,23 @@
 # 24 horas por dia.
 #
 # As conferências de SEGURANÇA ficam num arquivo separado: security.yml
+#
+# CONFERÊNCIAS DESTE ARQUIVO
+#   qualidade      estilo e erros (Ruff) e sintaxe
+#   testes         auditoria + testes unitários, Python 3.10–3.14, Linux e macOS
+#   shellcheck     os scripts de shell embutidos no programa (rodam como ROOT)
+#   e2e-loopback   gravação de verdade em loop devices (Linux): o caminho
+#                  privilegiado real, sem tocar em nenhum disco físico
+#   distros        gerenciador de pacotes em Fedora, Arch, openSUSE, Alpine, Debian
+#   ci-aprovada    resultado consolidado (é este que a proteção de branch exige)
+#
+# AÇÕES DE TERCEIROS são fixadas pelo SHA completo do commit (o comentário
+# "# vX.Y.Z" diz a versão). Uma tag pode ser movida por quem controla a ação;
+# um SHA não. O Dependabot propõe as atualizações (.github/dependabot.yml).
+#
+# IMAGENS: "ubuntu-24.04" fixa a versão do sistema. "ubuntu-latest" migra
+# sozinho para o Ubuntu 26.04 a partir de 2026-10-19, o que poderia quebrar a
+# esteira sem nenhuma alteração no código.
 # =============================================================================
 
 name: CI
@@ -39,19 +56,19 @@ jobs:
   # ---------------------------------------------------------------------------
   qualidade:
     name: Estilo e erros de código
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: '3.12'
+          python-version: '3.13'
 
       - name: Conferir se o código é sintaticamente válido
-        run: python -m compileall -q win11_usb_creator.py output/auditoria/
+        run: python -m compileall -q win11_usb_creator.py output/auditoria/ tests/ .github/scripts/
 
       - name: Instalar o Ruff (verificador de estilo e erros)
         run: pip install --disable-pip-version-check ruff==0.16.0
@@ -62,29 +79,39 @@ jobs:
         run: ruff check . --output-format=github
 
   # ---------------------------------------------------------------------------
-  # 2. Testes de validação de segurança (as 36 verificações da auditoria)
+  # 2. Testes: auditoria de segurança + testes unitários
   # ---------------------------------------------------------------------------
   testes:
     name: Testes (${{ matrix.os }}, Python ${{ matrix.python }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # Combinações marcadas como experimentais mostram problemas cedo, mas
+    # NÃO barram a alteração.
+    continue-on-error: ${{ matrix.experimental == true }}
     strategy:
       fail-fast: false        # não interrompe as outras combinações na 1ª falha
       matrix:
         # Testar em várias versões confirma que o programa funciona no Python
         # que o usuário tiver instalado — não só no da máquina do desenvolvedor.
-        os: [ubuntu-latest]
-        python: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        # O mínimo suportado é o Python 3.10.
+        os: [ubuntu-24.04]
+        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
         include:
           # O programa suporta macOS e Linux; ambos precisam ser testados.
           - os: macos-latest
             python: '3.13'
+          - os: macos-latest
+            python: '3.14'
+          # Ubuntu 26.04 é o próximo "ubuntu-latest": descobrir problemas agora.
+          - os: ubuntu-26.04
+            python: '3.13'
+            experimental: true
     steps:
       - name: Baixar o código
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Preparar o Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python }}
 
@@ -101,9 +128,16 @@ jobs:
         run: python -c "import tkinter; print('Tkinter OK -', tkinter.TkVersion)"
 
       - name: Rodar os testes de validação de segurança
-        # 36 verificações que comprovam cada correção da auditoria.
-        # Nenhuma delas toca em disco, formata nada ou usa privilégio de admin.
+        # Conferem, uma a uma, as correções da auditoria (44 verificações na
+        # versão 1.1.0). Nenhuma delas toca em disco, formata nada ou usa
+        # privilégio de administrador.
         run: python output/auditoria/testes_validacao.py
+
+      - name: Rodar os testes unitários
+        # Só roda quando a pasta tests/ tem testes (test_*.py). Sem monitor:
+        # os testes não abrem janelas.
+        if: hashFiles('tests/test_*.py', 'tests/**/test_*.py') != ''
+        run: python -m unittest discover -s tests -t . -v
 
       - name: Teste de fumaça da interface gráfica (Linux)
         if: runner.os == 'Linux'
@@ -115,7 +149,151 @@ jobs:
         run: python output/auditoria/smoke_ui.py
 
   # ---------------------------------------------------------------------------
-  # 3. Resultado final consolidado
+  # 3. ShellCheck: os scripts de shell que o programa roda como ROOT
+  # ---------------------------------------------------------------------------
+  # O programa executa trechos de shell com privilégio de administrador
+  # (sudo bash -c ...). Eles vivem dentro de textos em Python, onde nenhum
+  # verificador de shell enxerga. O extrator os tira de lá (via ast) e o
+  # ShellCheck os analisa. Só falha com achados de gravidade "warning" ou maior.
+  shellcheck:
+    name: Scripts de shell (ShellCheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Extrair os scripts embutidos no programa
+        # Falha se encontrar menos de 5 scripts: significaria que o extrator
+        # parou de reconhecer o código, e a análise passaria "em branco".
+        run: python3 .github/scripts/extract_shell.py "$RUNNER_TEMP/shell" | tee "$RUNNER_TEMP/shell-list.txt"
+
+      - name: ShellCheck nos scripts extraídos
+        # O ShellCheck já vem instalado nas imagens do GitHub. Os nomes dos
+        # arquivos trazem a linha do win11_usb_creator.py onde o texto começa.
+        run: |
+          shellcheck --version
+          shellcheck --shell=bash --severity=warning --format=gcc "$RUNNER_TEMP"/shell/*.sh
+
+      - name: ShellCheck nos scripts do repositório
+        run: shellcheck --shell=bash --severity=warning Formula/update-formula.sh
+
+  # ---------------------------------------------------------------------------
+  # 4. End-to-end com loop devices (Linux)
+  # ---------------------------------------------------------------------------
+  # Roda o caminho privilegiado REAL (sudo, losetup, parted, mkfs.vfat, mount,
+  # rsync, wimlib, dd e a verificação) contra "discos" falsos criados na hora
+  # a partir de arquivos. Nenhum disco de verdade existe nem é tocado aqui.
+  # O teste se recusa a rodar fora do GitHub Actions (veja o próprio script).
+  e2e-loopback:
+    name: E2E com loop device (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    continue-on-error: ${{ matrix.experimental == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04]
+        include:
+          - os: ubuntu-26.04
+            experimental: true
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Instalar as ferramentas de disco
+        # python3-tk: o módulo importa o Tkinter (o teste usa o Python do
+        # sistema, sem abrir nenhuma janela).
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            parted dosfstools rsync wimtools xorriso util-linux python3-tk
+
+      - name: Teste end-to-end com loop devices
+        env:
+          E2E_REQUIRE: '1'      # pré-requisito ausente = falha, nunca "pulado"
+          E2E_VERBOSE: '1'
+        run: python3 tests/e2e/loopback_e2e.py
+
+      - name: Desanexar loop devices que sobraram
+        if: always()
+        run: sudo losetup -D || true
+
+  # ---------------------------------------------------------------------------
+  # 5. Distribuições Linux: o gerenciador de pacotes certo em cada uma
+  # ---------------------------------------------------------------------------
+  # Cada distribuição roda num contêiner mínimo, só com o Python. O contêiner
+  # é iniciado com "docker run" (e não com "container:") porque as ações do
+  # GitHub precisam do Node, que o Alpine não tem.
+  distros:
+    name: Distro ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Debian
+            image: debian:stable
+            expect: apt-get
+            prepare: apt-get update -qq && apt-get install -y --no-install-recommends python3
+          - name: Fedora
+            image: fedora:latest
+            expect: dnf
+            prepare: dnf install -y python3
+          - name: Arch Linux
+            image: archlinux:latest
+            expect: pacman
+            prepare: pacman -Syu --noconfirm python
+          - name: openSUSE Tumbleweed
+            image: opensuse/tumbleweed
+            expect: zypper
+            prepare: zypper --non-interactive install python3
+          - name: Alpine
+            image: alpine:latest
+            expect: apk
+            prepare: apk add --no-cache python3
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Detecção do gerenciador e montagem dos comandos de instalação
+        env:
+          IMAGE: ${{ matrix.image }}
+          PREPARE: ${{ matrix.prepare }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -e PYTHONDONTWRITEBYTECODE=1 -e DEBIAN_FRONTEND=noninteractive \
+            -e PREPARE -e EXPECT \
+            "$IMAGE" sh -ec '
+              eval "$PREPARE"
+              python3 /src/tests/e2e/distro_probe.py --expect "$EXPECT"
+            '
+
+      - name: Instalar de verdade as ferramentas (informativo, não bloqueia)
+        # Executa o comando de instalação gerado pelo programa e confere se
+        # todas as ferramentas ficaram disponíveis. Prova que os nomes de pacote
+        # de LINUX_PKG_MAP existem na distribuição. Depende da rede e dos
+        # espelhos da distribuição, por isso só avisa.
+        continue-on-error: true
+        env:
+          IMAGE: ${{ matrix.image }}
+          PREPARE: ${{ matrix.prepare }}
+          EXPECT: ${{ matrix.expect }}
+        run: |
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -e PYTHONDONTWRITEBYTECODE=1 -e DEBIAN_FRONTEND=noninteractive \
+            -e PREPARE -e EXPECT \
+            "$IMAGE" sh -ec '
+              eval "$PREPARE"
+              python3 /src/tests/e2e/distro_probe.py --expect "$EXPECT" --install
+            '
+
+  # ---------------------------------------------------------------------------
+  # 6. Resultado final consolidado
   # ---------------------------------------------------------------------------
   # Este job existe para que a proteção de branch do GitHub precise exigir
   # apenas UMA conferência obrigatória em vez de listar todas as combinações
@@ -123,16 +301,39 @@ jobs:
   ci-aprovada:
     name: CI aprovada
     if: always()
-    needs: [qualidade, testes]
-    runs-on: ubuntu-latest
+    needs: [qualidade, testes, shellcheck, e2e-loopback, distros]
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      R_QUALIDADE: ${{ needs.qualidade.result }}
+      R_TESTES: ${{ needs.testes.result }}
+      R_SHELLCHECK: ${{ needs.shellcheck.result }}
+      R_E2E: ${{ needs.e2e-loopback.result }}
+      R_DISTROS: ${{ needs.distros.result }}
+      # O teste com loop devices é novo e depende do ambiente do GitHub. Enquanto
+      # for 'false' uma falha dele vira AVISO. Depois da primeira execução verde,
+      # troque para 'true' para que ele passe a barrar alterações.
+      E2E_BLOQUEANTE: 'false'
     steps:
       - name: Verificar o resultado das etapas anteriores
         run: |
-          echo "qualidade: ${{ needs.qualidade.result }}"
-          echo "testes:    ${{ needs.testes.result }}"
-          if [ "${{ needs.qualidade.result }}" != "success" ] || \
-             [ "${{ needs.testes.result }}" != "success" ]; then
+          echo "qualidade:    $R_QUALIDADE"
+          echo "testes:       $R_TESTES"
+          echo "shellcheck:   $R_SHELLCHECK"
+          echo "e2e-loopback: $R_E2E (bloqueante: $E2E_BLOQUEANTE)"
+          echo "distros:      $R_DISTROS"
+          falhou=0
+          for r in "$R_QUALIDADE" "$R_TESTES" "$R_SHELLCHECK" "$R_DISTROS"; do
+            [ "$r" = "success" ] || falhou=1
+          done
+          if [ "$R_E2E" != "success" ]; then
+            if [ "$E2E_BLOQUEANTE" = "true" ]; then
+              falhou=1
+            else
+              echo "::warning::O teste end-to-end com loop devices falhou (ainda não é bloqueante)."
+            fi
+          fi
+          if [ "$falhou" -ne 0 ]; then
             echo "::error::A CI falhou. Veja os detalhes nas etapas acima."
             exit 1
           fi

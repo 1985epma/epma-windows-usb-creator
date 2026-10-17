@@ -1,0 +1,439 @@
+#!/usr/bin/env python3
+"""End-to-end test of the REAL privileged code paths, against loop devices.
+
+!!  FOR GITHUB ACTIONS LINUX RUNNERS (or a throw-away VM).  DO NOT RUN ON A MACHINE  !!
+!!  YOU CARE ABOUT: it uses `sudo -n`, losetup, mount and mkfs.                       !!
+
+Everything runs against loop devices that this script creates itself from sparse
+files (`truncate -s 512M disk.img; losetup -fP --show disk.img`), so no real disk is
+ever touched; the script refuses to hand any path that is not /dev/loopN to the
+application. It still needs passwordless sudo, so it will not start unless it is
+running under GitHub Actions (GITHUB_ACTIONS=true) or E2E_ALLOW_LOOPBACK=1 is set.
+
+Scenarios (each with its own loop device, always detached in `finally`):
+
+  raw-write     linux_write_raw + verify_raw_write: the loop device must equal the ISO;
+                a deliberately flipped byte must make verify_raw_write raise, and the
+                reported offset must point at the right chunk; a non-hybrid ISO must be
+                refused before the device is touched.
+  windows-copy  linux_build_usb on a real ISO9660 image: GPT + FAT32, volume label,
+                every file present and identical, install.wim copied whole.
+  windows-split linux_build_usb with FAT32_MAX_FILE_SIZE patched tiny and a real WIM,
+                exercising `wimlib-imagex split` + `wimlib-imagex verify`.
+  verify-diff   verify_windows_payload (no loop device needed) must reject a missing
+                file, a changed file and a changed install image.
+
+Environment:
+  E2E_REQUIRE=1   a missing prerequisite is a FAILURE instead of a skip (CI sets this).
+  E2E_VERBOSE=1   print the application log of every scenario, not only of failed ones.
+
+The application module is imported with the real Tkinter when present and a stub
+otherwise (see _appimport.py); no window is ever created.
+"""
+
+import contextlib
+import hashlib
+import os
+import random
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _appimport import import_app  # noqa: E402
+
+REQUIRE = os.environ.get("E2E_REQUIRE") == "1"
+VERBOSE = os.environ.get("E2E_VERBOSE") == "1"
+MIB = 1024 * 1024
+
+NEEDED_TOOLS = ["sudo", "losetup", "truncate", "parted", "mkfs.vfat", "wipefs", "partprobe",
+                "rsync", "wimlib-imagex", "xorriso", "blkid", "cmp", "dd", "mount", "umount"]
+
+
+class Skip(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------- helpers
+def sudo(*cmd, check=True, input_bytes=None, text=True):
+    return subprocess.run(["sudo", "-n", *cmd], capture_output=True, text=text, check=check,
+                          input=input_bytes)
+
+
+class FakePriv:
+    """Stands in for PrivilegeHelper: same run_script contract, but through `sudo -n`."""
+
+    cached_password = None
+
+    def run_script(self, script, log, args=None, **_kw):
+        argv = ["sudo", "-n", "bash", "-c", script, "win11_usb_creator"] + [str(a) for a in (args or [])]
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in proc.stdout:
+            log(line.rstrip("\n"))
+        proc.wait()
+        if proc.returncode != 0:
+            raise RuntimeError(f"privileged script failed (exit {proc.returncode})")
+
+    def clear_cached_password(self):
+        pass
+
+
+def make_hybrid_iso(path, size, seed=1):
+    """A file that passes validate_hybrid_iso: random content with the 0x55AA signature."""
+    data = bytearray(random.Random(seed).randbytes(size))
+    data[510:512] = b"\x55\xaa"
+    with open(path, "wb") as fh:
+        fh.write(data)
+
+
+def write_random(path, size, seed):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(random.Random(seed).randbytes(size))
+
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(MIB), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def mounted_under(prefix):
+    """Mount points (and their sources) at or below `prefix`, deepest first."""
+    found = []
+    with open("/proc/mounts", encoding="utf-8") as fh:
+        for line in fh:
+            src, mnt = line.split()[:2]
+            if mnt == prefix or mnt.startswith(prefix.rstrip("/") + "/"):
+                found.append((src, mnt))
+    return sorted(found, key=lambda m: len(m[1]), reverse=True)
+
+
+def cleanup_workdir_devices(workdir):
+    """Unmount everything mounted below `workdir` and detach every loop device backed by it."""
+    for _src, mnt in mounted_under(workdir):
+        sudo("umount", "-l", mnt, check=False)
+    for _attempt in range(5):
+        out = sudo("losetup", "-a", check=False).stdout
+        loops = [line.split(":")[0] for line in out.splitlines() if workdir in line]
+        if not loops:
+            return
+        for dev in loops:
+            sudo("losetup", "-d", dev, check=False)
+        time.sleep(1)
+    print(f"WARNING: could not detach every loop device backed by {workdir}")
+
+
+@contextlib.contextmanager
+def loop_device(workdir, name, size="512M"):
+    """Create a sparse image, attach it with partition scanning, always detach afterwards."""
+    img = os.path.join(workdir, f"{name}.img")
+    subprocess.run(["truncate", "-s", size, img], check=True)
+    dev = sudo("losetup", "-fP", "--show", img).stdout.strip()
+    if not re.fullmatch(r"/dev/loop[0-9]+", dev):  # safety net: never hand anything else on
+        sudo("losetup", "-d", dev, check=False)
+        raise RuntimeError(f"unexpected losetup output: {dev!r}")
+    try:
+        yield dev
+    finally:
+        cleanup_workdir_devices(workdir)
+
+
+class Recorder:
+    """Collects the application log (and progress calls) of one scenario."""
+
+    def __init__(self):
+        self.lines = []
+        self.progress_calls = []
+
+    def log(self, line):
+        self.lines.append(str(line))
+
+    def progress(self, *args, **_kw):
+        self.progress_calls.append(args)
+
+
+def expect_raises(exc_type, fn, *args, contains=None, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except exc_type as e:
+        if contains and contains not in str(e):
+            raise AssertionError(f"{exc_type.__name__} raised, but without {contains!r}: {e}") from None
+        return e
+    raise AssertionError(f"expected {exc_type.__name__} from {fn.__name__}, nothing was raised")
+
+
+def device_equals_file(dev, path, size):
+    return sudo("cmp", "-n", str(size), path, dev, check=False).returncode == 0
+
+
+def flip_byte(dev, offset):
+    """Invert one byte of the device; returns a function that puts it back."""
+    orig = sudo("dd", f"if={dev}", "bs=1", f"skip={offset}", "count=1", "status=none", text=False).stdout
+    assert len(orig) == 1, "could not read the byte to corrupt"
+
+    def write(value):
+        sudo("dd", f"of={dev}", "bs=1", f"seek={offset}", "count=1", "conv=notrunc", "status=none",
+             input_bytes=value, text=False)
+        sudo("sync")
+
+    write(bytes([orig[0] ^ 0xFF]))
+    return lambda: write(orig)
+
+
+# --------------------------------------------------------------------------- scenarios
+def scenario_raw_write(app, workdir, priv, rec):
+    size = 6 * MIB + 12345  # not a multiple of the chunk size on purpose
+    iso = os.path.join(workdir, "hybrid.iso")
+    make_hybrid_iso(iso, size)
+
+    with loop_device(workdir, "raw") as dev:
+        name = os.path.basename(dev)
+
+        # A non-hybrid image must be refused BEFORE anything is written.
+        plain = os.path.join(workdir, "not-hybrid.iso")
+        write_random(plain, MIB, 99)
+        with open(plain, "r+b") as fh:
+            fh.seek(510)
+            fh.write(b"\x00\x00")
+        expect_raises(ValueError, app.linux_write_raw, plain, name, rec.log, priv)
+        assert sudo("cmp", "-n", str(MIB), "/dev/zero", dev, check=False).returncode == 0, \
+            "the device was modified even though the ISO was refused"
+
+        # The real write, read-back verification and eject step.
+        app.linux_write_raw(iso, name, rec.log, priv, rec.progress)
+        assert device_equals_file(dev, iso, size), "device content differs from the ISO after linux_write_raw"
+        assert rec.progress_calls, "no progress was reported during the write"
+        assert any("Verification passed" in line for line in rec.lines), "no 'Verification passed' log line"
+
+        # verify_raw_write must pass on good data...
+        app.verify_raw_write(iso, dev, rec.log, priv, rec.progress)
+
+        # ...and fail on a single flipped byte, in the right chunk (multi-chunk path).
+        old_chunk = app.VERIFY_CHUNK
+        app.VERIFY_CHUNK = MIB
+        try:
+            restore = flip_byte(dev, size - 1)  # last byte of the last (partial) chunk
+            e = expect_raises(RuntimeError, app.verify_raw_write, iso, dev, rec.log, priv, rec.progress,
+                              contains="Verification FAILED")
+            assert str(6 * MIB) in str(e), f"wrong failing offset reported: {e}"
+            restore()
+            app.verify_raw_write(iso, dev, rec.log, priv, rec.progress)
+
+            restore = flip_byte(dev, 4096)  # first chunk
+            e = expect_raises(RuntimeError, app.verify_raw_write, iso, dev, rec.log, priv, rec.progress,
+                              contains="Verification FAILED")
+            assert "near byte 0)" in str(e), f"wrong failing offset reported: {e}"
+            restore()
+        finally:
+            app.VERIFY_CHUNK = old_chunk
+
+
+def build_windows_tree(root, wim_path=None, wim_bytes=3 * MIB):
+    """Lay out a miniature Windows installer; returns {relative path: sha256} for the small files."""
+    files = {
+        "setup.exe": (200_000, 11),
+        "bootmgr": (50_000, 12),
+        "boot/bcd": (30_000, 13),
+        "boot/fonts/segoe_slboot.ttf": (70_000, 14),
+        "efi/boot/bootx64.efi": (120_000, 15),
+        "efi/microsoft/boot/bcd": (30_000, 16),
+        "sources/boot.wim": (MIB, 17),
+        "sources/lang.ini": (1_000, 18),
+    }
+    for rel, (size, seed) in files.items():
+        write_random(os.path.join(root, rel), size, seed)
+    if wim_path:
+        shutil.copyfile(wim_path, os.path.join(root, "sources", "install.wim"))
+    else:
+        write_random(os.path.join(root, "sources", "install.wim"), wim_bytes, 19)
+    return {rel: sha256(os.path.join(root, rel)) for rel in files}
+
+
+def make_iso(tree, out):
+    subprocess.run(["xorriso", "-as", "mkisofs", "-iso-level", "3", "-R", "-J", "-V", "WIN11TEST",
+                    "-o", out, tree], check=True, capture_output=True)
+
+
+def check_windows_drive(app, dev, expect_small, expect_install, split):
+    """Mount the first partition read-only and check label, layout and contents."""
+    part = f"{dev}p1"
+    assert os.path.exists(part), f"{part} does not exist: the partition table was not created"
+    assert sudo("blkid", "-p", "-s", "PTTYPE", "-o", "value", dev).stdout.strip() == "gpt", "not a GPT disk"
+    assert sudo("blkid", "-p", "-s", "TYPE", "-o", "value", part).stdout.strip() == "vfat", "not FAT"
+    label = sudo("blkid", "-p", "-s", "LABEL", "-o", "value", part).stdout.strip()
+    assert label == app.VOL_NAME, f"volume label is {label!r}, expected {app.VOL_NAME!r}"
+    assert not [m for m in mounted_under("/") if m[0] == part], "the partition is still mounted after linux_build_usb"
+
+    mnt = tempfile.mkdtemp(prefix="check_")
+    sudo("mount", "-o", "ro", part, mnt)
+    try:
+        for rel, digest in expect_small.items():
+            path = os.path.join(mnt, rel)
+            assert os.path.isfile(path), f"missing on the drive: {rel}"
+            assert sha256(path) == digest, f"content differs on the drive: {rel}"
+        sources = os.path.join(mnt, "sources")
+        if split:
+            swm = os.path.join(sources, "install.swm")
+            assert os.path.isfile(swm), "sources/install.swm missing"
+            assert not os.path.exists(os.path.join(sources, "install.wim")), "unsplit install.wim left behind"
+            subprocess.run(["wimlib-imagex", "verify", swm, f"--ref={sources}/install*.swm"],
+                           check=True, capture_output=True)
+        else:
+            assert sha256(os.path.join(sources, "install.wim")) == expect_install, "install.wim differs"
+    finally:
+        sudo("umount", mnt, check=False)
+        with contextlib.suppress(OSError):
+            os.rmdir(mnt)
+
+
+def scenario_windows_copy(app, workdir, priv, rec):
+    tree = os.path.join(workdir, "tree-copy")
+    small = build_windows_tree(tree)
+    install_digest = sha256(os.path.join(tree, "sources", "install.wim"))
+    iso = os.path.join(workdir, "win-copy.iso")
+    make_iso(tree, iso)
+
+    with loop_device(workdir, "wincopy") as dev:
+        app.linux_build_usb(iso, os.path.basename(dev), rec.log, priv, rec.progress)
+        assert any("Verification passed" in line for line in rec.lines), "verification did not pass"
+        check_windows_drive(app, dev, small, install_digest, split=False)
+
+
+def scenario_windows_split(app, workdir, priv, rec):
+    # A real (tiny) WIM, so that `wimlib-imagex split` and `verify` have something to chew on.
+    wim_src = os.path.join(workdir, "wim-src")
+    for i in range(3):
+        write_random(os.path.join(wim_src, f"f{i}.bin"), MIB, 30 + i)
+    wim = os.path.join(workdir, "install-real.wim")
+    subprocess.run(["wimlib-imagex", "capture", wim_src, wim, "E2E image"], check=True, capture_output=True)
+
+    probe = os.path.join(workdir, "split-probe")
+    os.makedirs(probe)
+    if subprocess.run(["wimlib-imagex", "split", wim, os.path.join(probe, "p.swm"), "3800"],
+                      capture_output=True).returncode != 0:
+        raise Skip("this wimlib-imagex refuses to split a WIM smaller than one part")
+
+    tree = os.path.join(workdir, "tree-split")
+    small = build_windows_tree(tree, wim_path=wim)
+    iso = os.path.join(workdir, "win-split.iso")
+    make_iso(tree, iso)
+
+    old_limit = app.FAT32_MAX_FILE_SIZE
+    app.FAT32_MAX_FILE_SIZE = MIB  # the 3 MiB WIM now counts as "over 4 GB"
+    try:
+        with loop_device(workdir, "winsplit") as dev:
+            app.linux_build_usb(iso, os.path.basename(dev), rec.log, priv, rec.progress)
+            assert any("Splitting" in line for line in rec.lines), "the split branch was not taken"
+            assert any("Verification passed" in line for line in rec.lines), "verification did not pass"
+            check_windows_drive(app, dev, small, None, split=True)
+    finally:
+        app.FAT32_MAX_FILE_SIZE = old_limit
+
+
+def scenario_verify_diff(app, workdir, priv, rec):
+    """verify_windows_payload on plain directories: no loop device, no root."""
+    def fresh(name):
+        src, dst = os.path.join(workdir, f"{name}-src"), os.path.join(workdir, f"{name}-dst")
+        for root in (src, dst):
+            write_random(os.path.join(root, "setup.exe"), 5000, 1)
+            write_random(os.path.join(root, "boot", "bcd"), 3000, 2)
+            write_random(os.path.join(root, "sources", "install.wim"), 20_000, 3)
+        return src, dst
+
+    def run(src, dst):
+        big = os.path.join(src, "sources", "install.wim")
+        app.verify_windows_payload(src, dst, "sources/install.wim", big, rec.log, rec.progress)
+
+    src, dst = fresh("ok")
+    run(src, dst)  # identical trees pass
+
+    src, dst = fresh("missing")
+    os.remove(os.path.join(dst, "boot", "bcd"))
+    expect_raises(RuntimeError, run, src, dst, contains="Verification FAILED")
+
+    src, dst = fresh("changed")
+    write_random(os.path.join(dst, "setup.exe"), 5000, 777)  # same size, other content
+    expect_raises(RuntimeError, run, src, dst, contains="Verification FAILED")
+
+    src, dst = fresh("image")
+    write_random(os.path.join(dst, "sources", "install.wim"), 20_000, 778)
+    expect_raises(RuntimeError, run, src, dst, contains="Verification FAILED")
+
+
+SCENARIOS = [
+    ("raw-write", scenario_raw_write),
+    ("windows-copy", scenario_windows_copy),
+    ("windows-split", scenario_windows_split),
+    ("verify-diff", scenario_verify_diff),
+]
+
+
+# --------------------------------------------------------------------------- driver
+def prerequisites_problem():
+    if sys.platform != "linux":
+        return "not running on Linux"
+    if not (os.environ.get("GITHUB_ACTIONS") == "true" or os.environ.get("E2E_ALLOW_LOOPBACK") == "1"):
+        return "refusing to run outside GitHub Actions (set E2E_ALLOW_LOOPBACK=1 to override on a throw-away VM)"
+    missing = [t for t in NEEDED_TOOLS if not shutil.which(t)]
+    if missing:
+        return "missing tools: " + ", ".join(missing)
+    if subprocess.run(["sudo", "-n", "true"], capture_output=True).returncode != 0:
+        return "passwordless sudo is not available"
+    probe = subprocess.run(["sudo", "-n", "losetup", "-f"], capture_output=True)
+    if probe.returncode != 0:
+        return "loop devices are not available"
+    return None
+
+
+def main():
+    problem = prerequisites_problem()
+    if problem:
+        print(f"{'FAIL' if REQUIRE else 'SKIP'}: loopback e2e cannot run: {problem}")
+        return 1 if REQUIRE else 0
+
+    app = import_app()
+    workdir = tempfile.mkdtemp(prefix="epma-e2e-")
+    tempfile.tempdir = workdir  # the app's mount-point directories land here too, so cleanup finds them
+    priv = FakePriv()
+    results = []
+    try:
+        for name, fn in SCENARIOS:
+            rec = Recorder()
+            print(f"\n=== {name}")
+            try:
+                fn(app, workdir, priv, rec)
+                results.append((name, "PASS", ""))
+                print(f"[PASS] {name}")
+                if VERBOSE:
+                    print("\n".join("    " + line for line in rec.lines))
+            except Skip as e:
+                results.append((name, "SKIP", str(e)))
+                print(f"[SKIP] {name}: {e}")
+            except Exception as e:
+                results.append((name, "FAIL", f"{type(e).__name__}: {e}"))
+                print(f"[FAIL] {name}: {type(e).__name__}: {e}")
+                traceback.print_exc()
+                print("--- application log (last 60 lines) ---")
+                print("\n".join("    " + line for line in rec.lines[-60:]))
+            finally:
+                cleanup_workdir_devices(workdir)
+    finally:
+        cleanup_workdir_devices(workdir)
+        shutil.rmtree(workdir, ignore_errors=True)
+
+    print("\n=== summary")
+    for name, status, detail in results:
+        print(f"  {status:5} {name} {detail}")
+    failed = [r for r in results if r[1] == "FAIL"]
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
