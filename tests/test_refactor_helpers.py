@@ -566,5 +566,66 @@ class DownloadCardWiringTests(gui_tests.GuiTestCase):
         self.assertEqual(self.state(self.win.flex_download_btn), "normal")
 
 
+class SudoRefreshTests(unittest.TestCase):
+    """The keep-alive shared by the window's and the command line's privilege helpers (sudo is mocked)."""
+
+    def test_refresh_reports_whether_sudo_accepted_us(self):
+        for code, expected in ((0, True), (1, False)):
+            with mock.patch.object(app.subprocess, "run", return_value=mock.Mock(returncode=code)) as run:
+                self.assertIs(app._sudo_refresh(), expected)
+            self.assertEqual(run.call_args.args[0], ["sudo", "-n", "-v"])
+            self.assertEqual(run.call_args.kwargs["stdin"], app.subprocess.DEVNULL)
+            self.assertEqual(run.call_args.kwargs["timeout"], app.SUDO_TIMEOUT)
+
+    def test_refresh_never_raises(self):
+        for exc in (OSError("no sudo"), app.subprocess.TimeoutExpired("sudo", 1)):
+            with mock.patch.object(app.subprocess, "run", side_effect=exc):
+                self.assertFalse(app._sudo_refresh())
+
+    def test_the_helper_probe_uses_the_same_command(self):
+        with mock.patch.object(app, "_sudo_refresh", return_value=True) as refresh:
+            self.assertTrue(app.PrivilegeHelper(None)._sudo_probe())
+        refresh.assert_called_once_with()
+
+    def test_loop_refreshes_until_stopped(self):
+        stop = threading.Event()
+        calls = []
+
+        def refresh():
+            calls.append(1)
+            if len(calls) == 3:
+                stop.set()
+
+        with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.01), \
+                mock.patch.object(app, "_sudo_refresh", refresh):
+            app._sudo_refresh_loop(stop)
+        self.assertEqual(len(calls), 3)
+
+    def test_loop_gives_up_after_max_seconds(self):
+        with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.01), \
+                mock.patch.object(app, "_sudo_refresh") as refresh:
+            app._sudo_refresh_loop(threading.Event(), max_seconds=0.05)
+        self.assertGreaterEqual(refresh.call_count, 1)
+
+    def test_both_helpers_run_the_loop_and_keep_their_public_attributes(self):
+        with mock.patch.object(app, "SUDO_KEEPALIVE_SECONDS", 0.01), \
+                mock.patch.object(app, "_sudo_refresh") as refresh:
+            cli = app.CliPrivilege()
+            cli._start_keepalive()
+            self.assertTrue(cli._thread.is_alive())
+            cli.clear_cached_password()
+            cli._thread.join(timeout=5)
+            self.assertFalse(cli._thread.is_alive())
+            gui = app.PrivilegeHelper(None)
+            gui._start_keepalive()
+            stop = gui._keepalive_stop
+            self.assertIsNotNone(stop)
+            gui._stop_keepalive()
+            self.assertTrue(stop.is_set())
+            self.assertIsNone(gui._keepalive_stop)
+        self.assertEqual(app.SUDO_KEEPALIVE_SECONDS, 60)
+        self.assertIsNotNone(refresh)
+
+
 if __name__ == "__main__":
     unittest.main()

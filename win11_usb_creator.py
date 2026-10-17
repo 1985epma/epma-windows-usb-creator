@@ -1661,6 +1661,26 @@ def ask_typed_confirmation(parent, title, message, expected, reasons=()):
 # Privilege escalation (Linux always; macOS only for raw writes —
 # diskutil/hdiutil need no root, but writing /dev/rdiskN does)
 # ============================================================
+def _sudo_refresh():
+    """True if sudo accepts us without a password right now (`sudo -n -v`), which also renews its credential
+    timestamp. Never raises."""
+    try:
+        proc = subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=SUDO_TIMEOUT)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def _sudo_refresh_loop(stop_event, max_seconds=None):
+    """Keep sudo's credential timestamp alive while an operation runs (the thread body of both privilege
+    helpers): refresh it every SUDO_KEEPALIVE_SECONDS until `stop_event` is set, or until `max_seconds`
+    have passed (None: no limit)."""
+    deadline = None if max_seconds is None else time.monotonic() + max_seconds
+    while not stop_event.wait(SUDO_KEEPALIVE_SECONDS) and (deadline is None or time.monotonic() < deadline):
+        _sudo_refresh()
+
+
 class PrivilegeHelper:
     """Runs privileged scripts through sudo (or pkexec), asking for the password once.
 
@@ -1723,12 +1743,7 @@ class PrivilegeHelper:
     # ---------- sudo timestamp (no password kept in memory) ----------
     def _sudo_probe(self):
         """True if sudo currently accepts us without a password (and refreshes its timestamp)."""
-        try:
-            proc = subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
-                                  capture_output=True, timeout=SUDO_TIMEOUT)
-        except (OSError, subprocess.SubprocessError):
-            return False
-        return proc.returncode == 0
+        return _sudo_refresh()
 
     def _arm_timestamp(self, password):
         """Validate with `sudo -S -v`, then confirm a fresh `sudo -n` process is accepted.
@@ -1747,13 +1762,7 @@ class PrivilegeHelper:
         self._stop_keepalive()
         stop = threading.Event()
         self._keepalive_stop = stop
-
-        def loop():
-            deadline = time.monotonic() + SUDO_KEEPALIVE_MAX_SECONDS
-            while not stop.wait(SUDO_KEEPALIVE_SECONDS) and time.monotonic() < deadline:
-                self._sudo_probe()
-
-        threading.Thread(target=loop, daemon=True).start()
+        threading.Thread(target=_sudo_refresh_loop, args=(stop, SUDO_KEEPALIVE_MAX_SECONDS), daemon=True).start()
 
     def _stop_keepalive(self):
         stop, self._keepalive_stop = self._keepalive_stop, None
@@ -5217,8 +5226,6 @@ class CliPrivilege:
     retried; a failure is reported as it is.
     """
 
-    SUDO_REFRESH_SECONDS = 60
-
     def __init__(self):
         self.cached_password = None  # always None: sudo owns the credential
         self._stop = threading.Event()
@@ -5245,15 +5252,7 @@ class CliPrivilege:
         # Writing and verifying a large image can outlast sudo's credential cache.
         if self._thread is not None:
             return
-
-        def refresh():
-            while not self._stop.wait(self.SUDO_REFRESH_SECONDS):
-                with contextlib.suppress(OSError, subprocess.SubprocessError):
-                    subprocess.run(["sudo", "-n", "-v"], stdin=subprocess.DEVNULL,
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                   timeout=SUDO_TIMEOUT, check=False)
-
-        self._thread = threading.Thread(target=refresh, daemon=True)
+        self._thread = threading.Thread(target=_sudo_refresh_loop, args=(self._stop,), daemon=True)
         self._thread.start()
 
     def clear_cached_password(self):
