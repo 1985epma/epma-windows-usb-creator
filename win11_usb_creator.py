@@ -147,7 +147,8 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / harden.ps1 (and, optionally, an answer file)
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -600,6 +601,11 @@ PT_BR = {
     "Turn off Remote Assistance invitations -- risk: Old-style Remote Assistance invitations stop working; Quick Assist and Remote Desktop are not changed.": "Desativar os convites de Assistência Remota -- risco: Os convites no estilo antigo da Assistência Remota deixam de funcionar; o Assistência Rápida e a Área de Trabalho Remota não são alterados.",
     "Advanced audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation; Security log size raised to 128 MiB -- risk: The Security event log fills much faster (process creation and sign-ins are frequent events), so its maximum size is raised to 128 MiB (never lowered). Retention is still limited: on a busy PC the oldest events can be overwritten within days, so export the log if you need to keep it.": "Política de auditoria avançada: logons, bloqueios de conta, alterações de contas e grupos, alterações da política de auditoria, criação de processos; tamanho do log de Segurança aumentado para 128 MiB -- risco: O log de eventos de Segurança enche muito mais rápido (criação de processos e logons são eventos frequentes); por isso o tamanho máximo dele sobe para 128 MiB (nunca é reduzido). A retenção continua limitada: num PC muito usado, os eventos mais antigos podem ser sobrescritos em poucos dias; exporte o log se precisar guardá-lo.",
     "Keep User Account Control switched on -- risk: Only acts when UAC was switched off; takes effect after the next restart.": "Manter o Controle de Conta de Usuário ativado -- risco: Só age quando o UAC estava desativado; vale após a próxima reinicialização.",
+    # ===== hardening2: windows script (new describe lines) =====
+    "Defender attack surface rules in Audit mode (log only), more: abuse of exploited vulnerable signed drivers, process creation from PsExec and WMI commands, untrusted processes that run from USB drives -- risk: Audit mode only writes events and blocks nothing; running programs from a USB stick or with remote-management tools adds events. Review the Defender event log before switching any rule to Block. The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect.": "Regras de redução da superfície de ataque do Defender em modo Auditoria (somente registro), mais: abuso de drivers assinados vulneráveis já explorados, criação de processos por comandos PsExec e WMI, processos não confiáveis executados de pendrives USB -- risco: O modo Auditoria só grava eventos e não bloqueia nada; executar programas de um pendrive ou com ferramentas de administração remota gera eventos. Revise o log de eventos do Defender antes de mudar qualquer regra para Bloquear. O script roda uma única vez no fim da instalação e não tenta de novo; o log mostra [WARN] para uma regra que não esteja em vigor.",
+    "Opt-in (-DisableLegacyNetwork, never applied by default): turn off NetBIOS over TCP/IP on all network adapters -- risk: Looking up or browsing machines by their NetBIOS name stops working on the adapters that exist now (very old file shares, printers or NAS boxes reached by a short name). It takes effect when the adapter reconnects or after a restart; adapters added later keep their default.": "Opcional (-DisableLegacyNetwork, nunca aplicado por padrão): desativar o NetBIOS sobre TCP/IP em todos os adaptadores de rede -- risco: Localizar ou navegar por máquinas pelo nome NetBIOS deixa de funcionar nos adaptadores que existem agora (compartilhamentos, impressoras ou NAS muito antigos acessados por um nome curto). Vale quando o adaptador se reconecta ou após uma reinicialização; adaptadores adicionados depois mantêm o padrão deles.",
+    "Opt-in (-DisableLegacyNetwork, never applied by default): turn off WPAD proxy auto-discovery for WinHTTP -- risk: A network that hands out its proxy only through WPAD (some offices and schools) no longer gives it to Windows services and apps that use WinHTTP, so they can lose internet access until a proxy is set by hand. The WinHTTP auto-proxy service itself is left running.": "Opcional (-DisableLegacyNetwork, nunca aplicado por padrão): desativar a descoberta automática de proxy WPAD para o WinHTTP -- risco: Uma rede que só informa o proxy pelo WPAD (alguns escritórios e escolas) deixa de entregá-lo aos serviços e aplicativos do Windows que usam o WinHTTP, que podem ficar sem internet até que um proxy seja configurado manualmente. O próprio serviço de proxy automático do WinHTTP continua em execução.",
+    # ===== end hardening2: windows script =====
     # ===== end hardening: windows content =====
 }
 
@@ -5055,6 +5061,15 @@ WINDOWS_HARDENING_LOG = "%windir%\\Temp\\epma-hardening.log"  # where SetupCompl
 WINDOWS_HARDENING_SCRIPTS_DIR = "sources/$OEM$/$$/Setup/Scripts"  # `$$` is copied to %windir% by Windows Setup
 WINDOWS_HARDENING_CMD = WINDOWS_HARDENING_SCRIPTS_DIR + "/SetupComplete.cmd"
 WINDOWS_HARDENING_PS1 = WINDOWS_HARDENING_SCRIPTS_DIR + "/harden.ps1"
+# hardening2 (WIN-SCRIPT): harden.ps1 has three modes and keeps the first-seen value of every setting it changes in a
+# state file, so that -Mode Undo can put it back. The folder is created on the first change and limited to
+# Administrators and SYSTEM by the script itself (Get-Acl / Set-Acl, inside try/catch: a failure only logs [WARN]).
+WINDOWS_HARDENING_MODES = ("Apply", "Audit", "Undo")  # -Mode values; Apply is the default (what Setup runs)
+WINDOWS_HARDENING_STATE_DIR = "EPMA"
+WINDOWS_HARDENING_STATE_FILE = "hardening-state.json"
+WINDOWS_HARDENING_STATE = "%ProgramData%\\" + WINDOWS_HARDENING_STATE_DIR + "\\" + WINDOWS_HARDENING_STATE_FILE
+# Settings that only an explicit -DisableLegacyNetwork applies (never SetupComplete.cmd, never by default).
+WINDOWS_HARDENING_OPTIN = ("netbios", "wpad")
 
 # One row per setting: (id, short text, risk note). The id is also the marker in harden.ps1 ("# setting: <id>");
 # the script header and describe_hardening_windows() are generated from these rows, and a test checks that every
@@ -5081,6 +5096,9 @@ WINDOWS_HARDENING_SETTINGS = (
     ("asr_audit", "Defender attack surface rules in Audit mode (log only): email executable content, Office child processes, obfuscated scripts, script-launched downloads",
      "Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block. "
      "The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect."),
+    ("asr_audit_extra", "Defender attack surface rules in Audit mode (log only), more: abuse of exploited vulnerable signed drivers, process creation from PsExec and WMI commands, untrusted processes that run from USB drives",
+     "Audit mode only writes events and blocks nothing; running programs from a USB stick or with remote-management tools adds events. Review the Defender event log before switching any rule to Block. "
+     "The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect."),
     ("wdigest", "Do not keep plain-text WDigest credentials in memory",
      "Only legacy digest authentication against very old web servers is affected."),
     ("ps_logging", "PowerShell script block logging",
@@ -5095,6 +5113,12 @@ WINDOWS_HARDENING_SETTINGS = (
      "so export the log if you need to keep it."),
     ("uac", "Keep User Account Control switched on",
      "Only acts when UAC was switched off; takes effect after the next restart."),
+    ("netbios", "Opt-in (-DisableLegacyNetwork, never applied by default): turn off NetBIOS over TCP/IP on all network adapters",
+     "Looking up or browsing machines by their NetBIOS name stops working on the adapters that exist now (very old file shares, printers or NAS boxes reached by a short name). "
+     "It takes effect when the adapter reconnects or after a restart; adapters added later keep their default."),
+    ("wpad", "Opt-in (-DisableLegacyNetwork, never applied by default): turn off WPAD proxy auto-discovery for WinHTTP",
+     "A network that hands out its proxy only through WPAD (some offices and schools) no longer gives it to Windows services and apps that use WinHTTP, so they can lose internet access until a proxy is set by hand. "
+     "The WinHTTP auto-proxy service itself is left running."),
 )
 
 # Deliberately NOT done, with the reason (shown in the script header and available to the README / help text).
@@ -5105,6 +5129,8 @@ WINDOWS_HARDENING_NOT_CHANGED = (
      "Stricter levels can break access to older file shares, printers and NAS devices without any warning."),
     ("accounts_disks", "Accounts, passwords, disks, language, licence and product key",
      "Windows Setup stays fully interactive; the hardening script never touches them."),
+    ("device_guard", "Memory Integrity (HVCI), Credential Guard and Exploit Protection are only reported, never turned on",
+     "They depend on the hardware, drivers and apps of each PC and can stop a PC from starting or a program from running; Audit mode shows their state so the owner can decide."),
 )
 
 
@@ -5146,9 +5172,207 @@ def _windows_setupcomplete_cmd():
     return ("\r\n".join(lines) + "\r\n").encode("ascii")
 
 
-# PowerShell code for each setting. A block runs inside its own try/catch, logs exactly one line
-# ([OK], [SKIP] or [FAIL]), and can run again without changing anything. `@WHAT@` is replaced by the setting's
-# text from WINDOWS_HARDENING_SETTINGS. Only PowerShell 5.1 syntax; no network access, no downloads.
+# ===== hardening2: windows script (harden.ps1 with -Mode Apply|Audit|Undo) =====
+# The script has three modes (-Mode Apply|Audit|Undo). Every setting has ONE code block per mode, kept in three
+# dicts with the same keys: _WINDOWS_PS_CODE (Apply), _WINDOWS_PS_AUDIT (Audit, read-only) and _WINDOWS_PS_UNDO
+# (Undo, puts back what Apply recorded). Each block runs inside its own try/catch and logs one line (or, for a
+# few multi-part settings, one line per part): Apply and Undo use [OK]/[SKIP]/[WARN]/[FAIL] (Undo: [OK]/[SKIP]/
+# [WARN]), Audit uses [OK] in effect / [DIFF] not in effect / [N/A]. `@WHAT@` is replaced by the setting's text
+# from WINDOWS_HARDENING_SETTINGS. Only PowerShell 5.1 syntax; no network access, no downloads.
+#
+# NOTHING in this file was ever executed: pwsh is not available where it was written, so the PowerShell is
+# checked structurally by the tests and nothing else. Test it on a throw-away Windows 11 first (Audit mode is
+# a safe way to start: it changes nothing).
+
+# Pairs (what Apply calls to record + change, what Undo calls to put it back). A test checks that every
+# setting whose Apply block uses the first name has the second name in its Undo block.
+WINDOWS_HARDENING_STATE_PAIRS = (
+    ("Set-RegDword", "Restore-RegValue"),
+    ("Set-AsrRule", "Restore-AsrRule"),
+    ("Set-AuditSubcategory", "Restore-AuditSubcategory"),
+    ("Save-FirewallState", "Restore-FirewallState"),
+    ("Save-DefenderValue", "Restore-DefenderValue"),
+    ("Save-FeatureState", "Restore-FeatureState"),
+    ("Save-EventLogState", "Restore-EventLogState"),
+)
+
+# Attack surface reduction rules by GUID (Microsoft documentation names in the comments). Only rules whose GUID
+# is certain are listed; the three of the second group are only ever set to Audit mode.
+WINDOWS_ASR_LSASS = "9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2"  # block credential stealing from LSASS (Block mode)
+WINDOWS_ASR_AUDIT_RULES = (
+    "be9ba2d9-53ea-4cdc-84e5-9b1eeee46550",  # block executable content from email client and webmail
+    "d4f940ab-401b-4efc-aadc-ad5f3c50688a",  # block all Office applications from creating child processes
+    "5beb7efe-fd9a-4556-801d-275e5ffc04cc",  # block execution of potentially obfuscated scripts
+    "d3e037e1-3eb8-44c8-a917-57927947596d",  # block JavaScript or VBScript from launching downloaded executable content
+)
+WINDOWS_ASR_AUDIT_EXTRA_RULES = (
+    "56a863a9-875e-4185-98a7-b882c64b5ce5",  # block abuse of exploited vulnerable signed drivers
+    "d1e49aac-8f56-4280-b9ba-993a6d77406c",  # block process creations originating from PSExec and WMI commands
+    "b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4",  # block untrusted and unsigned processes that run from USB
+)
+
+# Advanced audit policy subcategories, addressed by GUID because their names are translated on non-English
+# Windows. The GUIDs are not checked against a live system here: if auditpol rejects one, a FAIL line names it.
+# List the valid ones with: auditpol /list /subcategory:* /v
+# (guid, name, success wanted, failure wanted): Logon, Account Lockout, User Account Management, Security Group
+# Management, Audit Policy Change (success and failure); Process Creation (success only, no command-line capture).
+WINDOWS_AUDIT_SUBCATEGORIES = (
+    ("{0CCE9215-69AE-11D9-BED3-505054503030}", "Logon", True, True),
+    ("{0CCE9217-69AE-11D9-BED3-505054503030}", "Account Lockout", True, True),
+    ("{0CCE9235-69AE-11D9-BED3-505054503030}", "User Account Management", True, True),
+    ("{0CCE9237-69AE-11D9-BED3-505054503030}", "Security Group Management", True, True),
+    ("{0CCE922F-69AE-11D9-BED3-505054503030}", "Audit Policy Change", True, True),
+    ("{0CCE922B-69AE-11D9-BED3-505054503030}", "Process Creation", True, False),
+)
+
+
+def _ps_bool(value):
+    return "$true" if value else "$false"
+
+
+def _ps_reg_code(rows, optin=False, absent_ok=False):
+    """(apply, audit, undo) PowerShell for a setting that is only DWORD registry values.
+
+    rows = ((path, name, wanted int), ...). optin=True: Apply does nothing without -DisableLegacyNetwork and Audit
+    does not count a missing setting. absent_ok=True: a value that does not exist counts as in effect in Audit
+    (the Windows default already is the wanted state).
+    """
+    apply_l = ["try {"]
+    names = []
+    for i, (path, name, value) in enumerate(rows, 1):
+        apply_l.append(f"    $c{i} = Set-RegDword -Path '{path}' -Name '{name}' -Value {value}")
+        names.append(f"$c{i}")
+    apply_l.append(f"    Write-Result 'OK' '@WHAT@' (Get-ChangeText ({' -or '.join(names)}))")
+    apply_l += ["} catch {", "    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message", "}"]
+    audit_l = ["try {", "    $good = @()", "    $bad = @()"]
+    for path, name, value in rows:
+        audit_l.append(f"    $cur = Get-RegDword -Path '{path}' -Name '{name}'")
+        if absent_ok:
+            audit_l.append(f"    if ($null -eq $cur) {{ $good += '{name} is not set (the Windows default is already {value})' }}")
+            audit_l.append(f"    elseif ([int]$cur -eq {value}) {{ $good += '{name} is {value}' }}")
+        else:
+            audit_l.append(f"    if (($null -ne $cur) -and ([int]$cur -eq {value})) {{ $good += '{name} is {value}' }}")
+        audit_l.append(f"    else {{ $bad += '{name} is ' + (Format-Value $cur) + ', wanted {value}' }}")
+    flag = " -OptIn $true" if optin else ""
+    audit_l += [
+        "    if ($bad.Count -eq 0) {",
+        "        Write-Audit 'OK' '@WHAT@' ($good -join '; ')",
+        "    } else {",
+        f"        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; '){flag}",
+        "    }",
+        "} catch {",
+        "    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)",
+        "}",
+    ]
+    undo_l = ["try {", "    $r = @()"]
+    for path, name, _value in rows:
+        undo_l.append(f"    $r += Restore-RegValue -Path '{path}' -Name '{name}'")
+    undo_l += [
+        "    Write-UndoSummary '@WHAT@' $r",
+        "} catch {",
+        "    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message",
+        "}",
+    ]
+    if optin:
+        apply_l = (["try {",
+                    "    if (-not $DisableLegacyNetwork) {",
+                    "        Write-Result 'SKIP' '@WHAT@' 'opt-in, not requested (run with -DisableLegacyNetwork)'",
+                    "    } else {"]
+                   + ["    " + ln for ln in apply_l[1:-3]]
+                   + ["    }", "} catch {", "    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message", "}"])
+    return "\n".join(apply_l) + "\n", "\n".join(audit_l) + "\n", "\n".join(undo_l) + "\n"
+
+
+def _ps_asr_audit_code(rules):
+    """(apply, audit, undo) for a group of attack surface rules that are only ever set to Audit mode."""
+    ids = ",\n".join(f"            '{r}'" for r in rules)
+    ids_u = ",\n".join(f"        '{r}'" for r in rules)
+    apply_code = f"""try {{
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {{
+        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
+    }} else {{
+        $rules = @(
+{ids}
+        )
+        $applied = 0
+        $missing = 0
+        foreach ($id in $rules) {{
+            $r = Set-AsrRule -Id $id -Action 'AuditMode'
+            if ($r -eq 'changed') {{ $applied++ }}
+            # In effect when the rule is in Audit mode, or already stricter (Block 1 or Warn 6).
+            $now = Get-AsrAction $id
+            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) {{ $missing++ }}
+        }}
+        if ($missing -gt 0) {{
+            Write-Result 'WARN' '@WHAT@ not in effect' ('' + $missing + ' of ' + $rules.Count + ' rules are not active; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
+        }} else {{
+            Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
+        }}
+    }}
+}} catch {{
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}}
+"""
+    audit_code = f"""try {{
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {{
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    }} else {{
+        $rules = @(
+{ids}
+        )
+        $off = @()
+        foreach ($id in $rules) {{
+            $now = Get-AsrAction $id
+            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) {{ $off += $id + ' (' + (Get-AsrActionName $now) + ')' }}
+        }}
+        if ($off.Count -eq 0) {{
+            Write-Audit 'OK' '@WHAT@' ('all ' + $rules.Count + ' rules are in Audit mode or stricter')
+        }} else {{
+            Write-Audit 'DIFF' '@WHAT@' ('' + $off.Count + ' of ' + $rules.Count + ' rules not active: ' + ($off -join ', '))
+        }}
+    }}
+}} catch {{
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}}
+"""
+    undo_code = f"""try {{
+    $r = @()
+    foreach ($id in @(
+{ids_u}
+    )) {{
+        $r += Restore-AsrRule $id
+    }}
+    Write-UndoSummary '@WHAT@' $r
+}} catch {{
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}}
+"""
+    return apply_code, audit_code, undo_code
+
+
+def _ps_audit_items(indent):
+    pad = " " * indent
+    rows = [f"{pad}@('{g}', '{n}', {_ps_bool(s)}, {_ps_bool(f)})" for g, n, s, f in WINDOWS_AUDIT_SUBCATEGORIES]
+    return ",\n".join(rows)
+
+
+_REG_LLMNR = _ps_reg_code(((r"HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0),))
+_REG_AUTORUN = _ps_reg_code(((r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", 255),
+                             (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", 1)))
+_REG_WDIGEST = _ps_reg_code(((r"HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0),),
+                            absent_ok=True)
+_REG_PSLOG = _ps_reg_code(((r"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging",
+                            "EnableScriptBlockLogging", 1),))
+_REG_REMOTE = _ps_reg_code(((r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowToGetHelp", 0),
+                            (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowFullControl", 0)))
+# Only the WinHTTP DisableWpad value. The "WinHTTP Web Proxy Auto-Discovery" service (WinHttpAutoProxySvc) is left
+# alone on purpose: stopping or disabling it breaks proxy handling for apps that need it. The per-user Internet
+# Explorer "detect settings" switch lives under HKCU and belongs to each user, so a machine-wide script skips it.
+_REG_WPAD = _ps_reg_code(((r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp", "DisableWpad", 1),),
+                         optin=True)
+_ASR_EXTRA = _ps_asr_audit_code(WINDOWS_ASR_AUDIT_EXTRA_RULES)
+_ASR_BASE = _ps_asr_audit_code(WINDOWS_ASR_AUDIT_RULES)
+
 _WINDOWS_PS_CODE = {
     "smb1": r"""
 try {
@@ -5159,6 +5383,7 @@ try {
     if ($null -eq $state) {
         $note = $note + '; optional feature not present'
     } elseif ($state -eq 'Enabled') {
+        Save-FeatureState 'SMB1Protocol' $state
         Disable-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -NoRestart | Out-Null
         $note = $note + '; optional feature disabled'
     } else {
@@ -5169,30 +5394,15 @@ try {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
-    "llmnr": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name 'EnableMulticast' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "autorun": r"""
-try {
-    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
-    $c1 = Set-RegDword -Path $key -Name 'NoDriveTypeAutoRun' -Value 255
-    $c2 = Set-RegDword -Path $key -Name 'NoAutorun' -Value 1
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+    "llmnr": _REG_LLMNR[0],
+    "autorun": _REG_AUTORUN[0],
     "firewall": r"""
 try {
     $profiles = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
     $todo = @($profiles | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
     $changedNote = 'already set'
     if ($todo.Count -gt 0) {
+        Save-FirewallState
         Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultInboundAction Block
         $changedNote = 'changed on ' + $todo.Count + ' profile(s)'
     }
@@ -5216,10 +5426,12 @@ try {
         $pref = Get-MpPreference
         $changed = @()
         if ([int]$pref.PUAProtection -ne 1) {
+            Save-DefenderValue 'PUAProtection' ([int]$pref.PUAProtection)
             Set-MpPreference -PUAProtection Enabled
             $changed += 'PUA protection'
         }
         if ([int]$pref.MAPSReporting -ne 2) {
+            Save-DefenderValue 'MAPSReporting' ([int]$pref.MAPSReporting)
             Set-MpPreference -MAPSReporting Advanced
             $changed += 'cloud protection'
         }
@@ -5245,7 +5457,7 @@ try {
     if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
         Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
     } else {
-        $ruleId = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'
+        $ruleId = '@LSASS@'
         $r = Set-AsrRule -Id $ruleId -Action 'Enabled'
         $now = Get-AsrAction $ruleId
         if ($now -eq 1) {
@@ -5257,53 +5469,11 @@ try {
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
-""",
-    "asr_audit": r"""
-try {
-    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
-        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
-    } else {
-        $rules = @(
-            'be9ba2d9-53ea-4cdc-84e5-9b1eeee46550',
-            'd4f940ab-401b-4efc-aadc-ad5f3c50688a',
-            '5beb7efe-fd9a-4556-801d-275e5ffc04cc',
-            'd3e037e1-3eb8-44c8-a917-57927947596d'
-        )
-        $applied = 0
-        $missing = 0
-        foreach ($id in $rules) {
-            $r = Set-AsrRule -Id $id -Action 'AuditMode'
-            if ($r -eq 'changed') { $applied++ }
-            # In effect when the rule is in Audit mode, or already stricter (Block 1 or Warn 6).
-            $now = Get-AsrAction $id
-            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) { $missing++ }
-        }
-        if ($missing -gt 0) {
-            Write-Result 'WARN' '@WHAT@ not in effect' ('' + $missing + ' of ' + $rules.Count + ' rules are not active; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
-        } else {
-            Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
-        }
-    }
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "wdigest": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name 'UseLogonCredential' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "ps_logging": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name 'EnableScriptBlockLogging' -Value 1
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[0],
+    "asr_audit_extra": _ASR_EXTRA[0],
+    "wdigest": _REG_WDIGEST[0],
+    "ps_logging": _REG_PSLOG[0],
     "ps2": r"""
 try {
     $found = $false
@@ -5313,6 +5483,7 @@ try {
         if ($null -ne $state) {
             $found = $true
             if ($state -eq 'Enabled') {
+                Save-FeatureState $name $state
                 Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
                 $disabled = $true
             }
@@ -5329,41 +5500,31 @@ try {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
-    "remote_assist": r"""
-try {
-    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
-    $c1 = Set-RegDword -Path $key -Name 'fAllowToGetHelp' -Value 0
-    $c2 = Set-RegDword -Path $key -Name 'fAllowFullControl' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+    "remote_assist": _REG_REMOTE[0],
     "audit": r"""
 try {
-    # ADVANCED audit subcategories (not the nine basic categories), addressed by GUID because their names are
-    # translated on non-English Windows. The GUIDs are not checked against a live system here: if auditpol
-    # rejects one, a FAIL line names it. List the valid ones with: auditpol /list /subcategory:* /v
-    # Logon, Account Lockout, User Account Management, Security Group Management, Audit Policy Change
-    # (success and failure); Process Creation (success only, no command-line capture).
     $items = @(
-        @('{0CCE9215-69AE-11D9-BED3-505054503030}', 'Logon', '/success:enable', '/failure:enable'),
-        @('{0CCE9217-69AE-11D9-BED3-505054503030}', 'Account Lockout', '/success:enable', '/failure:enable'),
-        @('{0CCE9235-69AE-11D9-BED3-505054503030}', 'User Account Management', '/success:enable', '/failure:enable'),
-        @('{0CCE9237-69AE-11D9-BED3-505054503030}', 'Security Group Management', '/success:enable', '/failure:enable'),
-        @('{0CCE922F-69AE-11D9-BED3-505054503030}', 'Audit Policy Change', '/success:enable', '/failure:enable'),
-        @('{0CCE922B-69AE-11D9-BED3-505054503030}', 'Process Creation', '/success:enable', '')
+@AUDIT_ITEMS@
     )
     $bad = 0
+    $changed = 0
+    $backedUp = $false
     foreach ($item in $items) {
-        if ($item[3] -eq '') {
-            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] | Out-String
-        } else {
-            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] $item[3] | Out-String
-        }
-        if ($LASTEXITCODE -ne 0) {
-            $bad++
-            Write-Result 'FAIL' ('Audit subcategory ' + $item[1] + ' ' + $item[0]) ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim() + ' List valid GUIDs with: auditpol /list /subcategory:* /v')
+        $cur = Get-AuditSetting $item[0]
+        # Already enough (or stricter) is left alone; an unreadable setting is set again.
+        $satisfied = $cur.known -and ($cur.success -or (-not $item[2])) -and ($cur.failure -or (-not $item[3]))
+        if (-not $satisfied) {
+            try {
+                if (-not $backedUp) {
+                    Save-AuditBackup
+                    $backedUp = $true
+                }
+                Set-AuditSubcategory $item[0] $item[2] $item[3]
+                $changed++
+            } catch {
+                $bad++
+                Write-Result 'FAIL' ('Audit subcategory ' + $item[1] + ' ' + $item[0]) ($_.Exception.Message + ' List valid GUIDs with: auditpol /list /subcategory:* /v')
+            }
         }
     }
     # The Security log wraps quickly with these events, so raise its maximum size to 128 MiB. Only ever raised.
@@ -5375,6 +5536,7 @@ try {
         if ($oldBytes -ge $wantBytes) {
             $sizeNote = 'Security log size left at ' + [math]::Round($oldBytes / 1MB) + ' MiB (already 128 MiB or more)'
         } else {
+            Save-EventLogState $oldBytes
             & wevtutil.exe sl Security ('/ms:' + $wantBytes) | Out-Null
             $newBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
             if ($newBytes -ge $wantBytes) {
@@ -5391,16 +5553,16 @@ try {
     if (($bad -gt 0) -or (-not $sizeOk)) {
         Write-Result 'WARN' '@WHAT@ not fully in effect' ('' + $bad + ' of ' + $items.Count + ' subcategories rejected; ' + $sizeNote)
     } else {
-        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories set; ' + $sizeNote)
+        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories in effect (' + $changed + ' changed); ' + $sizeNote)
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
-""",
+""".replace("@AUDIT_ITEMS@", _ps_audit_items(8)),
     "uac": r"""
 try {
     $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-    $cur = (Get-ItemProperty -LiteralPath $key -Name 'EnableLUA' -ErrorAction SilentlyContinue).EnableLUA
+    $cur = Get-RegDword -Path $key -Name 'EnableLUA'
     if (($null -ne $cur) -and ([int]$cur -eq 0)) {
         Set-RegDword -Path $key -Name 'EnableLUA' -Value 1 | Out-Null
         Write-Result 'OK' '@WHAT@' 'was off, turned on (effective after the next restart)'
@@ -5411,6 +5573,305 @@ try {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
+    "netbios": r"""
+try {
+    if (-not $DisableLegacyNetwork) {
+        Write-Result 'SKIP' '@WHAT@' 'opt-in, not requested (run with -DisableLegacyNetwork)'
+    } else {
+        $base = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
+        $names = @()
+        if (Test-Path -LiteralPath $base) {
+            $names = @(Get-ChildItem -LiteralPath $base | Where-Object { $_.PSChildName -like 'Tcpip_*' } | ForEach-Object { [string]$_.PSChildName })
+        }
+        if ($names.Count -eq 0) {
+            Write-Result 'SKIP' '@WHAT@' 'no network interfaces found in the NetBT settings'
+        } else {
+            # NetbiosOptions: 0 = use the DHCP setting, 1 = on, 2 = off. Interfaces added later keep their default.
+            $changed = 0
+            foreach ($n in $names) {
+                if (Set-RegDword -Path ($base + '\' + $n) -Name 'NetbiosOptions' -Value 2) { $changed++ }
+            }
+            Write-Result 'OK' '@WHAT@' ('' + $changed + ' of ' + $names.Count + ' interfaces changed, the others were already set; effective after the adapters reconnect or after a restart')
+        }
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "wpad": _REG_WPAD[0],
+}
+
+_WINDOWS_PS_AUDIT = {
+    "smb1": r"""
+try {
+    $cur = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1'
+    $state = Get-FeatureState 'SMB1Protocol'
+    $bad = @()
+    if (($null -eq $cur) -or ([int]$cur -ne 0)) { $bad += 'SMB1 server value is ' + (Format-Value $cur) + ', wanted 0' }
+    if ($state -eq 'Enabled') { $bad += 'optional feature SMB1Protocol is Enabled' }
+    if ($bad.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'SMB1 server value is 0 and the optional feature is off or not present'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "llmnr": _REG_LLMNR[1],
+    "autorun": _REG_AUTORUN[1],
+    "firewall": r"""
+try {
+    $after = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
+    $off = @($after | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
+    if ($off.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'all three profiles are on with inbound blocked'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ('off or open on ' + $off.Count + ' of ' + $after.Count + ' profile(s): ' + (($off | ForEach-Object { [string]$_.Name }) -join ', '))
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "defender_cloud": r"""
+try {
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $pref = Get-MpPreference
+        $bad = @()
+        if ([int]$pref.PUAProtection -ne 1) { $bad += 'PUA protection is ' + [int]$pref.PUAProtection + ', wanted 1' }
+        if ([int]$pref.MAPSReporting -ne 2) { $bad += 'cloud protection (MAPS) is ' + [int]$pref.MAPSReporting + ', wanted 2' }
+        if ($bad.Count -eq 0) {
+            Write-Audit 'OK' '@WHAT@' 'PUA protection and cloud protection are on'
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "asr_lsass": r"""
+try {
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $now = Get-AsrAction '@LSASS@'
+        if ($now -eq 1) {
+            Write-Audit 'OK' '@WHAT@' 'the rule is in Block mode'
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ('the rule action is: ' + (Get-AsrActionName $now))
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[1],
+    "asr_audit_extra": _ASR_EXTRA[1],
+    "wdigest": _REG_WDIGEST[1],
+    "ps_logging": _REG_PSLOG[1],
+    "ps2": r"""
+try {
+    $found = $false
+    $on = @()
+    foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
+        $state = Get-FeatureState $name
+        if ($null -ne $state) {
+            $found = $true
+            if ($state -eq 'Enabled') { $on += $name }
+        }
+    }
+    if (-not $found) {
+        Write-Audit 'NA' '@WHAT@' 'feature not present on this Windows build'
+    } elseif ($on.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'the feature is off'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ('still enabled: ' + ($on -join ', '))
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "remote_assist": _REG_REMOTE[1],
+    "audit": r"""
+try {
+    $items = @(
+@AUDIT_ITEMS@
+    )
+    $bad = @()
+    $unknown = 0
+    foreach ($item in $items) {
+        $cur = Get-AuditSetting $item[0]
+        if (-not $cur.known) {
+            $unknown++
+        } else {
+            $satisfied = ($cur.success -or (-not $item[2])) -and ($cur.failure -or (-not $item[3]))
+            if (-not $satisfied) { $bad += $item[1] + ' is: ' + $cur.raw }
+        }
+    }
+    $oldBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
+    if ($oldBytes -lt 134217728) { $bad += 'Security log size is ' + [math]::Round($oldBytes / 1MB) + ' MiB, wanted 128 MiB or more' }
+    if ($bad.Count -gt 0) {
+        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+    } elseif ($unknown -gt 0) {
+        Write-Audit 'NA' '@WHAT@' ('the auditpol output of ' + $unknown + ' subcategories could not be read (a non-English Windows prints other words)')
+    } else {
+        Write-Audit 'OK' '@WHAT@' ('all ' + $items.Count + ' subcategories are set; Security log is ' + [math]::Round($oldBytes / 1MB) + ' MiB')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""".replace("@AUDIT_ITEMS@", _ps_audit_items(8)),
+    "uac": r"""
+try {
+    $cur = Get-RegDword -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA'
+    if (($null -ne $cur) -and ([int]$cur -eq 0)) {
+        Write-Audit 'DIFF' '@WHAT@' 'EnableLUA is 0, so User Account Control is off'
+    } else {
+        Write-Audit 'OK' '@WHAT@' ('EnableLUA is ' + (Format-Value $cur) + ' (not 0)')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "netbios": r"""
+try {
+    $base = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
+    $names = @()
+    if (Test-Path -LiteralPath $base) {
+        $names = @(Get-ChildItem -LiteralPath $base | Where-Object { $_.PSChildName -like 'Tcpip_*' } | ForEach-Object { [string]$_.PSChildName })
+    }
+    if ($names.Count -eq 0) {
+        Write-Audit 'NA' '@WHAT@' 'no network interfaces found in the NetBT settings'
+    } else {
+        $on = @()
+        foreach ($n in $names) {
+            $cur = Get-RegDword -Path ($base + '\' + $n) -Name 'NetbiosOptions'
+            if (($null -eq $cur) -or ([int]$cur -ne 2)) { $on += $n }
+        }
+        if ($on.Count -eq 0) {
+            Write-Audit 'OK' '@WHAT@' ('NetBIOS over TCP/IP is off on all ' + $names.Count + ' interfaces')
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ('' + $on.Count + ' of ' + $names.Count + ' interfaces still use NetBIOS over TCP/IP') -OptIn $true
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "wpad": _REG_WPAD[1],
+}
+
+_WINDOWS_PS_UNDO = {
+    "smb1": r"""
+try {
+    $r = @()
+    $r += Restore-RegValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1'
+    Write-UndoSummary '@WHAT@' $r
+    # An optional feature that was turned off is NOT turned on again here: that would bring SMBv1 back.
+    $note = Restore-FeatureState 'SMB1Protocol'
+    if ($null -ne $note) { Write-Result 'WARN' '@WHAT@ (optional feature not turned on again)' $note }
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "llmnr": _REG_LLMNR[2],
+    "autorun": _REG_AUTORUN[2],
+    "firewall": r"""
+try {
+    $r = @()
+    $r += Restore-FirewallState
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "defender_cloud": r"""
+try {
+    $r = @()
+    $r += Restore-DefenderValue 'PUAProtection'
+    $r += Restore-DefenderValue 'MAPSReporting'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' ($_.Exception.Message + ' (Tamper Protection or another antivirus can block this)')
+}
+""",
+    "asr_lsass": r"""
+try {
+    $r = @()
+    $r += Restore-AsrRule '@LSASS@'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[2],
+    "asr_audit_extra": _ASR_EXTRA[2],
+    "wdigest": _REG_WDIGEST[2],
+    "ps_logging": _REG_PSLOG[2],
+    "ps2": r"""
+try {
+    $notes = @()
+    foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
+        $n = Restore-FeatureState $name
+        if ($null -ne $n) { $notes += $n }
+    }
+    if ($notes.Count -eq 0) {
+        Write-Result 'SKIP' '@WHAT@' 'nothing recorded, this script did not change it'
+    } else {
+        Write-Result 'WARN' '@WHAT@ (optional feature not turned on again)' ($notes -join ' | ')
+    }
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "remote_assist": _REG_REMOTE[2],
+    "audit": r"""
+try {
+    $r = @()
+    foreach ($guid in @(
+@AUDIT_GUIDS@
+    )) {
+        try {
+            $r += Restore-AuditSubcategory $guid
+        } catch {
+            Write-Result 'WARN' ('Audit subcategory ' + $guid + ' not put back') $_.Exception.Message
+        }
+    }
+    $sizeNote = Restore-EventLogState
+    if ($null -ne $sizeNote) { $r += $sizeNote }
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""".replace("@AUDIT_GUIDS@", ",\n".join(f"        '{g}'" for g, _n, _s, _f in WINDOWS_AUDIT_SUBCATEGORIES)),
+    "uac": r"""
+try {
+    $r = @()
+    $r += Restore-RegValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "netbios": r"""
+try {
+    $r = @()
+    foreach ($k in @($script:State.Keys)) {
+        if ($k -like 'reg|*\NetBT\Parameters\Interfaces\*|NetbiosOptions') {
+            $rec = $script:State[$k]
+            $r += Restore-RegValue -Path $rec.path -Name $rec.name
+        }
+    }
+    if ($r.Count -eq 0) { $r += 'no record' }
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "wpad": _REG_WPAD[2],
 }
 
 _WINDOWS_PS_HELPERS = r"""
@@ -5419,17 +5880,74 @@ $script:CountOk = 0
 $script:CountSkip = 0
 $script:CountWarn = 0
 $script:CountFail = 0
+$script:CountDiff = 0
+$script:CountNa = 0
+$script:LogToFile = $true
+$script:State = @{}
+$script:StateError = ''
+$script:StateDir = Join-Path $env:ProgramData '@STATE_DIR@'
+$script:StatePath = Join-Path $script:StateDir '@STATE_FILE@'
+$script:AuditBackupPath = Join-Path $script:StateDir 'audit-policy-before.csv'
 
-# One log line per setting: [OK], [SKIP], [WARN] or [FAIL], what it was, and why. [OK] means the value was read
-# back and is in effect; [WARN] means the command did not fail but the value is not in effect. SetupComplete.cmd
-# appends the output of this script to the log file, so nothing here opens the log itself.
+# Every line goes to the console; the log file gets it as well, unless Setup is running this script (see below).
+function Write-Log {
+    param([string]$Line)
+    Write-Host $Line
+    if ($script:LogToFile) {
+        try {
+            Add-Content -LiteralPath $LogPath -Value $Line -Encoding UTF8
+        } catch {
+            $script:LogToFile = $false
+            Write-Host ('[WARN] cannot write the log file ' + $LogPath + ': ' + $_.Exception.Message)
+        }
+    }
+}
+
+# Apply and Undo: one log line per setting: [OK], [SKIP], [WARN] or [FAIL], what it was, and why. [OK] means the
+# value was read back and is in effect; [WARN] means the command did not fail but the value is not in effect.
 function Write-Result {
     param([string]$Status, [string]$What, [string]$Why)
     if ($Status -eq 'OK') { $script:CountOk++ }
     elseif ($Status -eq 'SKIP') { $script:CountSkip++ }
     elseif ($Status -eq 'WARN') { $script:CountWarn++ }
     else { $script:CountFail++ }
-    Write-Host ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
+    Write-Log ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
+}
+
+# Audit: [OK] in effect, [DIFF] not in effect, [N/A] cannot be told. With -OptIn a missing opt-in setting is
+# reported as [N/A] (it was never requested) and is not counted as a difference.
+function Write-Audit {
+    param([string]$Verdict, [string]$What, [string]$Detail, [bool]$OptIn = $false)
+    if (($Verdict -eq 'DIFF') -and $OptIn -and (-not $DisableLegacyNetwork)) {
+        $Verdict = 'NA'
+        $Detail = $Detail + '; opt-in setting, not requested (use -DisableLegacyNetwork), not counted'
+    }
+    if ($Verdict -eq 'OK') {
+        $script:CountOk++
+        Write-Log ('[OK] ' + $What + ' -- in effect (' + $Detail + ')')
+    } elseif ($Verdict -eq 'DIFF') {
+        $script:CountDiff++
+        Write-Log ('[DIFF] ' + $What + ' -- not in effect (' + $Detail + ')')
+    } else {
+        $script:CountNa++
+        Write-Log ('[N/A] ' + $What + ' -- ' + $Detail)
+    }
+}
+
+function Write-Info {
+    param([string]$Text)
+    Write-Log ('[INFO] ' + $Text)
+}
+
+# Undo: one line for a setting from the results of the Restore-* calls ('no record' = nothing was recorded).
+function Write-UndoSummary {
+    param([string]$What, [string[]]$Results)
+    $done = @($Results | Where-Object { $_ -ne 'no record' })
+    if ($done.Count -eq 0) {
+        Write-Result 'SKIP' $What 'nothing recorded, this script did not change it'
+    } else {
+        Write-Result 'OK' $What ('put back: ' + ($done -join ', '))
+    }
 }
 
 function Get-ChangeText {
@@ -5438,18 +5956,139 @@ function Get-ChangeText {
     return 'already set'
 }
 
-# Writes one DWORD only when it differs. Returns $true when it changed something.
+function Format-Value {
+    param($Value)
+    if ($null -eq $Value) { return 'not set' }
+    return [string]$Value
+}
+
+# Current value of a registry value or $null when the key or the value does not exist.
+function Get-RegDword {
+    param([string]$Path, [string]$Name)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return $null }
+    return $item.$Name
+}
+
+# ---- State for -Mode Undo --------------------------------------------------------------------------------------
+# Before Apply changes a setting, the previous value is written to the state file (a JSON file under ProgramData).
+# A value that is already in the file is never overwritten: it is the first value this script ever saw, which is
+# what Undo puts back. The folder is created on the first change and limited to Administrators and SYSTEM.
+# Audit mode never reads, creates or writes any of this.
+function Initialize-StateFolder {
+    if (Test-Path -LiteralPath $script:StateDir) { return }
+    New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
+    try {
+        $acl = Get-Acl -LiteralPath $script:StateDir
+        $acl.SetAccessRuleProtection($true, $false)
+        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+            $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
+            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+            $acl.AddAccessRule($rule)
+        }
+        Set-Acl -LiteralPath $script:StateDir -AclObject $acl
+    } catch {
+        Write-Log ('[WARN] the state folder ' + $script:StateDir + ' could not be limited to Administrators and SYSTEM: ' + $_.Exception.Message)
+    }
+}
+
+# Reads the state file into $script:State (a hashtable of hashtables). $false when the file exists but is unreadable.
+function Import-State {
+    $script:State = @{}
+    if (-not (Test-Path -LiteralPath $script:StatePath)) { return $true }
+    try {
+        $raw = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8
+        $doc = $raw | ConvertFrom-Json
+        foreach ($p in $doc.entries.PSObject.Properties) {
+            $h = @{}
+            foreach ($q in $p.Value.PSObject.Properties) { $h[$q.Name] = $q.Value }
+            $script:State[$p.Name] = $h
+        }
+        return $true
+    } catch {
+        $script:State = @{}
+        $script:StateError = $_.Exception.Message
+        return $false
+    }
+}
+
+function Save-State {
+    Initialize-StateFolder
+    $doc = @{ version = 1; entries = $script:State }
+    $json = $doc | ConvertTo-Json -Depth 6
+    Set-Content -LiteralPath $script:StatePath -Value $json -Encoding UTF8
+}
+
+# Records one previous value, but only the first time. If the file cannot be written the exception stops the
+# change that was about to follow (nothing is changed without a way back).
+function Add-StateOnce {
+    param([string]$Key, [hashtable]$Entry)
+    if ($script:State.ContainsKey($Key)) { return }
+    $script:State[$Key] = $Entry
+    try {
+        Save-State
+    } catch {
+        [void]$script:State.Remove($Key)
+        throw
+    }
+}
+
+function Remove-StateEntry {
+    param([string]$Key)
+    [void]$script:State.Remove($Key)
+    Save-State
+}
+
+# Writes one DWORD only when it differs; the previous value (or its absence) is recorded first.
+# Returns $true when it changed something.
 function Set-RegDword {
     param([string]$Path, [string]$Name, [int]$Value)
+    $current = $null
+    $existed = $false
+    $kind = ''
+    if (Test-Path -LiteralPath $Path) {
+        $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+        if ($null -ne $item) {
+            $existed = $true
+            $current = $item.$Name
+            $kind = [string](Get-Item -LiteralPath $Path).GetValueKind($Name)
+        }
+    }
+    if ($existed -and ($kind -eq 'DWord') -and ([int]$current -eq $Value)) { return $false }
+    Add-StateOnce ('reg|' + $Path + '|' + $Name) @{ kind = 'reg'; path = $Path; name = $Name; existed = $existed; type = $kind; value = $current } | Out-Null
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -Path $Path -Force | Out-Null
     }
-    $current = $null
-    $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
-    if ($null -ne $item) { $current = $item.$Name }
-    if (($null -ne $current) -and ([int]$current -eq $Value)) { return $false }
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
     return $true
+}
+
+# Puts a registry value back (or removes it when it did not exist). An empty key that Apply created is left.
+function Restore-RegValue {
+    param([string]$Path, [string]$Name)
+    $key = 'reg|' + $Path + '|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    $rec = $script:State[$key]
+    if ($rec.existed) {
+        $kind = [string]$rec.type
+        if ($kind -eq 'DWord') { $val = [int]$rec.value }
+        elseif ($kind -eq 'QWord') { $val = [int64]$rec.value }
+        elseif (($kind -eq 'String') -or ($kind -eq 'ExpandString')) { $val = [string]$rec.value }
+        else { throw ('the earlier value of ' + $Name + ' has the type ' + $kind + ', which this script cannot put back') }
+        if (-not (Test-Path -LiteralPath $Path)) {
+            New-Item -Path $Path -Force | Out-Null
+        }
+        New-ItemProperty -LiteralPath $Path -Name $Name -Value $val -PropertyType $kind -Force | Out-Null
+        $result = 'restored ' + $Name
+    } else {
+        if (Test-Path -LiteralPath $Path) {
+            Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+        }
+        $result = 'removed ' + $Name
+    }
+    Remove-StateEntry $key
+    return $result
 }
 
 # State of an optional Windows feature ('Enabled', 'Disabled', ...) or $null when it does not exist. The list is
@@ -5473,6 +6112,22 @@ function Get-FeatureState {
     return $null
 }
 
+# An optional feature that is turned off cannot be turned on again by Undo (that could bring back SMBv1 or
+# PowerShell 2.0 by accident): Undo only says which command to run.
+function Save-FeatureState {
+    param([string]$Name, [string]$State)
+    Add-StateOnce ('feature|' + $Name) @{ kind = 'feature'; name = $Name; state = $State } | Out-Null
+}
+
+function Restore-FeatureState {
+    param([string]$Name)
+    $key = 'feature|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return $null }
+    $rec = $script:State[$key]
+    Remove-StateEntry $key
+    return ($Name + ' was ' + $rec.state + ' before; to turn it on again run, as administrator: Enable-WindowsOptionalFeature -Online -FeatureName ' + $Name)
+}
+
 # Current action of one attack surface reduction rule (0 off, 1 Block, 2 Audit, 6 Warn) or $null when not listed.
 function Get-AsrAction {
     param([string]$Id)
@@ -5486,8 +6141,19 @@ function Get-AsrAction {
     return $null
 }
 
+function Get-AsrActionName {
+    param($Action)
+    if ($null -eq $Action) { return 'not set' }
+    if ($Action -eq 0) { return 'off' }
+    if ($Action -eq 1) { return 'Block' }
+    if ($Action -eq 2) { return 'Audit' }
+    if ($Action -eq 6) { return 'Warn' }
+    return ('action ' + $Action)
+}
+
 # Attack surface reduction rule: 'Enabled' (Block) or 'AuditMode'. A rule that is already Block or Warn is
-# never weakened to Audit. Returns 'changed' or 'already set'; the caller reads the result back.
+# never weakened to Audit. The earlier action (or "not listed") is recorded first. Returns 'changed' or
+# 'already set'; the caller reads the result back.
 function Set-AsrRule {
     param([string]$Id, [string]$Action)
     $current = Get-AsrAction $Id
@@ -5497,6 +6163,10 @@ function Set-AsrRule {
         if ($current -eq $wanted) { return 'already set' }
         if (($wanted -eq 2) -and (($current -eq 1) -or ($current -eq 6))) { return 'already set' }
     }
+    $listed = $true
+    $was = -1
+    if ($null -eq $current) { $listed = $false } else { $was = $current }
+    Add-StateOnce ('asr|' + $Id.ToLower()) @{ kind = 'asr'; id = $Id.ToLower(); listed = $listed; action = $was } | Out-Null
     if ($wanted -eq 1) {
         Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions Enabled
     } else {
@@ -5504,7 +6174,360 @@ function Set-AsrRule {
     }
     return 'changed'
 }
+
+# Puts a rule back to its recorded action (or removes it when it was not listed) and reads the result back.
+function Restore-AsrRule {
+    param([string]$Id)
+    $key = 'asr|' + $Id.ToLower()
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    $rec = $script:State[$key]
+    if ($rec.listed) {
+        $names = @{ 0 = 'Disabled'; 1 = 'Enabled'; 2 = 'AuditMode'; 6 = 'Warn' }
+        $name = $names[[int]$rec.action]
+        if ($null -eq $name) { throw ('the earlier action ' + $rec.action + ' of rule ' + $Id + ' is not one this script knows') }
+        Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions $name
+    } else {
+        Remove-MpPreference -AttackSurfaceReductionRules_Ids $Id
+    }
+    $now = Get-AsrAction $Id
+    if ($rec.listed) { $ok = ($now -eq [int]$rec.action) } else { $ok = ($null -eq $now) }
+    if (-not $ok) { throw ('rule ' + $Id + ' is not back at its earlier action (Tamper Protection, another antivirus or a Defender that is not ready can block this)') }
+    Remove-StateEntry $key
+    return ('rule ' + $Id.Substring(0, 8))
+}
+
+# Windows Firewall: the profile settings of the local store as they were before Apply.
+function Save-FirewallState {
+    foreach ($p in @(Get-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore)) {
+        Add-StateOnce ('fw|' + [string]$p.Name) @{ kind = 'fw'; name = [string]$p.Name; enabled = [string]$p.Enabled; inbound = [string]$p.DefaultInboundAction } | Out-Null
+    }
+}
+
+function Restore-FirewallState {
+    $done = @()
+    foreach ($n in @('Domain', 'Private', 'Public')) {
+        $key = 'fw|' + $n
+        if (-not $script:State.ContainsKey($key)) { continue }
+        $rec = $script:State[$key]
+        $splat = @{ Profile = $n }
+        # A value of NotConfigured cannot be set in the local store, so that part is left as it is now.
+        if (($rec.enabled -eq 'True') -or ($rec.enabled -eq 'False')) { $splat['Enabled'] = $rec.enabled }
+        if (($rec.inbound -eq 'Allow') -or ($rec.inbound -eq 'Block')) { $splat['DefaultInboundAction'] = $rec.inbound }
+        if ($splat.Count -gt 1) { Set-NetFirewallProfile @splat }
+        Remove-StateEntry $key
+        $done += ('profile ' + $n)
+    }
+    if ($done.Count -eq 0) { return 'no record' }
+    return ($done -join ', ')
+}
+
+# Defender preference (PUAProtection, MAPSReporting): the earlier numeric value.
+function Save-DefenderValue {
+    param([string]$Name, [int]$Value)
+    Add-StateOnce ('mp|' + $Name) @{ kind = 'mp'; name = $Name; value = $Value } | Out-Null
+}
+
+function Restore-DefenderValue {
+    param([string]$Name)
+    $key = 'mp|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    $rec = $script:State[$key]
+    $splat = @{}
+    $splat[$Name] = [int]$rec.value
+    Set-MpPreference @splat
+    $pref = Get-MpPreference
+    if ([int]$pref.$Name -ne [int]$rec.value) { throw ($Name + ' is not back at ' + $rec.value + ' (Tamper Protection or another antivirus can block this)') }
+    Remove-StateEntry $key
+    return ('restored ' + $Name)
+}
+
+# Advanced audit policy. auditpol prints the words of the Windows language, so only the English words are
+# understood; anything else is reported as not known. The whole earlier policy is also saved once with
+# "auditpol /backup" (a file that can be restored by hand in any language).
+function Get-AuditSetting {
+    param([string]$Guid)
+    $out = @(& auditpol.exe /get ('/subcategory:' + $Guid) /r)
+    $line = ''
+    foreach ($l in $out) {
+        if (([string]$l).Trim() -ne '') { $line = [string]$l }
+    }
+    $raw = ''
+    $fields = $line.Split(',')
+    if (($LASTEXITCODE -eq 0) -and ($fields.Count -ge 6)) { $raw = $fields[4].Trim() }
+    $known = $true
+    $s = $false
+    $f = $false
+    if ($raw -eq 'No Auditing') { }
+    elseif ($raw -eq 'Success') { $s = $true }
+    elseif ($raw -eq 'Failure') { $f = $true }
+    elseif ($raw -eq 'Success and Failure') { $s = $true; $f = $true }
+    else { $known = $false }
+    return @{ raw = $raw; known = $known; success = $s; failure = $f }
+}
+
+function Save-AuditBackup {
+    Initialize-StateFolder
+    if (Test-Path -LiteralPath $script:AuditBackupPath) { return }
+    try {
+        & auditpol.exe /backup ('/file:' + $script:AuditBackupPath) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw ('auditpol /backup exit code ' + $LASTEXITCODE) }
+    } catch {
+        Write-Log ('[WARN] could not save the whole earlier audit policy to ' + $script:AuditBackupPath + ': ' + $_.Exception.Message)
+    }
+}
+
+# Turns on the wanted flags of one subcategory (never turns a flag off); the earlier setting is recorded first.
+function Set-AuditSubcategory {
+    param([string]$Guid, [bool]$Success, [bool]$Failure)
+    $cur = Get-AuditSetting $Guid
+    Add-StateOnce ('audit|' + $Guid) @{ kind = 'audit'; guid = $Guid; raw = $cur.raw; known = $cur.known; success = $cur.success; failure = $cur.failure } | Out-Null
+    $flags = @()
+    if ($Success) { $flags += '/success:enable' }
+    if ($Failure) { $flags += '/failure:enable' }
+    $out = & auditpol.exe /set ('/subcategory:' + $Guid) @flags | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
+}
+
+function Restore-AuditSubcategory {
+    param([string]$Guid)
+    $key = 'audit|' + $Guid
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    $rec = $script:State[$key]
+    if (-not $rec.known) {
+        throw ('the earlier setting of ' + $Guid + ' could not be read when it was recorded (' + $rec.raw + '), so it is not guessed; restore the whole earlier policy by hand with: auditpol /restore /file:' + $script:AuditBackupPath)
+    }
+    $s = '/success:disable'
+    $f = '/failure:disable'
+    if ($rec.success) { $s = '/success:enable' }
+    if ($rec.failure) { $f = '/failure:enable' }
+    $out = & auditpol.exe /set ('/subcategory:' + $Guid) $s $f | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
+    Remove-StateEntry $key
+    return ('audit ' + $Guid)
+}
+
+# The Security event log size is only ever raised; Undo never shrinks it (it only reports that).
+function Save-EventLogState {
+    param([int64]$Bytes)
+    Add-StateOnce 'eventlog|Security' @{ kind = 'eventlog'; name = 'Security'; bytes = $Bytes } | Out-Null
+}
+
+function Restore-EventLogState {
+    $key = 'eventlog|Security'
+    if (-not $script:State.ContainsKey($key)) { return $null }
+    $rec = $script:State[$key]
+    Remove-StateEntry $key
+    return ('Security log size not shrunk (it was ' + [math]::Round([int64]$rec.bytes / 1MB) + ' MiB before Apply and stays as it is)')
+}
 """
+
+
+# The script starts with its parameters. Everything is safe by default: no argument means "Apply", exactly what
+# SetupComplete.cmd has always run; -DisableLegacyNetwork is an opt-in switch; the log path defaults to the file
+# SetupComplete.cmd already appends to.
+_WINDOWS_PS_PARAMS = r"""[CmdletBinding()]
+param(
+    [ValidateSet('Apply', 'Audit', 'Undo')]
+    [string]$Mode = 'Apply',
+    [switch]$DisableLegacyNetwork,
+    [string]$LogPath = (Join-Path $env:windir 'Temp\epma-hardening.log')
+)
+"""
+
+# Who is running, the log file decision, the state file. Runs after the helpers and before the first setting.
+_WINDOWS_PS_START = r"""
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$isSystem = $identity.IsSystem
+
+# Two ways to get here. (1) Windows Setup: SetupComplete.cmd runs this as SYSTEM with no arguments and appends the
+# console output to the log file itself, so the script must not write the same lines to the file again.
+# (2) An administrator on an installed Windows 11 (harden.cmd): the script writes the log file itself.
+# Audit mode changes nothing, so it writes a file only when -LogPath is given on purpose.
+if ((-not $PSBoundParameters.ContainsKey('LogPath')) -and ($isSystem -or ($Mode -eq 'Audit'))) {
+    $script:LogToFile = $false
+}
+
+if (-not $isAdmin) {
+    Write-Host '[FAIL] This script must run as administrator: right-click harden.cmd and choose Run as administrator, or start PowerShell as administrator. Nothing was changed.'
+    if ($isSystem) { exit 0 }
+    exit 1
+}
+
+if ($script:LogToFile) {
+    try {
+        $logDir = Split-Path -Parent $LogPath
+        if ($logDir -and (-not (Test-Path -LiteralPath $logDir))) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+    } catch {
+        $script:LogToFile = $false
+        Write-Host ('[WARN] cannot create the folder of the log file ' + $LogPath + ': ' + $_.Exception.Message)
+    }
+}
+
+Write-Log ('[START] EPMA hardening, mode ' + $Mode + ', ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+if ($Mode -eq 'Audit') {
+    Write-Info 'Audit mode: nothing is changed, no state file is read or written.'
+} else {
+    Write-Info ('Earlier values are recorded in ' + $script:StatePath)
+}
+
+if ($Mode -ne 'Audit') {
+    if (-not (Import-State)) {
+        if ($Mode -eq 'Undo') {
+            Write-Log ('[WARN] the state file ' + $script:StatePath + ' cannot be read (' + $script:StateError + '); nothing was put back.')
+            if ($isSystem) { exit 0 }
+            exit 1
+        }
+        # Apply: keep the unreadable file for the owner and start a new record.
+        try {
+            $aside = $script:StatePath + '.unreadable-' + (Get-Date -Format 'yyyyMMddHHmmss')
+            Move-Item -LiteralPath $script:StatePath -Destination $aside -Force
+            Write-Log ('[WARN] the state file could not be read (' + $script:StateError + '); it was renamed to ' + $aside + ' and a new one is started')
+        } catch {
+            Write-Log ('[FAIL] the state file ' + $script:StatePath + ' cannot be read and cannot be set aside (' + $_.Exception.Message + '); nothing was changed, because without a record there would be no way back.')
+            if ($isSystem) { exit 0 }
+            exit 1
+        }
+    } elseif (($Mode -eq 'Undo') -and ($script:State.Count -eq 0)) {
+        Write-Info 'no earlier values are recorded (there is no state file or it is empty): every setting will be skipped'
+    }
+}
+"""
+
+# Audit mode only: read-only facts that this script never changes. They are NOT counted in the summary.
+# None of this could be run where it was written (no Windows, no pwsh): every query is wrapped in its own
+# try/catch and says what it could not read. Memory Integrity (HVCI) and Credential Guard are read from
+# Win32_DeviceGuard and from the registry; "cannot verify offline" applies to this whole block.
+_WINDOWS_PS_AUDIT_INFO = r"""
+Write-Log ''
+Write-Log '--- Read-only information (reported only; this script never turns these on) ---'
+
+# BitLocker status of the system drive.
+try {
+    if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) {
+        $vol = Get-BitLockerVolume -MountPoint $env:SystemDrive
+        Write-Info ('BitLocker on ' + $env:SystemDrive + ' protection ' + (Format-Value $vol.ProtectionStatus) + ', volume status ' + (Format-Value $vol.VolumeStatus) + ', method ' + (Format-Value $vol.EncryptionMethod))
+    } else {
+        Write-Info 'BitLocker: the BitLocker cmdlets are not available on this Windows edition'
+    }
+} catch {
+    Write-Info ('BitLocker: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# TPM.
+try {
+    if (Get-Command Get-Tpm -ErrorAction SilentlyContinue) {
+        $tpm = Get-Tpm
+        Write-Info ('TPM: present ' + (Format-Value $tpm.TpmPresent) + ', ready ' + (Format-Value $tpm.TpmReady) + ', enabled ' + (Format-Value $tpm.TpmEnabled))
+    } else {
+        Write-Info 'TPM: the Get-Tpm cmdlet is not available'
+    }
+} catch {
+    Write-Info ('TPM: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# Secure Boot: the cmdlet throws on a PC that boots in legacy BIOS mode or that does not support it.
+try {
+    if (Confirm-SecureBootUEFI) {
+        Write-Info 'Secure Boot: on'
+    } else {
+        Write-Info 'Secure Boot: off'
+    }
+} catch {
+    Write-Info ('Secure Boot: cannot tell (' + $_.Exception.Message + ')')
+}
+
+# Microsoft Defender service and Tamper Protection.
+try {
+    if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
+        $mp = Get-MpComputerStatus
+        Write-Info ('Microsoft Defender: service ' + (Format-Value $mp.AMServiceEnabled) + ', antivirus ' + (Format-Value $mp.AntivirusEnabled) + ', real-time protection ' + (Format-Value $mp.RealTimeProtectionEnabled) + ', Tamper Protection ' + (Format-Value $mp.IsTamperProtected))
+    } else {
+        Write-Info 'Microsoft Defender: the Defender cmdlets are not available'
+    }
+} catch {
+    Write-Info ('Microsoft Defender: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# Every attack surface reduction rule that is configured, with its action.
+try {
+    if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
+        $pref = Get-MpPreference
+        $ids = @()
+        if ($null -ne $pref.AttackSurfaceReductionRules_Ids) {
+            $ids = @($pref.AttackSurfaceReductionRules_Ids)
+        }
+        $actions = @($pref.AttackSurfaceReductionRules_Actions)
+        if ($ids.Count -eq 0) {
+            Write-Info 'Attack surface reduction: no rule is configured'
+        }
+        for ($i = 0; $i -lt $ids.Count; $i++) {
+            Write-Info ('Attack surface reduction rule ' + [string]$ids[$i] + ': ' + (Get-AsrActionName $actions[$i]))
+        }
+    }
+} catch {
+    Write-Info ('Attack surface reduction: cannot read the rules (' + $_.Exception.Message + ')')
+}
+
+# Memory Integrity (HVCI) and Credential Guard.
+try {
+    $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard'
+    $running = @($dg.SecurityServicesRunning)
+    $configured = @($dg.SecurityServicesConfigured)
+    Write-Info ('Memory Integrity (HVCI): running ' + ($running -contains 2) + ', configured ' + ($configured -contains 2))
+    Write-Info ('Credential Guard: running ' + ($running -contains 1) + ', configured ' + ($configured -contains 1))
+    Write-Info ('Virtualization-based security status: ' + (Format-Value $dg.VirtualizationBasedSecurityStatus) + ' (0 off, 1 configured, 2 running)')
+} catch {
+    Write-Info ('Memory Integrity / Credential Guard: cannot read Win32_DeviceGuard (' + $_.Exception.Message + ')')
+}
+try {
+    $hv = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -Name 'Enabled'
+    $cg = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LsaCfgFlags'
+    Write-Info ('Registry: Memory Integrity Enabled = ' + (Format-Value $hv) + ', Credential Guard LsaCfgFlags = ' + (Format-Value $cg))
+} catch {
+    Write-Info ('Registry: cannot read the Memory Integrity / Credential Guard values (' + $_.Exception.Message + ')')
+}
+
+# Exploit Protection (system-wide defaults).
+try {
+    if (Get-Command Get-ProcessMitigation -ErrorAction SilentlyContinue) {
+        $mit = Get-ProcessMitigation -System
+        Write-Info ('Exploit Protection (system): DEP ' + (Format-Value $mit.DEP.Enable) + ', SEHOP ' + (Format-Value $mit.SEHOP.Enable) + ', ASLR bottom-up ' + (Format-Value $mit.ASLR.BottomUp))
+    } else {
+        Write-Info 'Exploit Protection: the Get-ProcessMitigation cmdlet is not available'
+    }
+} catch {
+    Write-Info ('Exploit Protection: cannot read the settings (' + $_.Exception.Message + ')')
+}
+"""
+
+_WINDOWS_PS_END = {
+    "Audit": r"""
+Write-Log ('[DONE] ' + $script:CountOk + ' in effect, ' + $script:CountDiff + ' not in effect')
+""",
+    "Undo": r"""
+try {
+    if (($script:State.Count -eq 0) -and (Test-Path -LiteralPath $script:StatePath)) {
+        Remove-Item -LiteralPath $script:StatePath -Force
+        Write-Info 'nothing is left to put back: the state file was removed'
+    }
+} catch {
+    Write-Log ('[WARN] the empty state file could not be removed: ' + $_.Exception.Message)
+}
+Write-Log '[NOTE] Not undone by this script: optional features that Apply turned off (SMBv1, PowerShell 2.0) stay off; the lines above give the Enable-WindowsOptionalFeature command if you really need them.'
+Write-Log '[NOTE] The Security event log keeps its raised size (this script never shrinks it).'
+Write-Log '[NOTE] A setting that was already in the wanted state before Apply was not recorded, so Undo leaves it alone.'
+Write-Log '[NOTE] Audit policy is put back per subcategory from the recorded auditpol output (English Windows only). The whole earlier policy was also saved once; restore it by hand with: auditpol /restore /file:<that file>'
+Write-Log '[NOTE] UAC and NetBIOS changes take full effect after a restart.'
+Write-Log ('[DONE] ' + $script:CountOk + ' put back, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' warnings')
+""",
+    "Apply": r"""
+Write-Log ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')
+""",
+}
 
 
 def _windows_ps_comment_lines(rows):
@@ -5515,16 +6538,39 @@ def _windows_ps_comment_lines(rows):
     return out
 
 
+def _windows_ps_indent(code):
+    return "\n".join(("    " + ln) if ln.strip() else ln for ln in code.strip("\n").split("\n"))
+
+
 def _windows_harden_ps1():
-    if [s[0] for s in WINDOWS_HARDENING_SETTINGS] != list(_WINDOWS_PS_CODE):
+    ids = [s[0] for s in WINDOWS_HARDENING_SETTINGS]
+    if not (ids == list(_WINDOWS_PS_CODE) == list(_WINDOWS_PS_AUDIT) == list(_WINDOWS_PS_UNDO)):
         raise RuntimeError("PowerShell code blocks and hardening settings do not match")
     head = [
         "# EPMA USB CREATOR - optional hardened setup for Windows 11 (recommended settings inspired by common",
-        "# baselines; this is NOT a compliance profile). Runs once from SetupComplete.cmd as SYSTEM, can be run",
-        "# again at any time and changes nothing that is already set. PowerShell 5.1; no network access, no",
-        "# downloads, no extra tools (auditpol.exe and wevtutil.exe are part of Windows). Every setting has its own",
-        "# error handler and writes one line: [OK], [SKIP], [WARN] or [FAIL], what it is, and why. Output goes to",
-        "# " + WINDOWS_HARDENING_LOG + " (appended by SetupComplete.cmd). The exit code is always 0.",
+        "# baselines; this is NOT a compliance profile). One script, three situations:",
+        "#   * Windows Setup: SetupComplete.cmd runs it once as SYSTEM with no arguments (mode Apply, today's behaviour).",
+        "#   * An installed Windows 11: an administrator runs it (harden.cmd does), in any of the three modes.",
+        "# Parameters:",
+        "#   -Mode Apply   (default) applies the settings below. Before a setting is changed, its previous value is",
+        "#                 recorded in " + WINDOWS_HARDENING_STATE + " (a value already recorded is",
+        "#                 never overwritten). Safe to run again: it changes nothing that is already set.",
+        "#   -Mode Audit   changes NOTHING and writes no state file: prints [OK] in effect / [DIFF] not in effect / [N/A]",
+        "#                 per setting, then read-only facts (BitLocker, TPM, Secure Boot, Defender, attack surface",
+        "#                 rules, Memory Integrity, Credential Guard, Exploit Protection), then a [DONE] line.",
+        "#   -Mode Undo    puts back every recorded value (or removes a value that did not exist). It cannot turn",
+        "#                 optional features on again (it prints the Enable-WindowsOptionalFeature command), it does not",
+        "#                 shrink the Security log, and a setting that Apply found already set was never recorded.",
+        "#   -DisableLegacyNetwork  opt-in: also turns off NetBIOS over TCP/IP and WPAD auto-discovery. Never applied",
+        "#                 without it, and never from SetupComplete.cmd.",
+        "#   -LogPath      log file (default %windir%\\Temp\\epma-hardening.log). Every line is also shown on the console.",
+        "# PowerShell 5.1; no network access, no downloads, no extra tools (auditpol.exe and wevtutil.exe are part of",
+        "# Windows). Every setting has its own error handler and writes one line per mode. Apply and Undo use [OK],",
+        "# [SKIP], [WARN] or [FAIL]. It must be run as administrator (it refuses otherwise). The exit code is 0 in",
+        "# Windows Setup; run by hand it is 1 only when it refuses to start (not an administrator, unreadable state).",
+        "#",
+        "# NOTHING in this file has been run on a real Windows: it was checked by structure tests only. Try Audit mode",
+        "# first, on a test PC.",
         "#",
         "# The script runs ONCE, at the end of Windows Setup, and does NOT retry. Firewall, Defender and the attack",
         "# surface rules are read back after they are set: [OK] means the value is in effect; [WARN] means the command",
@@ -5539,20 +6585,49 @@ def _windows_harden_ps1():
     ]
     body = []
     for sid, text, _risk in WINDOWS_HARDENING_SETTINGS:
-        code = _WINDOWS_PS_CODE[sid].replace("@WHAT@", text.replace("'", "''")).strip("\n")
+        what = text.replace("'", "''")
+        parts = [_windows_ps_indent(table[sid].replace("@WHAT@", what))
+                 for table in (_WINDOWS_PS_CODE, _WINDOWS_PS_AUDIT, _WINDOWS_PS_UNDO)]  # Apply, Audit, Undo
+        code = (
+            "if ($Mode -eq 'Apply') {\n" + parts[0] + "\n"
+            "} elseif ($Mode -eq 'Audit') {\n" + parts[1] + "\n"
+            "} else {\n" + parts[2] + "\n"
+            "}"
+        )
         body.append(f"\n# setting: {sid}\n{code}\n")
+    helpers = (_WINDOWS_PS_HELPERS
+               .replace("@STATE_DIR@", WINDOWS_HARDENING_STATE_DIR)
+               .replace("@STATE_FILE@", WINDOWS_HARDENING_STATE_FILE))
     tail = (
-        "\nWrite-Host ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, '"
-        " + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')\n"
-        "exit 0\n"
+        "\nif ($Mode -eq 'Audit') {\n"
+        + _windows_ps_indent(_WINDOWS_PS_AUDIT_INFO) + "\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Audit"]) + "\n"
+        + "} elseif ($Mode -eq 'Undo') {\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Undo"]) + "\n"
+        + "} else {\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Apply"]) + "\n"
+        + "}\nexit 0\n"
     )
     text = (
         "\n".join(head) + "\n"
-        + _WINDOWS_PS_HELPERS
-        + "\nWrite-Host ('[START] EPMA hardening ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))\n"
+        + _WINDOWS_PS_PARAMS
+        + helpers
+        + _WINDOWS_PS_START
         + "".join(body) + tail
     )
     return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("ascii")  # BOM: PowerShell 5.1 reads ANSI without it
+
+
+def windows_hardening_ps1(profile):
+    """The exact bytes of harden.ps1 (UTF-8 BOM, CRLF, pure ASCII) that hardening_files_windows() ships.
+
+    Other parts of the program (the Windows seed drive) call this instead of private names. Empty bytes for
+    HARDENING_NONE (nothing to add, like hardening_files_windows); an unknown profile raises ValueError.
+    """
+    if not _windows_hardening_check(profile):
+        return b""
+    return _windows_harden_ps1()
+# ===== end hardening2: windows script =====
 
 
 def hardening_files_windows(profile):
@@ -5560,7 +6635,9 @@ def hardening_files_windows(profile):
 
     Exactly two files, both under sources/$OEM$/$$/Setup/Scripts (Windows Setup copies `$$` to %windir%, so
     no answer file is needed and Setup stays fully interactive): SetupComplete.cmd and harden.ps1 (applied
-    once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log).
+    once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log). SetupComplete.cmd runs harden.ps1
+    with no arguments (mode Apply); the same harden.ps1 (see windows_hardening_ps1) also has the Audit and Undo
+    modes and the opt-in -DisableLegacyNetwork switch for an administrator on an installed Windows 11.
     Empty for HARDENING_NONE; an unknown profile raises ValueError.
     """
     if not _windows_hardening_check(profile):

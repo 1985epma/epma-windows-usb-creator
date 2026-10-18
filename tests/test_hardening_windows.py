@@ -56,7 +56,8 @@ class ProfileTests(HardeningWindowsBase):
     def test_contract_constants(self):
         self.assertEqual(app.MODE_SEED, "seed")
         self.assertEqual(app.HARDENING_PROFILES, (app.HARDENING_NONE, app.HARDENING_BASELINE))
-        self.assertEqual(app.SEED_TARGETS, ("ubuntu", "fedora", "debian"))
+        self.assertEqual(app.SEED_WINDOWS, "windows")
+        self.assertEqual(app.SEED_TARGETS, ("ubuntu", "fedora", "debian", "windows"))
 
     def test_deterministic(self):
         self.assertEqual(self.files, app.hardening_files_windows(app.HARDENING_BASELINE))
@@ -226,14 +227,21 @@ class HardenScriptTests(HardeningWindowsBase):
     def test_log_line_format(self):
         for tag in ("OK", "SKIP", "WARN", "FAIL"):
             self.assertIn(f"'{tag}'", self.ps1_text)
-        self.assertIn("Write-Host ('[' + $Status + '] ' + $What + ' (' + $Why + ')')", self.ps1_text)
+        # The line goes to the console (Write-Host, inside Write-Log) and, when allowed, to the log file.
+        self.assertIn("Write-Log ('[' + $Status + '] ' + $What + ' (' + $Why + ')')", self.ps1_text)
         # Every Write-Result call passes a status, what and why.
         for m in re.finditer(r"^\s*Write-Result (.*)$", self.ps1_text, re.MULTILINE):
-            self.assertRegex(m.group(1), r"^'(OK|SKIP|WARN|FAIL)' ['(]", m.group(0))
+            self.assertRegex(m.group(1), r"^('(OK|SKIP|WARN|FAIL)'|\$Status) ['($]", m.group(0))
 
-    def test_exit_code_is_always_zero(self):
+    def test_exit_code_is_zero_unless_it_refuses_to_start(self):
         self.assertTrue(self.ps1_text.rstrip().endswith("exit 0"))
-        self.assertNotRegex(self.ps1_text, r"exit\s+[1-9]")
+        # The only non-zero exits are refusals to start, each right after the SYSTEM guard "exit 0": Windows Setup
+        # (which runs as SYSTEM) therefore never sees a failing exit code.
+        lines = [ln.strip() for ln in self.ps1_text.splitlines() if ln.strip()]
+        nonzero = [i for i, ln in enumerate(lines) if re.match(r"exit\s+[1-9]", ln)]
+        self.assertTrue(nonzero)
+        for i in nonzero:
+            self.assertEqual(lines[i - 1], "if ($isSystem) { exit 0 }")
 
     def test_no_network_downloads_or_external_tools(self):
         banned = (
@@ -266,15 +274,30 @@ class HardenScriptTests(HardeningWindowsBase):
     def test_lsass_is_the_only_block_rule(self):
         self.assertIn("9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2", self.ps1_text)  # LSASS credential theft
         self.assertEqual(len(re.findall(r"-Action 'Enabled'", self.ps1_text)), 1)
-        self.assertEqual(len(re.findall(r"-Action 'AuditMode'", self.ps1_text)), 1)  # one call inside the loop
+        # One call inside each of the two audit-only loops (the original four rules and the three added later).
+        self.assertEqual(len(re.findall(r"-Action 'AuditMode'", self.ps1_text)), 2)
 
     def test_audit_policy_uses_guids_not_translated_names(self):
         self.assertNotRegex(self.ps1_text, r"/subcategory:\"")
-        self.assertEqual(len(re.findall(r"\{0CCE92[0-9A-F]{2}-69AE-11D9-BED3-505054503030\}", self.ps1_text)), 6)
+        guids = re.findall(r"\{0CCE92[0-9A-F]{2}-69AE-11D9-BED3-505054503030\}", self.ps1_text)
+        self.assertEqual(set(guids), {g for g, _n, _s, _f in app.WINDOWS_AUDIT_SUBCATEGORIES})
+        self.assertEqual(len(app.WINDOWS_AUDIT_SUBCATEGORIES), 6)
+        self.assertEqual(len({g for g, _n, _s, _f in app.WINDOWS_AUDIT_SUBCATEGORIES}), 6)
+
+    def _whole(self, sid):
+        parts = re.split(r"^# setting: (\w+)\s*$", self.ps1_text.replace("\r\n", "\n"), flags=re.MULTILINE)
+        return dict(zip(parts[1::2], parts[2::2], strict=True))[sid].split("\nif ($Mode -eq 'Audit') {\n")[0]
+
+    def _branches(self, sid):
+        """(Apply, Audit, Undo) code of one setting, split at the three top-level mode branches."""
+        whole = self._whole(sid)
+        m = re.fullmatch(r"(?s)\s*if \(\$Mode -eq 'Apply'\) \{\n(.*?)\n\} elseif \(\$Mode -eq 'Audit'\) \{\n(.*?)\n\} else \{\n(.*)\n\}\s*", whole)
+        self.assertIsNotNone(m, sid)
+        return m.group(1), m.group(2), m.group(3)
 
     def _part(self, sid):
-        parts = re.split(r"^# setting: (\w+)\s*$", self.ps1_text, flags=re.MULTILINE)
-        return dict(zip(parts[1::2], parts[2::2], strict=True))[sid]
+        """The Apply branch (what the earlier tests looked at)."""
+        return self._branches(sid)[0]
 
     def test_audit_uses_advanced_subcategories_and_says_so(self):
         text = {s[0]: s[1] for s in app.WINDOWS_HARDENING_SETTINGS}["audit"]
@@ -298,10 +321,11 @@ class HardenScriptTests(HardeningWindowsBase):
         part = self._part("audit")
         self.assertRegex(part, r"Write-Result 'FAIL' \('Audit subcategory '")
         self.assertIn("auditpol /list /subcategory:* /v", part)
-        self.assertIn("$LASTEXITCODE -ne 0", part)
+        # The exit code of auditpol is checked in the helper that calls it.
+        self.assertIn("$LASTEXITCODE -ne 0", self.ps1_text.split("function Set-AuditSubcategory")[1])
 
     def test_settings_are_read_back_before_saying_ok(self):
-        for sid in ("firewall", "defender_cloud", "asr_lsass", "asr_audit"):
+        for sid in ("firewall", "defender_cloud", "asr_lsass", "asr_audit", "asr_audit_extra"):
             with self.subTest(setting=sid):
                 part = self._part(sid)
                 self.assertRegex(part, r"Write-Result 'WARN' '[^']* not in effect'")
@@ -310,6 +334,7 @@ class HardenScriptTests(HardeningWindowsBase):
         self.assertEqual(self._part("defender_cloud").count("Get-MpPreference"), 2)
         self.assertIn("Get-AsrAction $ruleId", self._part("asr_lsass"))
         self.assertIn("Get-AsrAction $id", self._part("asr_audit"))
+        self.assertIn("Get-AsrAction $id", self._part("asr_audit_extra"))
         self.assertIn("Tamper Protection", self.ps1_text)
 
     def test_warn_is_counted_and_reported_in_the_summary(self):
@@ -320,7 +345,7 @@ class HardenScriptTests(HardeningWindowsBase):
         head = self.ps1_text.split("function Write-Result")[0]
         self.assertIn("does NOT retry", head)
         by_id = {s[0]: s[2] for s in app.WINDOWS_HARDENING_SETTINGS}
-        for sid in ("firewall", "defender_cloud", "asr_lsass", "asr_audit"):
+        for sid in ("firewall", "defender_cloud", "asr_lsass", "asr_audit", "asr_audit_extra"):
             with self.subTest(setting=sid):
                 self.assertIn("runs once at the end of Setup and does not retry", by_id[sid])
 
@@ -391,6 +416,425 @@ class DescribeTests(HardeningWindowsBase):
         self.assertTrue({"bitlocker", "ntlm"} <= ids)
         for _sid, text, why in app.WINDOWS_HARDENING_NOT_CHANGED:
             self.assertTrue(text and why)
+
+
+# ===== hardening2: WIN-SCRIPT tests =====
+GUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+# Commands that change something. Nothing in the Audit branches or in the helpers they use may contain them.
+MUTATORS = re.compile(
+    r"\b(Set|New|Remove|Add|Enable|Disable|Save|Restore|Move|Rename|Clear|Import|Initialize|Out)-[A-Za-z]+"
+    r"|auditpol\.exe /(set|backup|restore)|wevtutil\.exe sl")
+ORIGINAL_ASR_RULES = (
+    "9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2", "be9ba2d9-53ea-4cdc-84e5-9b1eeee46550",
+    "d4f940ab-401b-4efc-aadc-ad5f3c50688a", "5beb7efe-fd9a-4556-801d-275e5ffc04cc",
+    "d3e037e1-3eb8-44c8-a917-57927947596d",
+)
+
+
+class Win2Base(HardeningWindowsBase):
+    def _whole(self, sid):
+        parts = re.split(r"^# setting: (\w+)\s*$", self.ps1_text.replace("\r\n", "\n"), flags=re.MULTILINE)
+        return dict(zip(parts[1::2], parts[2::2], strict=True))[sid].split("\nif ($Mode -eq 'Audit') {\n")[0]
+
+    def _branches(self, sid):
+        m = re.fullmatch(r"(?s)\s*if \(\$Mode -eq 'Apply'\) \{\n(.*?)\n\} elseif \(\$Mode -eq 'Audit'\) \{\n(.*?)\n\} else \{\n(.*)\n\}\s*",
+                         self._whole(sid))
+        self.assertIsNotNone(m, sid)
+        return m.group(1), m.group(2), m.group(3)
+
+    def _function(self, name):
+        text = self.ps1_text.replace("\r\n", "\n")
+        m = re.search(r"^function " + re.escape(name) + r" \{\n(.*?)\n\}\n", text, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(m, name)
+        return m.group(1)
+
+    @property
+    def ids(self):
+        return [s[0] for s in app.WINDOWS_HARDENING_SETTINGS]
+
+
+class ParameterTests(Win2Base):
+    def test_param_block_comes_first_and_is_a_cmdlet_binding(self):
+        code = [ln for ln in self.ps1_text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        self.assertEqual(code[0], "[CmdletBinding()]")
+        self.assertEqual(code[1], "param(")
+
+    def test_parameters_and_safe_defaults(self):
+        text = self.ps1_text
+        self.assertIn("[ValidateSet('Apply', 'Audit', 'Undo')]", text)
+        self.assertIn("[string]$Mode = 'Apply'", text)
+        self.assertIn("[switch]$DisableLegacyNetwork", text)  # a switch is $false unless given
+        self.assertIn("[string]$LogPath = (Join-Path $env:windir 'Temp\\epma-hardening.log')", text)
+        self.assertTrue(app.WINDOWS_HARDENING_LOG.endswith("\\Temp\\epma-hardening.log"))
+        self.assertEqual(app.WINDOWS_HARDENING_MODES, ("Apply", "Audit", "Undo"))
+
+    def test_setupcomplete_is_unchanged_and_passes_no_arguments(self):
+        self.assertIn('-File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1', self.cmd_text)
+        self.assertNotIn("-Mode", self.cmd_text)
+        self.assertNotIn("DisableLegacyNetwork", self.cmd_text)
+
+    def test_refuses_without_administrator_with_a_clear_message(self):
+        text = self.ps1_text
+        self.assertIn("IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)", text)
+        self.assertIn("$isSystem = $identity.IsSystem", text)
+        self.assertIn("must run as administrator", text)
+        self.assertIn("Nothing was changed.", text)
+        i_check = text.index("if (-not $isAdmin)")
+        # The refusal happens before the first setting, the state file and the log file are touched.
+        self.assertLess(i_check, text.index("# setting: smb1"))
+        self.assertLess(i_check, text.index("Import-State)"))
+        self.assertLess(i_check, text.index("Write-Log ('[START]"))
+
+    def test_console_and_log_file(self):
+        body = self._function("Write-Log")
+        self.assertIn("Write-Host $Line", body)
+        self.assertIn("Add-Content -LiteralPath $LogPath", body)
+        self.assertIn("catch", body)  # a log file that cannot be written never stops the script
+        # SetupComplete.cmd appends the console output itself: as SYSTEM with the default path the file is not
+        # written a second time. Audit mode writes a file only when -LogPath was given on purpose.
+        self.assertIn("$PSBoundParameters.ContainsKey('LogPath')", self.ps1_text)
+        self.assertIn("($isSystem -or ($Mode -eq 'Audit'))", self.ps1_text)
+
+    def test_every_line_goes_through_write_log(self):
+        # Only the refusal (before the log exists), the log writer itself and its failure notice use Write-Host.
+        hosts = [ln.strip() for ln in self.ps1_text.splitlines() if re.match(r"\s*Write-Host\b", ln)]
+        self.assertLessEqual(len(hosts), 4, hosts)
+
+    def test_no_restart_no_iex_no_network_in_any_mode(self):
+        low = self.ps1_text.lower()
+        for word in ("restart-computer", "invoke-expression", "iex ", "invoke-webrequest", "downloadfile", "http://", "https://"):
+            self.assertNotIn(word, low)
+
+
+class ModeCoverageTests(Win2Base):
+    def test_three_dicts_cover_the_same_settings_in_order(self):
+        self.assertEqual(self.ids, list(app._WINDOWS_PS_CODE))
+        self.assertEqual(self.ids, list(app._WINDOWS_PS_AUDIT))
+        self.assertEqual(self.ids, list(app._WINDOWS_PS_UNDO))
+
+    def test_every_setting_is_handled_in_all_three_modes(self):
+        for sid in self.ids:
+            with self.subTest(setting=sid):
+                apply_code, audit_code, undo_code = self._branches(sid)
+                for code in (apply_code, audit_code, undo_code):
+                    self.assertRegex(code, r"\btry \{")
+                    self.assertRegex(code, r"\bcatch \{")
+                self.assertIn("Write-Result 'FAIL'", apply_code)
+                self.assertIn("Write-Audit", audit_code)
+                self.assertNotIn("Write-Result", audit_code)  # Audit prints [OK]/[DIFF]/[N/A] only
+                self.assertIn("Write-Audit 'NA'", audit_code)  # a check that fails is reported, not fatal
+                self.assertRegex(undo_code, r"Write-UndoSummary|Write-Result '(SKIP|WARN)'")
+                self.assertNotIn("Write-Audit", undo_code)
+
+    def test_marker_and_three_branches_once_per_setting(self):
+        text = self.ps1_text
+        for token in ("if ($Mode -eq 'Apply') {", "} elseif ($Mode -eq 'Audit') {", "} else {"):
+            self.assertGreaterEqual(text.count(token), len(self.ids), token)
+        self.assertEqual(len(re.findall(r"^# setting: ", text, re.MULTILINE)), len(self.ids))
+
+    def test_one_log_line_per_setting_in_audit(self):
+        # Audit prints a verdict tag: [OK] ... in effect, [DIFF] ... not in effect, [N/A].
+        body = self._function("Write-Audit")
+        for token in ("'[OK] '", "'[DIFF] '", "'[N/A] '", "-- in effect (", "-- not in effect ("):
+            self.assertIn(token, body)
+
+    def test_audit_branches_and_helpers_change_nothing(self):
+        for sid, code in app._WINDOWS_PS_AUDIT.items():
+            with self.subTest(setting=sid):
+                self.assertIsNone(MUTATORS.search(code), MUTATORS.search(code))
+        self.assertIsNone(MUTATORS.search(app._WINDOWS_PS_AUDIT_INFO))
+        for name in ("Get-RegDword", "Format-Value", "Get-FeatureState", "Get-AsrAction", "Get-AsrActionName",
+                     "Get-AuditSetting"):
+            with self.subTest(helper=name):
+                body = self._function(name)
+                found = MUTATORS.search(body)
+                self.assertIsNone(found, found)
+        self.assertIn("auditpol.exe /get", self._function("Get-AuditSetting"))
+
+    def test_audit_never_touches_the_state_file(self):
+        text = self.ps1_text.replace("\r\n", "\n")
+        # State is read and written only when the mode is not Audit.
+        self.assertRegex(text, r"if \(\$Mode -ne 'Audit'\) \{\n    if \(-not \(Import-State\)\) \{")
+        for sid, code in app._WINDOWS_PS_AUDIT.items():
+            for token in ("Add-StateOnce", "Save-State", "Import-State", "Initialize-StateFolder", "$script:State"):
+                self.assertNotIn(token, code, sid)
+        self.assertNotIn("Save-State", app._WINDOWS_PS_AUDIT_INFO)
+
+    def test_audit_ends_with_the_summary_line(self):
+        self.assertIn("Write-Log ('[DONE] ' + $script:CountOk + ' in effect, ' + $script:CountDiff + ' not in effect')",
+                      self.ps1_text)
+        self.assertIn("$script:CountDiff++", self.ps1_text)
+
+    def test_audit_reports_read_only_facts(self):
+        info = app._WINDOWS_PS_AUDIT_INFO
+        for token in ("Get-BitLockerVolume", "Get-Tpm", "Confirm-SecureBootUEFI", "Get-MpComputerStatus",
+                      "IsTamperProtected", "AttackSurfaceReductionRules_Ids", "Win32_DeviceGuard",
+                      "SecurityServicesRunning", "LsaCfgFlags", "HypervisorEnforcedCodeIntegrity"):
+            with self.subTest(token=token):
+                self.assertIn(token, info)
+        # Secure Boot throws on legacy BIOS: it is inside its own try/catch.
+        m = re.search(r"try \{\n\s*if \(Confirm-SecureBootUEFI\).*?\} catch \{", info, re.DOTALL)
+        self.assertIsNotNone(m)
+        # Facts are reported with [INFO] and never counted in the summary.
+        self.assertNotIn("Write-Audit", info)
+        self.assertIn("function Write-Info", self.ps1_text)
+        self.assertIn("'[INFO] '", self.ps1_text)
+
+    def test_credential_guard_hvci_bitlocker_exploit_protection_are_never_enabled(self):
+        low = self.ps1_text.lower()
+        for token in ("enable-bitlocker", "manage-bde", "set-processmitigation", "add-bitlockerkeyprotector",
+                      "lsacfgflags' -value"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, low)
+        names = {row[0] for row in app.WINDOWS_HARDENING_NOT_CHANGED}
+        self.assertIn("device_guard", names)
+        self.assertNotIn("Set-RegDword -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa'", self.ps1_text)
+
+
+class StateAndUndoTests(Win2Base):
+    def test_state_file_path_constant(self):
+        self.assertEqual(app.WINDOWS_HARDENING_STATE, "%ProgramData%\\EPMA\\hardening-state.json")
+        self.assertEqual((app.WINDOWS_HARDENING_STATE_DIR, app.WINDOWS_HARDENING_STATE_FILE), ("EPMA", "hardening-state.json"))
+        self.assertIn("$script:StateDir = Join-Path $env:ProgramData 'EPMA'", self.ps1_text)
+        self.assertIn("$script:StatePath = Join-Path $script:StateDir 'hardening-state.json'", self.ps1_text)
+        self.assertIn(app.WINDOWS_HARDENING_STATE, self.ps1_text)  # said in the header too
+
+    def test_state_folder_is_limited_to_administrators_and_system(self):
+        body = self._function("Initialize-StateFolder")
+        for token in ("New-Item -ItemType Directory", "Get-Acl", "SetAccessRuleProtection($true, $false)",
+                      "'S-1-5-18'", "'S-1-5-32-544'", "FileSystemAccessRule", "Set-Acl"):
+            self.assertIn(token, body)
+        self.assertRegex(body, r"\} catch \{\n\s+Write-Log \('\[WARN\]")  # a failure is logged, never fatal
+        # An existing folder is left alone.
+        self.assertIn("if (Test-Path -LiteralPath $script:StateDir) { return }", body)
+
+    def test_first_seen_value_is_never_overwritten(self):
+        body = self._function("Add-StateOnce")
+        self.assertIn("if ($script:State.ContainsKey($Key)) { return }", body)
+        # If the record cannot be saved the change that follows is not made.
+        self.assertIn("throw", body)
+        self.assertIn("Save-State", body)
+
+    def test_value_is_recorded_before_it_is_changed(self):
+        for name, change in (("Set-RegDword", "New-ItemProperty"), ("Set-AsrRule", "Add-MpPreference"),
+                             ("Set-AuditSubcategory", "auditpol.exe /set")):
+            with self.subTest(function=name):
+                body = self._function(name)
+                self.assertIn("Add-StateOnce", body)
+                self.assertLess(body.index("Add-StateOnce"), body.index(change))
+        for sid in ("smb1", "ps2"):
+            code = self._branches(sid)[0]
+            self.assertLess(code.index("Save-FeatureState"), code.index("Disable-WindowsOptionalFeature"))
+        firewall = self._branches("firewall")[0]
+        self.assertLess(firewall.index("Save-FirewallState"), firewall.index("Set-NetFirewallProfile"))
+        defender = self._branches("defender_cloud")[0]
+        self.assertLess(defender.index("Save-DefenderValue 'PUAProtection'"), defender.index("Set-MpPreference -PUAProtection"))
+        self.assertLess(defender.index("Save-DefenderValue 'MAPSReporting'"), defender.index("Set-MpPreference -MAPSReporting"))
+        audit = self._branches("audit")[0]
+        self.assertLess(audit.index("Save-EventLogState"), audit.index("wevtutil.exe sl"))
+
+    def test_state_is_json_with_enough_depth(self):
+        body = self._function("Save-State")
+        self.assertIn("ConvertTo-Json -Depth 6", body)
+        self.assertIn("Set-Content -LiteralPath $script:StatePath", body)
+        self.assertIn("ConvertFrom-Json", self._function("Import-State"))
+
+    def test_undo_handles_every_kind_of_change_that_apply_records(self):
+        pairs = dict(app.WINDOWS_HARDENING_STATE_PAIRS)
+        setter_re = re.compile(r"\b(" + "|".join(re.escape(k) for k in pairs) + r")\b")
+        for sid in self.ids:
+            with self.subTest(setting=sid):
+                apply_code, _audit, undo_code = self._branches(sid)
+                used = set(setter_re.findall(apply_code))
+                for setter in used:
+                    self.assertIn(pairs[setter], undo_code, f"{sid}: Apply uses {setter} but Undo never calls {pairs[setter]}")
+        # Every setter and restorer exists as a function; every recorded kind has a restorer.
+        for setter, restorer in pairs.items():
+            self.assertIn(f"function {setter} ", self.ps1_text)
+            self.assertIn(f"function {restorer} ", self.ps1_text)
+        kinds = set(re.findall(r"kind = '(\w+)'", self.ps1_text))
+        self.assertEqual(kinds, {"reg", "asr", "audit", "fw", "mp", "feature", "eventlog"})
+
+    def test_apply_never_changes_without_a_recording_helper(self):
+        # A raw change command may only appear inside the helpers (which record first) or after a Save-* call.
+        for sid in self.ids:
+            apply_code = self._branches(sid)[0]
+            for raw in ("New-ItemProperty", "Set-ItemProperty", "Add-MpPreference", "Remove-MpPreference", "Remove-ItemProperty"):
+                self.assertIsNone(re.search(r"(?<!Get-Command )" + raw, apply_code), sid)
+
+    def test_undo_restores_removes_or_reports(self):
+        reg = self._function("Restore-RegValue")
+        for token in ("New-ItemProperty", "Remove-ItemProperty", "$rec.existed", "Remove-StateEntry $key", "'no record'"):
+            self.assertIn(token, reg)
+        asr = self._function("Restore-AsrRule")
+        self.assertIn("Remove-MpPreference", asr)
+        self.assertIn("Add-MpPreference", asr)
+        self.assertIn("Get-AsrAction $Id", asr)  # read back
+        audit = self._function("Restore-AuditSubcategory")
+        self.assertIn("/success:disable", audit)
+        self.assertIn("auditpol /restore /file:", audit)
+        self.assertIn("-not $rec.known", audit)  # an unreadable earlier value is never guessed
+
+    def test_undo_logs_ok_skip_warn_only(self):
+        for sid in self.ids:
+            undo_code = self._branches(sid)[2]
+            self.assertNotIn("'FAIL'", undo_code, sid)
+        self.assertIn("Write-Result 'SKIP' $What 'nothing recorded", self._function("Write-UndoSummary"))
+        self.assertIn("Write-Result 'OK' $What", self._function("Write-UndoSummary"))
+
+    def test_undo_states_what_it_cannot_undo(self):
+        feature = self._function("Restore-FeatureState")
+        self.assertIn("Enable-WindowsOptionalFeature -Online -FeatureName", feature)
+        for sid in ("smb1", "ps2"):
+            self.assertIn("Write-Result 'WARN'", self._branches(sid)[2])
+        self.assertIn("not shrunk", self._function("Restore-EventLogState"))
+        undo_end = app._WINDOWS_PS_END["Undo"]
+        for token in ("Enable-WindowsOptionalFeature", "never shrinks", "auditpol /restore", "already in the wanted state"):
+            self.assertIn(token, undo_end)
+
+    def test_feature_is_never_turned_back_on_by_undo(self):
+        # Turning SMBv1 or PowerShell 2.0 back on would weaken the PC: Undo only tells the owner how.
+        self.assertNotRegex(self.ps1_text, r"(?m)^\s*Enable-WindowsOptionalFeature")
+        self.assertNotRegex(self.ps1_text, r"(?m)^\s*& Enable-WindowsOptionalFeature")
+
+    def test_audit_policy_is_saved_once_with_auditpol_backup(self):
+        body = self._function("Save-AuditBackup")
+        self.assertIn("auditpol.exe /backup", body)
+        self.assertIn("if (Test-Path -LiteralPath $script:AuditBackupPath) { return }", body)
+
+    def test_unreadable_state_never_leads_to_unrecorded_changes(self):
+        text = self.ps1_text.replace("\r\n", "\n")
+        self.assertIn("without a record there would be no way back", text)
+        self.assertIn("'.unreadable-'", text)
+
+    def test_empty_state_file_is_removed_after_undo(self):
+        self.assertIn("Remove-Item -LiteralPath $script:StatePath -Force", app._WINDOWS_PS_END["Undo"])
+        self.assertIn("$script:State.Count -eq 0", app._WINDOWS_PS_END["Undo"])
+
+
+class NewSettingsTests(Win2Base):
+    def test_asr_guids_are_well_formed_and_unique(self):
+        groups = {
+            "lsass": (app.WINDOWS_ASR_LSASS,), "audit": app.WINDOWS_ASR_AUDIT_RULES,
+            "extra": app.WINDOWS_ASR_AUDIT_EXTRA_RULES,
+        }
+        every = [g for group in groups.values() for g in group]
+        self.assertEqual(len(every), 8)
+        self.assertEqual(len(set(every)), len(every))
+        for guid in every:
+            self.assertRegex(guid, GUID_RE)
+        # The script mentions exactly these GUIDs (the audit-policy ones have braces and capital letters).
+        in_script = set(re.findall(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", self.ps1_text))
+        self.assertEqual(in_script, set(every))
+
+    def test_the_original_five_rules_are_unchanged(self):
+        self.assertEqual((app.WINDOWS_ASR_LSASS, *app.WINDOWS_ASR_AUDIT_RULES), ORIGINAL_ASR_RULES)
+
+    def test_new_asr_rules_are_the_certain_ones(self):
+        self.assertEqual(app.WINDOWS_ASR_AUDIT_EXTRA_RULES, (
+            "56a863a9-875e-4185-98a7-b882c64b5ce5",  # abuse of exploited vulnerable signed drivers
+            "d1e49aac-8f56-4280-b9ba-993a6d77406c",  # process creations from PSExec and WMI
+            "b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4",  # untrusted processes from USB
+        ))
+
+    def test_new_asr_rules_are_audit_mode_only(self):
+        apply_code = self._branches("asr_audit_extra")[0]
+        self.assertIn("-Action 'AuditMode'", apply_code)
+        self.assertNotIn("'Enabled'", apply_code)
+        for guid in app.WINDOWS_ASR_AUDIT_EXTRA_RULES:
+            self.assertIn(guid, apply_code)
+            self.assertNotIn(guid, self._branches("asr_audit")[0])
+        # Block mode (the only 'Enabled') stays reserved for the LSASS rule.
+        self.assertEqual(self.ps1_text.count("-Action 'Enabled'"), 1)
+
+    def test_opt_in_settings_are_listed_and_gated(self):
+        self.assertEqual(app.WINDOWS_HARDENING_OPTIN, ("netbios", "wpad"))
+        for sid in app.WINDOWS_HARDENING_OPTIN:
+            with self.subTest(setting=sid):
+                self.assertIn(sid, self.ids)
+                apply_code, audit_code, _undo = self._branches(sid)
+                self.assertIn("if (-not $DisableLegacyNetwork) {", apply_code)
+                self.assertIn("Write-Result 'SKIP'", apply_code)
+                self.assertLess(apply_code.index("-not $DisableLegacyNetwork"), apply_code.index("Set-RegDword"))
+                self.assertIn("-OptIn $true", audit_code)
+                text = {s[0]: s[1] for s in app.WINDOWS_HARDENING_SETTINGS}[sid]
+                self.assertIn("-DisableLegacyNetwork", text)
+        # Only the opt-in settings look at the switch.
+        for sid in self.ids:
+            if sid not in app.WINDOWS_HARDENING_OPTIN:
+                self.assertNotIn("DisableLegacyNetwork", self._branches(sid)[0], sid)
+
+    def test_opt_in_audit_does_not_count_a_setting_that_was_never_requested(self):
+        body = self._function("Write-Audit")
+        self.assertIn("-not $DisableLegacyNetwork", body)
+        self.assertIn("$Verdict = 'NA'", body)
+        self.assertIn("not counted", body)
+
+    def test_netbios_and_wpad_do_only_what_is_certain(self):
+        net = self._branches("netbios")
+        self.assertIn(r"HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces", net[0])
+        self.assertIn("'Tcpip_*'", net[0])
+        self.assertIn("-Name 'NetbiosOptions' -Value 2", net[0])
+        self.assertIn("NetBT", net[2])
+        wpad = self._branches("wpad")
+        self.assertIn(r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp", wpad[0])
+        self.assertIn("-Name 'DisableWpad' -Value 1", wpad[0])
+        # The WinHTTP auto-proxy service is not stopped or disabled, and no service is touched at all.
+        low = self.ps1_text.lower()
+        for token in ("stop-service", "set-service", "sc.exe", "winhttpautoproxysvc"):
+            self.assertNotIn(token, low)
+
+    def test_new_describe_lines_exist_and_mention_the_switch(self):
+        lines = app.describe_hardening_windows(app.HARDENING_BASELINE)
+        self.assertEqual(len(lines), len(self.ids))
+        joined = "\n".join(lines)
+        self.assertIn("more: abuse of exploited vulnerable signed drivers", joined)
+        self.assertIn("NetBIOS over TCP/IP", joined)
+        self.assertIn("WPAD", joined)
+        self.assertEqual(sum("-DisableLegacyNetwork" in ln for ln in lines), 2)
+
+    def test_new_describe_lines_have_portuguese_text(self):
+        new = [ln for ln in app.describe_hardening_windows(app.HARDENING_BASELINE)
+               if "more: abuse" in ln or "NetBIOS" in ln or "WPAD" in ln]
+        self.assertEqual(len(new), 3)
+        for line in new:
+            with self.subTest(line=line[:50]):
+                pt = app.PT_BR[line]
+                self.assertNotEqual(pt, line)
+                self.assertEqual(pt.count(" -- risco: "), 1)
+                self.assertEqual(line.count("-DisableLegacyNetwork"), pt.count("-DisableLegacyNetwork"))
+                self.assertEqual(line.count("[WARN]"), pt.count("[WARN]"))
+                with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
+                    self.assertEqual(app._(line), pt)
+
+
+class PublicHelperTests(Win2Base):
+    def test_bytes_equal_the_file_in_hardening_files_windows(self):
+        self.assertEqual(app.windows_hardening_ps1(app.HARDENING_BASELINE), self.files[PS1_PATH])
+        self.assertIsInstance(app.windows_hardening_ps1(app.HARDENING_BASELINE), bytes)
+
+    def test_format(self):
+        data = app.windows_hardening_ps1(app.HARDENING_BASELINE)
+        self.assertTrue(data.startswith(b"\xef\xbb\xbf"))
+        body = data[3:]
+        body.decode("ascii")
+        self.assertNotRegex(body, rb"(?<!\r)\n")
+        self.assertLessEqual(len(data), MAX_FILE)
+
+    def test_profiles(self):
+        self.assertEqual(app.windows_hardening_ps1(app.HARDENING_NONE), b"")
+        with self.assertRaises(ValueError):
+            app.windows_hardening_ps1("strict")
+
+    def test_deterministic(self):
+        self.assertEqual(app.windows_hardening_ps1(app.HARDENING_BASELINE),
+                         app.windows_hardening_ps1(app.HARDENING_BASELINE))
+
+    def test_hardening_files_windows_uses_the_same_bytes(self):
+        with mock.patch.object(app, "_windows_harden_ps1", return_value=b"marker"):
+            self.assertEqual(app.hardening_files_windows(app.HARDENING_BASELINE)[PS1_PATH], b"marker")
+            self.assertEqual(app.windows_hardening_ps1(app.HARDENING_BASELINE), b"marker")
+# ===== end hardening2: WIN-SCRIPT tests =====
 
 
 if __name__ == "__main__":
