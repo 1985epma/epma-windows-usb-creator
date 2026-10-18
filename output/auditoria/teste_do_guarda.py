@@ -215,6 +215,16 @@ CENARIOS = [
         "G14",
     ),
     # ===== end hardening: engine-seed =====
+    # ===== hardening2: engine-cli =====
+    (
+        "Pendrive de sementes: build_seed_usb deixa de recusar during_setup fora do Windows",
+        lambda s: s.replace(
+            "    if during_setup and target != SEED_WINDOWS:",
+            "    if False and target != SEED_WINDOWS:",
+        ),
+        "G14",
+    ),
+    # ===== end hardening2: engine-cli =====
 ]
 
 print("Autoteste do guarda de segurança")
