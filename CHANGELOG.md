@@ -30,6 +30,17 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
     recommended path is to run the script after installing). Storage and the user account stay interactive in
     every installer. Same safety chain as any write: confirmation, typed identifier for high-risk drives,
     password, pinned identity, byte-for-byte verification, eject.
+  - **Windows 11 as a Hardening seed target** (second USB drive, label `EPMA-SEED`). *Run after install*
+    (recommended; also for a Windows 11 that is already installed): `audit.cmd` (read-only report),
+    `harden.cmd` (self-elevating, asks for confirmation), `undo.cmd`, `harden.ps1` and a `README.txt`.
+    *During setup (experimental)* adds an answer file (`specialize` pass only: it copies `harden.ps1` and
+    `SetupComplete.cmd` to `%SystemRoot%\Setup\Scripts`; the hardening runs at the end of Setup) and the
+    marker `EPMA-SEED.txt`. `harden.ps1` now has `-Mode Apply|Audit|Undo`, records previous values in a
+    protected `%ProgramData%\EPMA` folder (owner/ACL/reparse-point checks; Undo takes only values and looks
+    paths up in a built-in table), three more Defender attack-surface rules in Audit mode and the opt-in
+    `-DisableLegacyNetwork`; `SetupComplete.cmd` checks the SHA-256 of `harden.ps1` before running it.
+    BitLocker, TPM, Secure Boot, HVCI, Credential Guard and Exploit Protection are report-only.
+    CLI: `harden-seed --target windows [--during-setup]` and `harden-files --target windows-seed`.
   - **`harden-linux.sh`:** idempotent, `--dry-run`, `--yes`, `--undo`, `--chroot`, `--help`; backs up each file
     it changes; sysctl, SSH, firewall (ufw / firewalld), automatic security updates, auditd, rarely used
     kernel modules, core dumps. It only turns off SSH root or password login when an administrator account with a key

@@ -624,7 +624,7 @@ PT_BR = {
     # ===== end hardening: windows content =====
     # ===== hardening2: windows xml =====
     # One entry per line of describe_windows_seed_during_setup().
-    "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.": "EXPERIMENTAL: este modo não foi testado em uma instalação real do Windows. Se algo parecer errado, use o modo \"executar após a instalação\".",
+    "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.": "EXPERIMENTAL: este modo não foi testado em uma instalação real do Windows. Se algo parecer errado, use o modo \"executar depois de instalar\".",
     "The seed drive carries an answer file (autounattend.xml), SetupComplete.cmd and harden.ps1. Windows Setup looks for the answer file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start Setup.": "O pendrive do kit leva um arquivo de resposta (autounattend.xml), o SetupComplete.cmd e o harden.ps1. A instalação do Windows procura o arquivo de resposta na raiz das unidades removíveis; por isso, conecte o pendrive do kit ao lado do pendrive instalador do Windows antes de começar.",
     "The answer file adds one step, early on the first start of the new system (the specialize pass): it only copies files. It looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, copies harden.ps1 and SetupComplete.cmd into C:\\Windows\\Setup\\Scripts. A SetupComplete.cmd that already exists there is never overwritten.": "O arquivo de resposta adiciona uma etapa, logo no primeiro início do sistema novo (a fase specialize): ela só copia arquivos. Procura o arquivo EPMA-SEED.txt nas unidades D: a Z: e, onde o encontrar, copia o harden.ps1 e o SetupComplete.cmd para C:\\Windows\\Setup\\Scripts. Um SetupComplete.cmd que já exista ali nunca é sobrescrito.",
     "Windows runs SetupComplete.cmd at the very end of Setup. It checks the SHA-256 of the harden.ps1 next to it and, if it matches, runs harden.ps1 in Apply mode and writes a log to C:\\Windows\\Temp\\epma-hardening.log. If it does not match, nothing is hardened.": "O Windows executa o SetupComplete.cmd no fim da instalação. Ele confere o SHA-256 do harden.ps1 que está ao lado dele e, se coincidir, executa o harden.ps1 no modo Apply e grava um log em C:\\Windows\\Temp\\epma-hardening.log. Se não coincidir, nada é reforçado.",
@@ -633,7 +633,7 @@ PT_BR = {
     "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.": "Ele não escolhe nem apaga um disco, não define chave de produto, não aceita termos de licença, não cria contas, não define idioma nem região, não ignora as verificações de hardware, não baixa nada e não reinicia o PC. A instalação continua interativa.",
     "If no drive has the marker file, nothing happens and Setup continues as usual.": "Se nenhuma unidade tiver o arquivo marcador, nada acontece e a instalação continua como de costume.",
     "If Setup stops with \"Windows could not parse or process the unattended answer file\", unplug the seed drive and start the installation again from the beginning (Setup keeps a copy of the answer file), then use harden.cmd after installing.": "Se a instalação parar com \"Windows could not parse or process the unattended answer file\" (o Windows não conseguiu analisar ou processar o arquivo de resposta), retire o pendrive do kit e recomece a instalação desde o início (a instalação guarda uma cópia do arquivo de resposta); depois use o harden.cmd após instalar.",
-    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC, inclusive PCs ARM64, o arquivo de resposta não faz nada: use o modo \"executar após a instalação\".",
+    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC, inclusive PCs ARM64, o arquivo de resposta não faz nada: use o modo \"executar depois de instalar\".",
     # ===== end hardening2: windows xml =====
 }
 
@@ -8548,7 +8548,7 @@ def help_sections():
 • Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux and Other ISO — both write the ISO byte for byte to the whole drive (like dd). Use Linux for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images, and Other ISO for any other bootable image. An ISO that cannot boot from a USB drive is refused before anything is erased.
-• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes auto-install settings on it for Ubuntu, Fedora/RHEL or Debian. See "Hardened setup (optional)".
+• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes hardening files on it for Ubuntu, Fedora/RHEL, Debian or Windows 11. See "Hardened setup (optional)".
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
@@ -8603,7 +8603,7 @@ def help_sections():
 • Click "Ignore". Never click "Initialize" — it would erase what was just written.
 • This is normal. The content was already verified byte for byte."""),
 
-        ("Hardened setup (optional)", f"""## What it is
+        ("Hardened setup (optional)", """## What it is
 • Optional files that make a fresh install start from safer settings ("Hardened (recommended settings)"). The settings are inspired by common security baselines. This program does NOT claim that the result complies with, or is certified by, any standard.
 • Nothing here chooses a disk, creates an account or sets a password or key. Windows Setup and the Linux installers stay interactive: you still pick the disk, the language and your own account.
 • Every hardening script prints each change, keeps a backup of anything it modifies and can be undone. They were checked with simulated systems and automated tests only, so try them on a spare computer or a virtual machine before relying on them.
@@ -8615,10 +8615,10 @@ def help_sections():
 • If the image already contains one of these files, the program stops BEFORE erasing the drive and tells you, because the files would replace the image's own.
 
 ## What the Windows option changes
-{windows_settings}
+@WINDOWS_SETTINGS@
 
 ## What it deliberately leaves alone
-{windows_not_changed}
+@NOT_CHANGED@
 
 ## Linux and others (a second USB drive)
 • Choose the "Hardening seed" card, pick the target system, select a small USB drive (64 MiB or more) and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
@@ -8629,9 +8629,17 @@ def help_sections():
 • The script harden-linux.sh is a plain text file on the drive: read it before you use it. It supports --dry-run (changes nothing), --yes, --undo and --help, and it appends to /var/log/epma-hardening.log.
 • It tries not to lock you out of SSH: it only turns off root login or password login when an administrator account with a key exists, and it says so. It does not enable a firewall on a computer that runs Docker, libvirt or LXD unless you pass --yes. Test a second SSH session before you close the first.
 
+## Windows 11 (a second USB drive)
+• Choose the "Hardening seed" card and one of two choices, select a small USB drive and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
+• "Windows 11 (run after install)" is the safer choice and also works on a Windows 11 that is already installed. Open the drive in File Explorer and double-click audit.cmd first: it only reports what is in effect (lines marked [DIFF] are not). Then double-click harden.cmd, answer y and accept the administrator prompt. A restart may be needed for a few settings.
+• "Windows 11 (during setup, experimental)" adds an answer file for Windows Setup. Plug the drive in before you start the Windows installer and keep it in until after the first restart of the installation. Setup copies the script to the new Windows and it runs at the end of Setup. It was never tested on a real installation, an invalid answer file can stop Windows Setup (then unplug the drive and restart the installation from the beginning), and it covers 64-bit Intel/AMD PCs only.
+• Both modes trust the drive that carries the file EPMA-SEED.txt (or the launchers you click): the files are not authenticated, so keep the drive with you. The log is C:\\Windows\\Temp\\epma-hardening.log.
+• Extra, opt-in: in an elevated PowerShell run harden.ps1 with -DisableLegacyNetwork to also turn off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).
+
 ## Undo
 • Linux: run the script again with --undo. It restores the files it backed up and removes the ones it created. It does not uninstall packages or turn services off.
-• Windows: the changes are ordinary Windows settings; the log lists each one.""".replace("\\\\", "\\")),
+• Windows: double-click undo.cmd on the seed drive (or run harden.ps1 -Mode Undo as administrator). It restores the values it recorded before changing them. It does not turn SMBv1 or the PowerShell 2.0 feature back on, does not shrink the Security log, and cannot restore a setting that was already in the wanted state before. It may report a non-zero exit code when a step failed: read its lines.""".replace("\\\\", "\\").replace(
+            "@WINDOWS_SETTINGS@", windows_settings).replace("@NOT_CHANGED@", windows_not_changed)),
 
         ("ChromeOS Flex", """## What it is
 • ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. It is the official way to run ChromeOS on a computer you already own: Google does not publish regular ChromeOS for ordinary computers, so this program does not offer it.
@@ -12035,9 +12043,10 @@ HARDEN_FILES_TARGETS = ("windows", HARDEN_FILES_WINDOWS_SEED,
                         *(t for t in SEED_TARGETS if t != SEED_WINDOWS))
 DURING_SETUP_ONLY_WINDOWS = ("--during-setup only works with the Windows seed drive "
                              "(harden-seed --target windows, or harden-files --target windows-seed).")
-DURING_SETUP_EXPERIMENTAL = ("EXPERIMENTAL: the answer file (autounattend.xml) makes Windows Setup run the "
-                             "hardening script. It was never tested on a real installation; an invalid answer "
-                             "file can stop Windows Setup. The default (run harden.cmd after install) is safer.")
+DURING_SETUP_EXPERIMENTAL = ("EXPERIMENTAL: the answer file (autounattend.xml) makes Windows Setup copy the "
+                             "hardening script, which then runs at the end of Setup. It was never tested on a real "
+                             "installation; an invalid answer file can stop Windows Setup. The default (run "
+                             "harden.cmd after install) is safer.")
 HARDEN_FILES_WINDOWS_SAME_USB_NOTE = ("Note: --target windows is the file set for the SAME USB as the Windows installer "
                                       "(sources\\$OEM$). For the files of a separate Windows seed drive "
                                       "(harden.cmd, audit.cmd, undo.cmd), use --target windows-seed.")
@@ -12341,7 +12350,7 @@ def build_cli_parser():
                    help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
     p.add_argument("--during-setup", action="store_true",
                    help="EXPERIMENTAL, --target windows only: also add an answer file (autounattend.xml) so "
-                        "that Windows Setup runs the hardening script during installation")
+                        "that Windows Setup copies the hardening script and runs it at the end of installation")
     _add_write_flags(p)
     p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
             epilog="Nothing is overwritten: a folder that is not empty is refused.")
