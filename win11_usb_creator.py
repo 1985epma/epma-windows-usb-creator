@@ -5255,6 +5255,43 @@ WINDOWS_AUDIT_SUBCATEGORIES = (
     ("{0CCE922B-69AE-11D9-BED3-505054503030}", "Process Creation", True, False),
 )
 
+# The ONLY registry values the script writes or puts back: (key, value name, lowest, highest DWORD accepted when
+# Undo puts an earlier value back). The state file is a source of VALUES only: Undo looks every setting up in this
+# table (rendered into the script as $script:KnownReg) and ignores any path or name written in the file.
+# The per-adapter NetBIOS values are the one family that is matched by pattern instead (WINDOWS_NETBT_KEY_REGEX,
+# value name NetbiosOptions, 0 to 2). A test checks that every Set-RegDword / Restore-RegValue call is in here.
+WINDOWS_REG_VALUES = (
+    (r"HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "SMB1", 0, 1),
+    (r"HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", -1, 255),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0, 1),
+    (r"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging", "EnableScriptBlockLogging", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowToGetHelp", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowFullControl", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "EnableLUA", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp", "DisableWpad", 0, 1),
+)
+WINDOWS_NETBT_KEY_REGEX = (r"^HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters\\Interfaces"
+                           r"\\Tcpip_\{[0-9A-Fa-f-]{36}\}$")
+WINDOWS_OPTIONAL_FEATURES = ("SMB1Protocol", "MicrosoftWindowsPowerShellV2Root", "MicrosoftWindowsPowerShellV2")
+WINDOWS_DEFENDER_PREFERENCES = ("PUAProtection", "MAPSReporting")
+
+
+def _ps_known_tables():
+    """The built-in tables that Undo trusts instead of the state file, as text for the script helpers."""
+    reg = "@{\n" + "\n".join(f"    '{p}|{n}' = @({lo}, {hi})" for p, n, lo, hi in WINDOWS_REG_VALUES) + "\n}"
+    asr = ",\n".join(f"    '{g}'" for g in (WINDOWS_ASR_LSASS, *WINDOWS_ASR_AUDIT_RULES, *WINDOWS_ASR_AUDIT_EXTRA_RULES))
+    audit = ",\n".join(f"    '{g}'" for g, _n, _s, _f in WINDOWS_AUDIT_SUBCATEGORIES)
+    return {
+        "@KNOWN_REG@": reg,
+        "@KNOWN_ASR@": "@(\n" + asr + "\n)",
+        "@KNOWN_AUDIT@": "@(\n" + audit + "\n)",
+        "@KNOWN_FEATURES@": "@(" + ", ".join(f"'{f}'" for f in WINDOWS_OPTIONAL_FEATURES) + ")",
+        "@KNOWN_MP@": "@(" + ", ".join(f"'{f}'" for f in WINDOWS_DEFENDER_PREFERENCES) + ")",
+        "@NETBT_REGEX@": WINDOWS_NETBT_KEY_REGEX,
+    }
+
 
 def _ps_bool(value):
     return "$true" if value else "$false"
@@ -5409,17 +5446,34 @@ try {
     $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 0
     $note = 'server side already off'
     if ($c1) { $note = 'server side turned off' }
+    $restart = $false
     $state = Get-FeatureState 'SMB1Protocol'
     if ($null -eq $state) {
         $note = $note + '; optional feature not present'
     } elseif ($state -eq 'Enabled') {
         Save-FeatureState 'SMB1Protocol' $state
         Disable-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -NoRestart | Out-Null
-        $note = $note + '; optional feature disabled'
+        # Read the state again: with -NoRestart it often reads DisablePending until the next restart.
+        $after = Get-FeatureState 'SMB1Protocol' -Fresh
+        if (@('DisablePending', 'EnablePending') -contains $after) {
+            $restart = $true
+            $note = $note + '; optional feature disabled but a restart is needed to finish it'
+        } elseif (($after -eq 'Disabled') -or ($after -eq 'DisabledWithPayloadRemoved')) {
+            $note = $note + '; optional feature disabled'
+        } else {
+            throw ('the optional feature SMB1Protocol is still ' + (Format-Value $after) + ' after it was turned off')
+        }
+    } elseif (@('DisablePending', 'EnablePending') -contains $state) {
+        $restart = $true
+        $note = $note + '; optional feature has a change pending, a restart is needed'
     } else {
         $note = $note + '; optional feature already off'
     }
-    Write-Result 'OK' '@WHAT@' $note
+    if ($restart) {
+        Write-Result 'WARN' '@WHAT@ needs a restart' $note
+    } else {
+        Write-Result 'OK' '@WHAT@' $note
+    }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
@@ -5507,21 +5561,54 @@ try {
     "ps2": r"""
 try {
     $found = $false
-    $disabled = $false
+    $disabled = @()
+    $restart = @()
+    $failed = @()
+    $fresh = $false
     foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
-        $state = Get-FeatureState $name
-        if ($null -ne $state) {
-            $found = $true
-            if ($state -eq 'Enabled') {
-                Save-FeatureState $name $state
-                Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
-                $disabled = $true
+        # One feature at a time, each in its own try/catch: turning the Root feature off can already turn the child
+        # feature off, so the state is read again before the second one, and an error is judged by the state it left.
+        try {
+            $state = Get-FeatureState $name -Fresh:$fresh
+            if ($null -ne $state) {
+                $found = $true
+                if ($state -eq 'Enabled') {
+                    Save-FeatureState $name $state
+                    Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
+                    $fresh = $true
+                    $after = Get-FeatureState $name -Fresh
+                    if (@('DisablePending', 'EnablePending') -contains $after) {
+                        $restart += $name
+                    } elseif (($after -eq 'Disabled') -or ($after -eq 'DisabledWithPayloadRemoved')) {
+                        $disabled += $name
+                    } else {
+                        throw ('the feature is still ' + (Format-Value $after) + ' after it was turned off')
+                    }
+                } elseif (@('DisablePending', 'EnablePending') -contains $state) {
+                    $restart += $name
+                }
+            }
+        } catch {
+            $why = $_.Exception.Message
+            $fresh = $true
+            $again = $null
+            try { $again = Get-FeatureState $name -Fresh } catch { $again = $null }
+            if (($again -eq 'Disabled') -or ($again -eq 'DisabledWithPayloadRemoved')) {
+                $disabled += $name
+            } elseif ($again -eq 'DisablePending') {
+                $restart += $name
+            } else {
+                $failed += ($name + ': ' + $why)
             }
         }
     }
-    if (-not $found) {
+    if ($failed.Count -gt 0) {
+        Write-Result 'FAIL' '@WHAT@' ($failed -join ' | ')
+    } elseif ($restart.Count -gt 0) {
+        Write-Result 'WARN' '@WHAT@ needs a restart' ('change pending for ' + ($restart -join ', ') + '; restart Windows to finish turning the feature off')
+    } elseif (-not $found) {
         Write-Result 'SKIP' '@WHAT@' 'feature not present on this Windows build'
-    } elseif ($disabled) {
+    } elseif ($disabled.Count -gt 0) {
         Write-Result 'OK' '@WHAT@' 'feature disabled'
     } else {
         Write-Result 'OK' '@WHAT@' 'already off'
@@ -5639,6 +5726,7 @@ try {
     $bad = @()
     if (($null -eq $cur) -or ([int]$cur -ne 0)) { $bad += 'SMB1 server value is ' + (Format-Value $cur) + ', wanted 0' }
     if ($state -eq 'Enabled') { $bad += 'optional feature SMB1Protocol is Enabled' }
+    elseif (@('DisablePending', 'EnablePending') -contains $state) { $bad += 'optional feature SMB1Protocol is ' + $state + ', a restart is needed' }
     if ($bad.Count -eq 0) {
         Write-Audit 'OK' '@WHAT@' 'SMB1 server value is 0 and the optional feature is off or not present'
     } else {
@@ -5711,6 +5799,7 @@ try {
         if ($null -ne $state) {
             $found = $true
             if ($state -eq 'Enabled') { $on += $name }
+            elseif (@('DisablePending', 'EnablePending') -contains $state) { $on += ($name + ' (' + $state + ', a restart is needed)') }
         }
     }
     if (-not $found) {
@@ -5864,11 +5953,8 @@ try {
     foreach ($guid in @(
 @AUDIT_GUIDS@
     )) {
-        try {
-            $r += Restore-AuditSubcategory $guid
-        } catch {
-            Write-Result 'WARN' ('Audit subcategory ' + $guid + ' not put back') $_.Exception.Message
-        }
+        # Restore-AuditSubcategory never throws: it logs [WARN] could not be restored, keeps the record and returns 'not restored'.
+        $r += Restore-AuditSubcategory $guid
     }
     $sizeNote = Restore-EventLogState
     if ($null -ne $sizeNote) { $r += $sizeNote }
@@ -5890,9 +5976,13 @@ try {
 try {
     $r = @()
     foreach ($k in @($script:State.Keys)) {
-        if ($k -like 'reg|*\NetBT\Parameters\Interfaces\*|NetbiosOptions') {
-            $rec = $script:State[$k]
-            $r += Restore-RegValue -Path $rec.path -Name $rec.name
+        # The key names come from the state file, so each one must match the NetBT interface pattern; the value name is
+        # a constant. Nothing else in the file decides what is touched (records that do not match are reported).
+        if ($k -match '^reg\|(.+)\|NetbiosOptions$') {
+            $ifaceKey = $Matches[1]
+            if ($ifaceKey -match $script:NetbtPattern) {
+                $r += Restore-RegValue -Path $ifaceKey -Name 'NetbiosOptions'
+            }
         }
     }
     if ($r.Count -eq 0) { $r += 'no record' }
@@ -5918,6 +6008,22 @@ $script:StateError = ''
 $script:StateDir = Join-Path $env:ProgramData '@STATE_DIR@'
 $script:StatePath = Join-Path $script:StateDir '@STATE_FILE@'
 $script:AuditBackupPath = Join-Path $script:StateDir 'audit-policy-before.csv'
+$script:StateFolderChecked = $false
+# Rights that let a principal change a folder or a file: write data or add files, append data or add folders, write
+# extended attributes, delete child items, write attributes, delete, change the access list, take ownership, and the
+# generic all and write rights.
+$script:WriteMask = 0x500D0156
+$script:GuidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+
+# What Undo may touch. The state file is a source of VALUES only: which registry value, attack surface rule, audit
+# subcategory, firewall profile, Defender preference or optional feature is put back comes from these tables, which
+# are constants of this script. A path or name written in the file is never used as a target.
+$script:KnownReg = @KNOWN_REG@
+$script:KnownAsr = @KNOWN_ASR@
+$script:KnownAudit = @KNOWN_AUDIT@
+$script:KnownFeatures = @KNOWN_FEATURES@
+$script:KnownMp = @KNOWN_MP@
+$script:NetbtPattern = '@NETBT_REGEX@'
 
 # Every line goes to the console; the log file gets it as well, unless Setup is running this script (see below).
 function Write-Log {
@@ -5969,14 +6075,19 @@ function Write-Info {
     Write-Log ('[INFO] ' + $Text)
 }
 
-# Undo: one line for a setting from the results of the Restore-* calls ('no record' = nothing was recorded).
+# Undo: one line for a setting from the results of the Restore-* calls ('no record' = nothing was recorded; 'not
+# restored' = a record exists but putting it back failed: the Restore-* function already logged [WARN] and kept the
+# record, so the setting is never reported as "nothing recorded").
 function Write-UndoSummary {
     param([string]$What, [string[]]$Results)
-    $done = @($Results | Where-Object { $_ -ne 'no record' })
-    if ($done.Count -eq 0) {
+    $done = @($Results | Where-Object { ($_ -ne 'no record') -and ($_ -ne 'not restored') })
+    $kept = @($Results | Where-Object { $_ -eq 'not restored' })
+    if ($done.Count -gt 0) {
+        $text = 'put back: ' + ($done -join ', ')
+        if ($kept.Count -gt 0) { $text = $text + '; ' + $kept.Count + ' part(s) not put back, see the warnings above' }
+        Write-Result 'OK' $What $text
+    } elseif ($kept.Count -eq 0) {
         Write-Result 'SKIP' $What 'nothing recorded, this script did not change it'
-    } else {
-        Write-Result 'OK' $What ('put back: ' + ($done -join ', '))
     }
 }
 
@@ -6004,33 +6115,91 @@ function Get-RegDword {
 # ---- State for -Mode Undo --------------------------------------------------------------------------------------
 # Before Apply changes a setting, the previous value is written to the state file (a JSON file under ProgramData).
 # A value that is already in the file is never overwritten: it is the first value this script ever saw, which is
-# what Undo puts back. The folder is created on the first change and limited to Administrators and SYSTEM.
-# Audit mode never reads, creates or writes any of this.
-function Initialize-StateFolder {
-    if (Test-Path -LiteralPath $script:StateDir) { return }
-    New-Item -ItemType Directory -Path $script:StateDir -Force | Out-Null
-    try {
-        $acl = Get-Acl -LiteralPath $script:StateDir
-        $acl.SetAccessRuleProtection($true, $false)
-        foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
-            $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
-            $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
-            $acl.AddAccessRule($rule)
-        }
-        Set-Acl -LiteralPath $script:StateDir -AclObject $acl
-    } catch {
-        Write-Log ('[WARN] the state folder ' + $script:StateDir + ' could not be limited to Administrators and SYSTEM: ' + $_.Exception.Message)
+# what Undo puts back. Audit mode never reads, creates or writes any of this.
+#
+# The file is only as trustworthy as its folder. The folder is created in ONE step with its protected access list
+# (only SYSTEM and Administrators), so there is no moment when another user could own it. A folder that already
+# exists is used only after three checks: it is not a junction or symbolic link, its owner is SYSTEM or
+# Administrators, and nobody else can write to it. Otherwise Apply and Undo refuse, and Apply changes nothing,
+# because without a record there would be no way back. The same folder holds the audit-policy backup.
+# On top of that, Undo uses the file for VALUES only (see the tables above) and checks every value.
+function Test-TrustedPath {
+    param([string]$Path, [bool]$IsFolder)
+    # Returns an empty string when the item can be relied on, otherwise the reason it cannot.
+    $item = Get-Item -LiteralPath $Path -Force
+    if (([int]$item.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return 'it is a junction or symbolic link'
     }
+    if ($IsFolder -ne [bool]$item.PSIsContainer) { return 'it is not the kind of item expected' }
+    $trusted = @('S-1-5-18', 'S-1-5-32-544')
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+    if (($null -eq $owner) -or ($trusted -notcontains $owner.Value)) {
+        return ('its owner is ' + $acl.Owner + ', not SYSTEM or Administrators')
+    }
+    $sddl = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+    if ([string]::IsNullOrEmpty($sddl)) { return 'it has no access list, so everyone could change it' }
+    foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        $sid = [string]$rule.IdentityReference.Value
+        if ($trusted -contains $sid) { continue }
+        if (([int]$rule.FileSystemRights -band $script:WriteMask) -ne 0) {
+            return ('the account ' + $sid + ' is allowed to change it')
+        }
+    }
+    return ''
 }
 
-# Reads the state file into $script:State (a hashtable of hashtables). $false when the file exists but is unreadable.
+function Assert-TrustedFile {
+    param([string]$Path)
+    $why = Test-TrustedPath $Path $false
+    if ($why -ne '') { throw ('the file ' + $Path + ' cannot be trusted: ' + $why) }
+}
+
+function New-StateSecurity {
+    $security = New-Object System.Security.AccessControl.DirectorySecurity
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $security.AddAccessRule($rule)
+    }
+    return $security
+}
+
+# Throws (with the reason and what to do) when the state folder cannot be trusted. Never fails open.
+function Assert-StateFolder {
+    $why = Test-TrustedPath $script:StateDir $true
+    if ($why -ne '') {
+        throw ('the state folder ' + $script:StateDir + ' cannot be trusted: ' + $why + '. As administrator, check who made it, then delete it or rename it and run this script again.')
+    }
+    $script:StateFolderChecked = $true
+}
+
+# Apply: creates the folder with its protected access list in one call, or checks the one that exists. Throws on any
+# problem; the callers treat that as fatal.
+function Initialize-StateFolder {
+    if ($script:StateFolderChecked) { return }
+    $present = Get-Item -LiteralPath $script:StateDir -Force -ErrorAction SilentlyContinue
+    if ($null -eq $present) {
+        [void][System.IO.Directory]::CreateDirectory($script:StateDir, (New-StateSecurity))
+    }
+    Assert-StateFolder
+}
+
+# Reads the state file into $script:State (a hashtable of hashtables). $false when the file exists but is unreadable
+# or cannot be trusted.
 function Import-State {
     $script:State = @{}
-    if (-not (Test-Path -LiteralPath $script:StatePath)) { return $true }
+    if ($null -eq (Get-Item -LiteralPath $script:StatePath -Force -ErrorAction SilentlyContinue)) { return $true }
     try {
+        Assert-TrustedFile $script:StatePath
+        if ((Get-Item -LiteralPath $script:StatePath -Force).Length -gt 1048576) { throw 'the file is larger than 1 MiB' }
         $raw = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8
         $doc = $raw | ConvertFrom-Json
+        if (($null -eq $doc) -or ($doc.version -ne 1) -or ($null -eq $doc.entries)) { throw 'the file is not a version 1 state file' }
         foreach ($p in $doc.entries.PSObject.Properties) {
+            if ($p.Value -isnot [System.Management.Automation.PSCustomObject]) { throw ('the record ' + $p.Name + ' is not an object') }
             $h = @{}
             foreach ($q in $p.Value.PSObject.Properties) { $h[$q.Name] = $q.Value }
             $script:State[$p.Name] = $h
@@ -6043,6 +6212,56 @@ function Import-State {
     }
 }
 
+# Undo: a record whose key is not one of the settings this script manages is reported and left alone.
+function Test-StateEntries {
+    foreach ($k in @($script:State.Keys)) {
+        $ok = $false
+        if ($k -match '^reg\|(.+)\|([^|]+)$') {
+            $ok = ($null -ne (Get-KnownRegRange $Matches[1] $Matches[2]))
+        } elseif ($k -match '^asr\|(.+)$') {
+            $id = $Matches[1]
+            $ok = (($id -match $script:GuidPattern) -and ($script:KnownAsr -contains $id))
+        } elseif ($k -match '^audit\|(.+)$') {
+            $ok = ($script:KnownAudit -contains $Matches[1])
+        } elseif ($k -match '^fw\|(.+)$') {
+            $ok = (@('Domain', 'Private', 'Public') -contains $Matches[1])
+        } elseif ($k -match '^mp\|(.+)$') {
+            $ok = ($script:KnownMp -contains $Matches[1])
+        } elseif ($k -match '^feature\|(.+)$') {
+            $ok = ($script:KnownFeatures -contains $Matches[1])
+        } elseif ($k -eq 'eventlog|Security') {
+            $ok = $true
+        }
+        if (-not $ok) {
+            Write-Result 'WARN' 'Unrecognised record in the state file' ('ignored, not a setting this script manages: ' + $k)
+        }
+    }
+}
+
+# Checked readers for a value taken from the state file. Each throws when the value is not what Apply could have written.
+function ConvertTo-SafeInt {
+    param($Value, [int64]$Min, [int64]$Max, [string]$What)
+    if (($Value -isnot [int]) -and ($Value -isnot [long])) { throw ('the recorded ' + $What + ' is not a whole number') }
+    $n = [int64]$Value
+    if (($n -lt $Min) -or ($n -gt $Max)) { throw ('the recorded ' + $What + ' ' + $n + ' is outside the range ' + $Min + ' to ' + $Max) }
+    return $n
+}
+
+function Get-RecordBool {
+    param($Value, [string]$What)
+    if ($Value -isnot [bool]) { throw ('the recorded ' + $What + ' is not true or false') }
+    return [bool]$Value
+}
+
+function Get-RecordChoice {
+    param($Value, [string[]]$Choices, [string]$What)
+    $text = [string]$Value
+    foreach ($c in $Choices) {
+        if ($c -ieq $text) { return $c }
+    }
+    throw ('the recorded ' + $What + ' is not one this script knows')
+}
+
 function Save-State {
     Initialize-StateFolder
     $doc = @{ version = 1; entries = $script:State }
@@ -6050,8 +6269,8 @@ function Save-State {
     Set-Content -LiteralPath $script:StatePath -Value $json -Encoding UTF8
 }
 
-# Records one previous value, but only the first time. If the file cannot be written the exception stops the
-# change that was about to follow (nothing is changed without a way back).
+# Records one previous value, but only the first time. If the file cannot be written (or the folder cannot be
+# trusted) the exception stops the change that was about to follow: nothing is changed without a way back.
 function Add-StateOnce {
     param([string]$Key, [hashtable]$Entry)
     if ($script:State.ContainsKey($Key)) { return }
@@ -6070,10 +6289,25 @@ function Remove-StateEntry {
     Save-State
 }
 
+# The range of DWORD values this script may write or put back for one registry value, or $null when it is not one
+# of the values it manages. The NetBIOS option of one network adapter is matched by pattern.
+function Get-KnownRegRange {
+    param([string]$Path, [string]$Name)
+    $k = $Path + '|' + $Name
+    if ($script:KnownReg.ContainsKey($k)) { return ,@($script:KnownReg[$k]) }
+    # .NET lets $ match before a final line break, so a line break in the key is refused on its own.
+    if (($Name -eq 'NetbiosOptions') -and ($Path -match $script:NetbtPattern) -and ($Path -notmatch '[\r\n]')) { return ,@(0, 2) }
+    return $null
+}
+
 # Writes one DWORD only when it differs; the previous value (or its absence) is recorded first.
 # Returns $true when it changed something.
 function Set-RegDword {
     param([string]$Path, [string]$Name, [int]$Value)
+    $range = Get-KnownRegRange $Path $Name
+    if (($null -eq $range) -or ($Value -lt $range[0]) -or ($Value -gt $range[1])) {
+        throw ('internal error: ' + $Name + ' is not a value this script manages')
+    }
     $current = $null
     $existed = $false
     $kind = ''
@@ -6094,39 +6328,69 @@ function Set-RegDword {
     return $true
 }
 
-# Puts a registry value back (or removes it when it did not exist). An empty key that Apply created is left.
+# Puts a registry value back (or removes it when it did not exist). The key and the name come from the caller, which
+# passes constants of this script, and are checked against the built-in table again here; the file supplies only the
+# earlier value, which is type-checked and range-checked. An empty key that Apply created is left. It never throws:
+# when something fails it logs [WARN], KEEPS the record so Undo can be run again, and returns 'not restored'.
+# The SMBv1 server value is never written back as 1 (that would bring SMBv1 back): the note gives the manual command.
 function Restore-RegValue {
     param([string]$Path, [string]$Name)
     $key = 'reg|' + $Path + '|' + $Name
     if (-not $script:State.ContainsKey($key)) { return 'no record' }
-    $rec = $script:State[$key]
-    if ($rec.existed) {
-        $kind = [string]$rec.type
-        if ($kind -eq 'DWord') { $val = [int]$rec.value }
-        elseif ($kind -eq 'QWord') { $val = [int64]$rec.value }
-        elseif (($kind -eq 'String') -or ($kind -eq 'ExpandString')) { $val = [string]$rec.value }
-        else { throw ('the earlier value of ' + $Name + ' has the type ' + $kind + ', which this script cannot put back') }
-        if (-not (Test-Path -LiteralPath $Path)) {
-            New-Item -Path $Path -Force | Out-Null
+    try {
+        $range = Get-KnownRegRange $Path $Name
+        if ($null -eq $range) { throw ('internal error: ' + $Name + ' is not a value this script manages') }
+        $rec = $script:State[$key]
+        $existed = Get-RecordBool $rec.existed 'existed flag'
+        if ($existed) {
+            $kind = Get-RecordChoice $rec.type @('DWord', 'QWord', 'String', 'ExpandString') 'value type'
+            if ($kind -eq 'DWord') {
+                $val = [int](ConvertTo-SafeInt $rec.value $range[0] $range[1] 'value')
+            } elseif ($kind -eq 'QWord') {
+                $val = [int64](ConvertTo-SafeInt $rec.value ([int64]::MinValue) ([int64]::MaxValue) 'value')
+            } else {
+                $val = [string]$rec.value
+                if ($val -notmatch '^[\x20-\x7E]{0,260}$') { throw 'the recorded text value is not plain text of at most 260 characters' }
+            }
+            if (($Name -eq 'SMB1') -and (($kind -ne 'DWord') -or ($val -ne 0))) {
+                Remove-StateEntry $key
+                Write-Result 'WARN' 'SMBv1 server value not turned back on' ('the earlier value ' + (Format-Value $rec.value) + ' is deliberately not written back, because that would bring SMBv1 back; if you really need it, run as administrator: Set-ItemProperty -Path ' + $Path + ' -Name SMB1 -Value 1')
+                return 'not restored'
+            }
+            if (-not (Test-Path -LiteralPath $Path)) {
+                New-Item -Path $Path -Force | Out-Null
+            }
+            New-ItemProperty -LiteralPath $Path -Name $Name -Value $val -PropertyType $kind -Force | Out-Null
+            $now = Get-RegDword -Path $Path -Name $Name
+            if (($null -eq $now) -or ([string]$now -ne [string]$val)) { throw ($Name + ' reads ' + (Format-Value $now) + ' after it was put back, expected ' + $val) }
+            $result = 'restored ' + $Name
+        } else {
+            if ($null -ne (Get-RegDword -Path $Path -Name $Name)) {
+                Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
+            }
+            if ($null -ne (Get-RegDword -Path $Path -Name $Name)) { throw ($Name + ' is still there after the removal') }
+            $result = 'removed ' + $Name
         }
-        New-ItemProperty -LiteralPath $Path -Name $Name -Value $val -PropertyType $kind -Force | Out-Null
-        $result = 'restored ' + $Name
-    } else {
-        if (Test-Path -LiteralPath $Path) {
-            Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
-        }
-        $result = 'removed ' + $Name
+        Remove-StateEntry $key
+        return $result
+    } catch {
+        Write-Result 'WARN' ($Name + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
     }
-    Remove-StateEntry $key
-    return $result
 }
 
-# State of an optional Windows feature ('Enabled', 'Disabled', ...) or $null when it does not exist. The list is
-# read ONCE, on first use, and kept: Get-WindowsOptionalFeature is slow and Setup should finish quickly.
+# State of an optional Windows feature ('Enabled', 'Disabled', 'DisablePending', ...) or $null when it does not exist.
+# The list is read once, on first use, and kept: Get-WindowsOptionalFeature is slow and Setup should finish quickly.
+# After a feature was changed the kept list is stale (turning the Root feature off can already change its child), so
+# -Fresh reads the list again.
 $script:Features = $null
 $script:FeaturesError = $null
 function Get-FeatureState {
-    param([string]$Name)
+    param([string]$Name, [switch]$Fresh)
+    if ($Fresh) {
+        $script:Features = $null
+        $script:FeaturesError = $null
+    }
     if ($null -eq $script:Features) {
         $script:Features = @{}
         try {
@@ -6153,9 +6417,12 @@ function Restore-FeatureState {
     param([string]$Name)
     $key = 'feature|' + $Name
     if (-not $script:State.ContainsKey($key)) { return $null }
+    if ($script:KnownFeatures -notcontains $Name) { return $null }
     $rec = $script:State[$key]
+    $was = [string]$rec.state
+    if ($was -notmatch '^[A-Za-z]{1,40}$') { $was = 'in an unknown state' }
     Remove-StateEntry $key
-    return ($Name + ' was ' + $rec.state + ' before; to turn it on again run, as administrator: Enable-WindowsOptionalFeature -Online -FeatureName ' + $Name)
+    return ($Name + ' was ' + $was + ' before; to turn it on again run, as administrator: Enable-WindowsOptionalFeature -Online -FeatureName ' + $Name)
 }
 
 # Current action of one attack surface reduction rule (0 off, 1 Block, 2 Audit, 6 Warn) or $null when not listed.
@@ -6205,25 +6472,38 @@ function Set-AsrRule {
     return 'changed'
 }
 
-# Puts a rule back to its recorded action (or removes it when it was not listed) and reads the result back.
+# Puts a rule back to its recorded action (or removes it when it was not listed) and reads the result back. The rule
+# id must be a GUID AND one of the rules in $script:KnownAsr (the id written in the file is never used). It never
+# throws: on a failure it logs [WARN], keeps the record and returns 'not restored'.
 function Restore-AsrRule {
     param([string]$Id)
     $key = 'asr|' + $Id.ToLower()
     if (-not $script:State.ContainsKey($key)) { return 'no record' }
-    $rec = $script:State[$key]
-    if ($rec.listed) {
-        $names = @{ 0 = 'Disabled'; 1 = 'Enabled'; 2 = 'AuditMode'; 6 = 'Warn' }
-        $name = $names[[int]$rec.action]
-        if ($null -eq $name) { throw ('the earlier action ' + $rec.action + ' of rule ' + $Id + ' is not one this script knows') }
-        Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions $name
-    } else {
-        Remove-MpPreference -AttackSurfaceReductionRules_Ids $Id
+    try {
+        if (($Id -notmatch $script:GuidPattern) -or ($script:KnownAsr -notcontains $Id)) {
+            throw ('internal error: ' + $Id + ' is not a rule this script manages')
+        }
+        $rec = $script:State[$key]
+        $listed = Get-RecordBool $rec.listed 'listed flag'
+        $action = -1
+        if ($listed) {
+            $action = [int](ConvertTo-SafeInt $rec.action 0 6 'rule action')
+            $names = @{ 0 = 'Disabled'; 1 = 'Enabled'; 2 = 'AuditMode'; 6 = 'Warn' }
+            $name = $names[$action]
+            if ($null -eq $name) { throw ('the earlier action ' + $action + ' of rule ' + $Id + ' is not one this script knows') }
+            Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions $name
+        } else {
+            Remove-MpPreference -AttackSurfaceReductionRules_Ids $Id
+        }
+        $now = Get-AsrAction $Id
+        if ($listed) { $ok = ($now -eq $action) } else { $ok = ($null -eq $now) }
+        if (-not $ok) { throw ('rule ' + $Id + ' is not back at its earlier action (Tamper Protection, another antivirus or a Defender that is not ready can block this)') }
+        Remove-StateEntry $key
+        return ('rule ' + $Id.Substring(0, 8))
+    } catch {
+        Write-Result 'WARN' ('Attack surface rule ' + $Id + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
     }
-    $now = Get-AsrAction $Id
-    if ($rec.listed) { $ok = ($now -eq [int]$rec.action) } else { $ok = ($null -eq $now) }
-    if (-not $ok) { throw ('rule ' + $Id + ' is not back at its earlier action (Tamper Protection, another antivirus or a Defender that is not ready can block this)') }
-    Remove-StateEntry $key
-    return ('rule ' + $Id.Substring(0, 8))
 }
 
 # Windows Firewall: the profile settings of the local store as they were before Apply.
@@ -6233,22 +6513,42 @@ function Save-FirewallState {
     }
 }
 
+# Puts each recorded profile back and reads it back. A part that was recorded as NotConfigured (a Group Policy value)
+# cannot be set in the local store, so it is reported as [WARN] and left as it is. It never throws: on a failure it
+# logs [WARN], keeps that profile's record and goes on with the next profile.
 function Restore-FirewallState {
     $done = @()
+    $kept = 0
     foreach ($n in @('Domain', 'Private', 'Public')) {
         $key = 'fw|' + $n
         if (-not $script:State.ContainsKey($key)) { continue }
-        $rec = $script:State[$key]
-        $splat = @{ Profile = $n }
-        # A value of NotConfigured cannot be set in the local store, so that part is left as it is now.
-        if (($rec.enabled -eq 'True') -or ($rec.enabled -eq 'False')) { $splat['Enabled'] = $rec.enabled }
-        if (($rec.inbound -eq 'Allow') -or ($rec.inbound -eq 'Block')) { $splat['DefaultInboundAction'] = $rec.inbound }
-        if ($splat.Count -gt 1) { Set-NetFirewallProfile @splat }
-        Remove-StateEntry $key
-        $done += ('profile ' + $n)
+        try {
+            $rec = $script:State[$key]
+            $enabled = Get-RecordChoice $rec.enabled @('True', 'False', 'NotConfigured') 'firewall state'
+            $inbound = Get-RecordChoice $rec.inbound @('Allow', 'Block', 'NotConfigured') 'inbound action'
+            $splat = @{ Profile = $n }
+            $left = @()
+            if (($enabled -eq 'True') -or ($enabled -eq 'False')) { $splat['Enabled'] = $enabled } else { $left += 'on/off state' }
+            if (($inbound -eq 'Allow') -or ($inbound -eq 'Block')) { $splat['DefaultInboundAction'] = $inbound } else { $left += 'inbound action' }
+            if ($splat.Count -gt 1) { Set-NetFirewallProfile @splat }
+            $now = Get-NetFirewallProfile -Profile $n -PolicyStore PersistentStore
+            $wrong = @()
+            if ($splat.ContainsKey('Enabled') -and ([string]$now.Enabled -ne $enabled)) { $wrong += 'Enabled is ' + [string]$now.Enabled }
+            if ($splat.ContainsKey('DefaultInboundAction') -and ([string]$now.DefaultInboundAction -ne $inbound)) { $wrong += 'DefaultInboundAction is ' + [string]$now.DefaultInboundAction }
+            if ($wrong.Count -gt 0) { throw ('read back after setting: ' + ($wrong -join ', ') + '; a Group Policy or another firewall product can win') }
+            Remove-StateEntry $key
+            if ($left.Count -gt 0) {
+                Write-Result 'WARN' ('Firewall profile ' + $n + ' only partly put back') ('the earlier ' + ($left -join ' and ') + ' was NotConfigured, which cannot be set in the local store, so it stays as it is now')
+            }
+            if ($splat.Count -gt 1) { $done += ('profile ' + $n) } else { $kept++ }
+        } catch {
+            $kept++
+            Write-Result 'WARN' ('Firewall profile ' + $n + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        }
     }
-    if ($done.Count -eq 0) { return 'no record' }
-    return ($done -join ', ')
+    if ($done.Count -gt 0) { return ($done -join ', ') }
+    if ($kept -gt 0) { return 'not restored' }
+    return 'no record'
 }
 
 # Defender preference (PUAProtection, MAPSReporting): the earlier numeric value.
@@ -6261,14 +6561,21 @@ function Restore-DefenderValue {
     param([string]$Name)
     $key = 'mp|' + $Name
     if (-not $script:State.ContainsKey($key)) { return 'no record' }
-    $rec = $script:State[$key]
-    $splat = @{}
-    $splat[$Name] = [int]$rec.value
-    Set-MpPreference @splat
-    $pref = Get-MpPreference
-    if ([int]$pref.$Name -ne [int]$rec.value) { throw ($Name + ' is not back at ' + $rec.value + ' (Tamper Protection or another antivirus can block this)') }
-    Remove-StateEntry $key
-    return ('restored ' + $Name)
+    try {
+        if ($script:KnownMp -notcontains $Name) { throw ('internal error: ' + $Name + ' is not a preference this script manages') }
+        $rec = $script:State[$key]
+        $value = [int](ConvertTo-SafeInt $rec.value 0 2 'preference value')
+        $splat = @{}
+        $splat[$Name] = $value
+        Set-MpPreference @splat
+        $pref = Get-MpPreference
+        if ([int]$pref.$Name -ne $value) { throw ($Name + ' is not back at ' + $value + ' (Tamper Protection or another antivirus can block this)') }
+        Remove-StateEntry $key
+        return ('restored ' + $Name)
+    } catch {
+        Write-Result 'WARN' ('Defender ' + $Name + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
+    }
 }
 
 # Advanced audit policy. auditpol prints the words of the Windows language, so only the English words are
@@ -6297,7 +6604,10 @@ function Get-AuditSetting {
 
 function Save-AuditBackup {
     Initialize-StateFolder
-    if (Test-Path -LiteralPath $script:AuditBackupPath) { return }
+    if (Test-Path -LiteralPath $script:AuditBackupPath) {
+        Assert-TrustedFile $script:AuditBackupPath
+        return
+    }
     try {
         & auditpol.exe /backup ('/file:' + $script:AuditBackupPath) | Out-Null
         if ($LASTEXITCODE -ne 0) { throw ('auditpol /backup exit code ' + $LASTEXITCODE) }
@@ -6322,18 +6632,25 @@ function Restore-AuditSubcategory {
     param([string]$Guid)
     $key = 'audit|' + $Guid
     if (-not $script:State.ContainsKey($key)) { return 'no record' }
-    $rec = $script:State[$key]
-    if (-not $rec.known) {
-        throw ('the earlier setting of ' + $Guid + ' could not be read when it was recorded (' + $rec.raw + '), so it is not guessed; restore the whole earlier policy by hand with: auditpol /restore /file:' + $script:AuditBackupPath)
+    try {
+        if ($script:KnownAudit -notcontains $Guid) { throw ('internal error: ' + $Guid + ' is not a subcategory this script manages') }
+        $rec = $script:State[$key]
+        $known = Get-RecordBool $rec.known 'known flag'
+        if (-not $known) {
+            throw ('the earlier setting of ' + $Guid + ' could not be read when it was recorded, so it is not guessed; restore the whole earlier policy by hand with: auditpol /restore /file:' + $script:AuditBackupPath)
+        }
+        $s = '/success:disable'
+        $f = '/failure:disable'
+        if (Get-RecordBool $rec.success 'success flag') { $s = '/success:enable' }
+        if (Get-RecordBool $rec.failure 'failure flag') { $f = '/failure:enable' }
+        $out = & auditpol.exe /set ('/subcategory:' + $Guid) $s $f | Out-String
+        if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
+        Remove-StateEntry $key
+        return ('audit ' + $Guid)
+    } catch {
+        Write-Result 'WARN' ('Audit subcategory ' + $Guid + ' could not be restored; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
     }
-    $s = '/success:disable'
-    $f = '/failure:disable'
-    if ($rec.success) { $s = '/success:enable' }
-    if ($rec.failure) { $f = '/failure:enable' }
-    $out = & auditpol.exe /set ('/subcategory:' + $Guid) $s $f | Out-String
-    if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
-    Remove-StateEntry $key
-    return ('audit ' + $Guid)
 }
 
 # The Security event log size is only ever raised; Undo never shrinks it (it only reports that).
@@ -6346,8 +6663,10 @@ function Restore-EventLogState {
     $key = 'eventlog|Security'
     if (-not $script:State.ContainsKey($key)) { return $null }
     $rec = $script:State[$key]
+    $size = 'an unknown number of'
+    try { $size = [string][math]::Round((ConvertTo-SafeInt $rec.bytes 0 1099511627776 'log size') / 1MB) } catch { $size = 'an unknown number of' }
     Remove-StateEntry $key
-    return ('Security log size not shrunk (it was ' + [math]::Round([int64]$rec.bytes / 1MB) + ' MiB before Apply and stays as it is)')
+    return ('Security log size not shrunk (it was ' + $size + ' MiB before Apply and stays as it is)')
 }
 """
 
@@ -6400,8 +6719,27 @@ if ($script:LogToFile) {
 Write-Log ('[START] EPMA hardening, mode ' + $Mode + ', ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
 if ($Mode -eq 'Audit') {
     Write-Info 'Audit mode: nothing is changed, no state file is read or written.'
+    Write-Info 'Audit mode reads the optional features with the DISM cmdlets, and DISM may write its own logs under C:\Windows\Logs\DISM; that is not a configuration change.'
 } else {
     Write-Info ('Earlier values are recorded in ' + $script:StatePath)
+}
+
+# The folder of the state file comes first. Apply creates it with a protected access list in one step, or checks the
+# one that exists; Undo checks the one that exists. Anything that cannot be trusted stops the run before the first
+# change (Apply must not change what it cannot record) and before the first value is read (Undo must not replay a
+# file that another user could have written).
+if ($Mode -ne 'Audit') {
+    try {
+        if ($Mode -eq 'Apply') {
+            Initialize-StateFolder
+        } elseif ($null -ne (Get-Item -LiteralPath $script:StateDir -Force -ErrorAction SilentlyContinue)) {
+            Assert-StateFolder
+        }
+    } catch {
+        Write-Log ('[FAIL] ' + $_.Exception.Message + ' Nothing was changed.')
+        if ($isSystem) { exit 0 }
+        exit 1
+    }
 }
 
 if ($Mode -ne 'Audit') {
@@ -6421,8 +6759,12 @@ if ($Mode -ne 'Audit') {
             if ($isSystem) { exit 0 }
             exit 1
         }
-    } elseif (($Mode -eq 'Undo') -and ($script:State.Count -eq 0)) {
-        Write-Info 'no earlier values are recorded (there is no state file or it is empty): every setting will be skipped'
+    } elseif ($Mode -eq 'Undo') {
+        if ($script:State.Count -eq 0) {
+            Write-Info 'no earlier values are recorded (there is no state file or it is empty): every setting will be skipped'
+        } else {
+            Test-StateEntries
+        }
     }
 }
 """
@@ -6547,12 +6889,16 @@ try {
 } catch {
     Write-Log ('[WARN] the empty state file could not be removed: ' + $_.Exception.Message)
 }
-Write-Log '[NOTE] Not undone by this script: optional features that Apply turned off (SMBv1, PowerShell 2.0) stay off; the lines above give the Enable-WindowsOptionalFeature command if you really need them.'
+Write-Log '[NOTE] Not undone by this script: optional features that Apply turned off (SMBv1, PowerShell 2.0) stay off; the lines above give the Enable-WindowsOptionalFeature command if you really need them. The SMBv1 server value is never written back as 1.'
 Write-Log '[NOTE] The Security event log keeps its raised size (this script never shrinks it).'
-Write-Log '[NOTE] A setting that was already in the wanted state before Apply was not recorded, so Undo leaves it alone.'
+Write-Log '[NOTE] A setting that was already in the wanted state before Apply was never recorded, so Undo cannot know its history and leaves it alone.'
 Write-Log '[NOTE] Audit policy is put back per subcategory from the recorded auditpol output (English Windows only). The whole earlier policy was also saved once; restore it by hand with: auditpol /restore /file:<that file>'
 Write-Log '[NOTE] UAC and NetBIOS changes take full effect after a restart.'
 Write-Log ('[DONE] ' + $script:CountOk + ' put back, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' warnings')
+if (($script:CountWarn + $script:CountFail) -gt 0) {
+    Write-Log '[NOTE] Some items were not put back (see the [WARN] lines above). A record that could not be put back is kept, so running Undo again retries it. The exit code is 1.'
+}
+if (($script:CountWarn + $script:CountFail) -gt 0) { exit 1 }
 """,
     "Apply": r"""
 Write-Log ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')
@@ -6585,19 +6931,30 @@ def _windows_harden_ps1():
         "#   -Mode Apply   (default) applies the settings below. Before a setting is changed, its previous value is",
         "#                 recorded in " + WINDOWS_HARDENING_STATE + " (a value already recorded is",
         "#                 never overwritten). Safe to run again: it changes nothing that is already set.",
-        "#   -Mode Audit   changes NOTHING and writes no state file: prints [OK] in effect / [DIFF] not in effect / [N/A]",
-        "#                 per setting, then read-only facts (BitLocker, TPM, Secure Boot, Defender, attack surface",
-        "#                 rules, Memory Integrity, Credential Guard, Exploit Protection), then a [DONE] line.",
+        "#   -Mode Audit   changes NOTHING in the configuration and writes no state file: prints [OK] in effect / [DIFF]",
+        "#                 not in effect / [N/A] per setting, then read-only facts (BitLocker, TPM, Secure Boot, Defender,",
+        "#                 attack surface rules, Memory Integrity, Credential Guard, Exploit Protection), then a [DONE] line.",
+        "#                 The one thing it can write is not a configuration change: the DISM cmdlets that read the optional",
+        "#                 features may write their own logs under C:\\Windows\\Logs\\DISM (an [INFO] line says so).",
         "#   -Mode Undo    puts back every recorded value (or removes a value that did not exist). It cannot turn",
         "#                 optional features on again (it prints the Enable-WindowsOptionalFeature command), it does not",
-        "#                 shrink the Security log, and a setting that Apply found already set was never recorded.",
+        "#                 shrink the Security log, never writes the SMBv1 server value back as 1, and a setting that Apply",
+        "#                 found already set was never recorded. It uses the state file for VALUES only: what is put back",
+        "#                 comes from tables built into this script, and every value is checked. A record it cannot put back",
+        "#                 is kept (run Undo again) and Undo then exits with code 1.",
         "#   -DisableLegacyNetwork  opt-in: also turns off NetBIOS over TCP/IP and WPAD auto-discovery. Never applied",
         "#                 without it, and never from SetupComplete.cmd.",
         "#   -LogPath      log file (default %windir%\\Temp\\epma-hardening.log). Every line is also shown on the console.",
         "# PowerShell 5.1; no network access, no downloads, no extra tools (auditpol.exe and wevtutil.exe are part of",
         "# Windows). Every setting has its own error handler and writes one line per mode. Apply and Undo use [OK],",
         "# [SKIP], [WARN] or [FAIL]. It must be run as administrator (it refuses otherwise). The exit code is 0 in",
-        "# Windows Setup; run by hand it is 1 only when it refuses to start (not an administrator, unreadable state).",
+        "# Windows Setup and for Apply and Audit; run by hand it is 1 when it refuses to start (not an administrator,",
+        "# unreadable state, a state folder that cannot be trusted) and, for Undo, when any [WARN] or [FAIL] was logged.",
+        "#",
+        "# The state folder " + "%ProgramData%\\" + WINDOWS_HARDENING_STATE_DIR + " is created in one step with an access list",
+        "# for SYSTEM and Administrators only. A folder that already exists is used only if it is not a junction or",
+        "# symbolic link, is owned by SYSTEM or Administrators and nobody else can write to it; otherwise the script",
+        "# refuses and Apply changes nothing, because a setting that cannot be recorded cannot be undone.",
         "#",
         "# NOTHING in this file has been run on a real Windows: it was checked by structure tests only. Try Audit mode",
         "# first, on a test PC.",
@@ -6628,6 +6985,8 @@ def _windows_harden_ps1():
     helpers = (_WINDOWS_PS_HELPERS
                .replace("@STATE_DIR@", WINDOWS_HARDENING_STATE_DIR)
                .replace("@STATE_FILE@", WINDOWS_HARDENING_STATE_FILE))
+    for placeholder, text_ in _ps_known_tables().items():
+        helpers = helpers.replace(placeholder, text_)
     tail = (
         "\nif ($Mode -eq 'Audit') {\n"
         + _windows_ps_indent(_WINDOWS_PS_AUDIT_INFO) + "\n"

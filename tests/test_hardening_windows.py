@@ -600,13 +600,17 @@ class StateAndUndoTests(Win2Base):
         self.assertIn(app.WINDOWS_HARDENING_STATE, self.ps1_text)  # said in the header too
 
     def test_state_folder_is_limited_to_administrators_and_system(self):
-        body = self._function("Initialize-StateFolder")
-        for token in ("New-Item -ItemType Directory", "Get-Acl", "SetAccessRuleProtection($true, $false)",
-                      "'S-1-5-18'", "'S-1-5-32-544'", "FileSystemAccessRule", "Set-Acl"):
-            self.assertIn(token, body)
-        self.assertRegex(body, r"\} catch \{\n\s+Write-Log \('\[WARN\]")  # a failure is logged, never fatal
-        # An existing folder is left alone.
-        self.assertIn("if (Test-Path -LiteralPath $script:StateDir) { return }", body)
+        # Created in ONE call with its protected access list (no window in which another user could own it).
+        init = self._function("Initialize-StateFolder")
+        self.assertIn("[System.IO.Directory]::CreateDirectory($script:StateDir, (New-StateSecurity))", init)
+        for token in ("New-Item", "Set-Acl"):
+            self.assertNotIn(token, init)
+        security = self._function("New-StateSecurity")
+        for token in ("DirectorySecurity", "SetAccessRuleProtection($true, $false)", "'S-1-5-18'", "'S-1-5-32-544'",
+                      "FileSystemAccessRule", "'FullControl'"):
+            self.assertIn(token, security)
+        # Only SYSTEM and Administrators are ever granted anything.
+        self.assertEqual(len(re.findall(r"S-1-\d+(?:-\d+)+", security)), 2)
 
     def test_first_seen_value_is_never_overwritten(self):
         body = self._function("Add-StateOnce")
@@ -673,7 +677,8 @@ class StateAndUndoTests(Win2Base):
         audit = self._function("Restore-AuditSubcategory")
         self.assertIn("/success:disable", audit)
         self.assertIn("auditpol /restore /file:", audit)
-        self.assertIn("-not $rec.known", audit)  # an unreadable earlier value is never guessed
+        self.assertIn("if (-not $known)", audit)  # an unreadable earlier value is never guessed
+        self.assertIn("Get-RecordBool $rec.known", audit)
 
     def test_undo_logs_ok_skip_warn_only(self):
         for sid in self.ids:
@@ -700,7 +705,8 @@ class StateAndUndoTests(Win2Base):
     def test_audit_policy_is_saved_once_with_auditpol_backup(self):
         body = self._function("Save-AuditBackup")
         self.assertIn("auditpol.exe /backup", body)
-        self.assertIn("if (Test-Path -LiteralPath $script:AuditBackupPath) { return }", body)
+        self.assertIn("if (Test-Path -LiteralPath $script:AuditBackupPath) {", body)
+        self.assertLess(body.index("Initialize-StateFolder"), body.index("auditpol.exe /backup"))
 
     def test_unreadable_state_never_leads_to_unrecorded_changes(self):
         text = self.ps1_text.replace("\r\n", "\n")
@@ -835,6 +841,340 @@ class PublicHelperTests(Win2Base):
             self.assertEqual(app.hardening_files_windows(app.HARDENING_BASELINE)[PS1_PATH], b"marker")
             self.assertEqual(app.windows_hardening_ps1(app.HARDENING_BASELINE), b"marker")
 # ===== end hardening2: WIN-SCRIPT tests =====
+
+
+# ===== hardening3: FIX-PS1 tests (review of harden.ps1: state-file tampering, Undo honesty) =====
+# The PowerShell was never executed (no pwsh here); these tests only look at the structure of the generated text.
+class StateSafetyTests(Win2Base):
+    def _start(self):
+        """The script between the START line and the first setting."""
+        text = self.ps1_text.replace("\r\n", "\n")
+        return text[text.index("Write-Log ('[START]"):text.index("# setting: smb1")]
+
+    def _undo(self, sid):
+        return self._branches(sid)[2]
+
+    # ---- 1. the state folder -----------------------------------------------------------------------------------
+    def test_existing_folder_is_checked_for_reparse_point_owner_and_other_writers(self):
+        body = self._function("Test-TrustedPath")
+        for token in ("[System.IO.FileAttributes]::ReparsePoint", "GetOwner([System.Security.Principal.SecurityIdentifier])",
+                      "'S-1-5-18'", "'S-1-5-32-544'", "$trusted -notcontains $owner.Value",
+                      "GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])",
+                      "AccessControlSections]::Access", "$rule.AccessControlType -ne 'Allow'", "$script:WriteMask"):
+            with self.subTest(token=token):
+                self.assertIn(token, body)
+        # A folder without any access list (a null DACL) means "everyone" and is refused too.
+        self.assertIn("[string]::IsNullOrEmpty($sddl)", body)
+        # The write mask covers every right that lets someone change the folder and none of the read-only rights.
+        m = re.search(r"\$script:WriteMask = 0x([0-9A-Fa-f]+)", self.ps1_text)
+        self.assertIsNotNone(m)
+        mask = int(m.group(1), 16)
+        write_rights = (0x2, 0x4, 0x10, 0x40, 0x100, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000)
+        read_rights = (0x1, 0x8, 0x20, 0x80, 0x20000, 0x100000)
+        for bit in write_rights:
+            self.assertTrue(mask & bit, hex(bit))
+        for bit in read_rights:
+            self.assertFalse(mask & bit, hex(bit))
+        self.assertEqual(mask, sum(write_rights))
+        self.assertLess(mask, 2 ** 31)  # fits the [int] it is compared with
+
+    def test_a_folder_that_cannot_be_trusted_is_never_used(self):
+        assert_folder = self._function("Assert-StateFolder")
+        self.assertIn("Test-TrustedPath $script:StateDir $true", assert_folder)
+        self.assertIn("throw (", assert_folder)
+        self.assertIn("delete it or rename it", assert_folder)
+        init = self._function("Initialize-StateFolder")
+        # Created, then ALWAYS checked (somebody else may have created it in between): there is no path that skips it.
+        self.assertLess(init.index("CreateDirectory"), init.index("Assert-StateFolder"))
+        self.assertTrue(init.rstrip().endswith("Assert-StateFolder"))
+        # Never fail open: none of the checks swallows an error.
+        for name in ("Initialize-StateFolder", "Assert-StateFolder", "Test-TrustedPath", "Assert-TrustedFile", "New-StateSecurity"):
+            with self.subTest(function=name):
+                self.assertNotRegex(self._function(name), r"\bcatch\b")
+        self.assertIn("throw", self._function("Assert-TrustedFile"))
+
+    def test_checks_come_before_any_state_write_or_change(self):
+        save = self._function("Save-State")
+        self.assertLess(save.index("Initialize-StateFolder"), save.index("Set-Content"))
+        start = self._start()
+        self.assertLess(start.index("Initialize-StateFolder"), start.index("Import-State)"))
+        # ... and before the first setting, because START is part of the text before "# setting: smb1".
+        self.assertLess(self.ps1_text.index("Initialize-StateFolder\r\n"), self.ps1_text.index("# setting: smb1"))
+        imp = self._function("Import-State")
+        self.assertLess(imp.index("Assert-TrustedFile $script:StatePath"), imp.index("Get-Content"))
+        self.assertIn("1048576", imp)  # a state file larger than 1 MiB is not read
+        self.assertIn("$doc.version -ne 1", imp)
+        self.assertIn("-isnot [System.Management.Automation.PSCustomObject]", imp)
+
+    def test_apply_and_undo_refuse_when_the_folder_cannot_be_trusted(self):
+        start = self._start()
+        i = start.index("Initialize-StateFolder")
+        snippet = start[i:start.index("Import-State)")]
+        self.assertIn("elseif ($null -ne (Get-Item -LiteralPath $script:StateDir -Force -ErrorAction SilentlyContinue)) {\n            Assert-StateFolder", snippet)
+        self.assertRegex(snippet, r"\} catch \{\n\s+Write-Log \('\[FAIL\] ' \+ \$_\.Exception\.Message \+ ' Nothing was changed\.'\)"
+                                  r"\n\s+if \(\$isSystem\) \{ exit 0 \}\n\s+exit 1\n")
+        # Apply creates the folder, Undo only looks at an existing one (it never creates anything).
+        self.assertRegex(start, r"if \(\$Mode -eq 'Apply'\) \{\n\s+Initialize-StateFolder\n")
+        self.assertNotIn("Initialize-StateFolder", self._function("Import-State"))
+        for sid in self.ids:
+            self.assertNotIn("Initialize-StateFolder", self._undo(sid), sid)
+
+    def test_audit_policy_backup_lives_in_the_same_checked_folder(self):
+        self.assertIn("$script:AuditBackupPath = Join-Path $script:StateDir 'audit-policy-before.csv'", self.ps1_text)
+        body = self._function("Save-AuditBackup")
+        self.assertLess(body.index("Initialize-StateFolder"), body.index("Assert-TrustedFile $script:AuditBackupPath"))
+        self.assertLess(body.index("Assert-TrustedFile $script:AuditBackupPath"), body.index("auditpol.exe /backup"))
+        # Every change of the audit policy goes through the recorder, so a failing folder check stops it.
+        self.assertLess(self._function("Set-AuditSubcategory").index("Add-StateOnce"),
+                        self._function("Set-AuditSubcategory").index("auditpol.exe /set"))
+
+    def test_no_switch_weakens_the_state_check(self):
+        params = re.findall(r"^\s+\[(?:switch|string|bool|int)\]\$(\w+)", app._WINDOWS_PS_PARAMS, re.MULTILINE)
+        self.assertEqual(params, ["Mode", "DisableLegacyNetwork", "LogPath"])
+        low = self.ps1_text.lower()
+        for word in ("nostatecheck", "skipstatecheck", "-force:$false", "ignorestate"):
+            self.assertNotIn(word, low)
+
+    # ---- 2. Undo takes VALUES from the file, nothing else ------------------------------------------------------------
+    def test_undo_never_uses_a_path_or_name_from_the_file(self):
+        text = self.ps1_text
+        self.assertIsNone(re.search(r"\$rec\.(path|name|id|guid|kind)\b", text))
+        self.assertIsNone(re.search(r"-(Path|Name|LiteralPath|Id|Guid|FeatureName)\s+\$rec\b", text))
+        for m in re.finditer(r"Remove-ItemProperty[^\n]*", text):
+            self.assertEqual(m.group(0).strip(), "Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop")
+        for sid in self.ids:
+            self.assertNotIn("$rec", self._undo(sid), sid)
+        reg = self._function("Restore-RegValue")
+        # The name and the key are checked against the built-in table before anything else is read or done.
+        self.assertLess(reg.index("Get-KnownRegRange $Path $Name"), reg.index("$rec = $script:State[$key]"))
+        self.assertLess(reg.index("Get-KnownRegRange $Path $Name"), reg.index("Remove-ItemProperty"))
+
+    def test_the_builtin_tables_match_the_code(self):
+        text = self.ps1_text.replace("\r\n", "\n")
+        rows = re.findall(r"^    '([^|\n]+)\|([^'\n]+)' = @\((-?\d+), (-?\d+)\)$", text, re.MULTILINE)
+        self.assertEqual(rows, [(p, n, str(lo), str(hi)) for p, n, lo, hi in app.WINDOWS_REG_VALUES])
+        # Every value Undo puts back is in the table, and every value in the table is put back by some setting.
+        pairs = set(re.findall(r"Restore-RegValue -Path '([^']+)' -Name '([^']+)'", text))
+        self.assertEqual(pairs, {(p, n) for p, n, _lo, _hi in app.WINDOWS_REG_VALUES})
+        for p, n in re.findall(r"Set-RegDword -Path '([^']+)' -Name '([^']+)'", text):
+            self.assertIn((p, n), pairs)
+        # The attack surface rules and audit subcategories of the tables are exactly the ones the settings use.
+        asr = re.search(r"\$script:KnownAsr = @\(\n(.*?)\n\)", text, re.DOTALL).group(1)
+        self.assertEqual(re.findall(r"'([0-9a-f-]{36})'", asr),
+                         [app.WINDOWS_ASR_LSASS, *app.WINDOWS_ASR_AUDIT_RULES, *app.WINDOWS_ASR_AUDIT_EXTRA_RULES])
+        audit = re.search(r"\$script:KnownAudit = @\(\n(.*?)\n\)", text, re.DOTALL).group(1)
+        self.assertEqual(re.findall(r"'(\{[0-9A-F-]{36}\})'", audit), [g for g, _n, _s, _f in app.WINDOWS_AUDIT_SUBCATEGORIES])
+        self.assertIn("$script:KnownFeatures = @('SMB1Protocol', 'MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')", text)
+        self.assertIn("$script:KnownMp = @('PUAProtection', 'MAPSReporting')", text)
+        for placeholder in app._ps_known_tables():
+            self.assertNotIn(placeholder, text)
+
+    def test_netbios_keys_are_accepted_only_when_they_match_the_interface_pattern(self):
+        regex = app.WINDOWS_NETBT_KEY_REGEX
+        self.assertEqual(regex, r"^HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters\\Interfaces\\Tcpip_\{[0-9A-Fa-f-]{36}\}$")
+        self.assertIn("$script:NetbtPattern = '" + regex + "'", self.ps1_text)
+        pattern = re.compile(regex)
+        base = "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters\\Interfaces\\Tcpip_"
+        guid = "{12345678-ABCD-abcd-0123-456789abcdef}"
+        self.assertTrue(pattern.match(base + guid))
+        for bad in (base + guid + "\\extra", base + "{1234}", base + "{12345678-ABCD-abcd-0123-456789abcdeg}",
+                    "HKLM:\\SOFTWARE\\Evil\\Tcpip_" + guid, "HKCU:" + base[5:] + guid, " " + base + guid,
+                    base.replace("Tcpip_", "tcpip2_") + guid):
+            self.assertIsNone(pattern.match(bad), bad)
+        net = self._undo("netbios")
+        self.assertIn("$ifaceKey -match $script:NetbtPattern", net)
+        self.assertIn("Restore-RegValue -Path $ifaceKey -Name 'NetbiosOptions'", net)
+        self.assertIn("'^reg\\|(.+)\\|NetbiosOptions$'", net)
+        reg = self._function("Get-KnownRegRange")
+        self.assertIn("($Name -eq 'NetbiosOptions') -and ($Path -match $script:NetbtPattern) -and ($Path -notmatch '[\\r\\n]')", reg)
+
+    def test_values_read_from_the_file_are_validated(self):
+        safe = self._function("ConvertTo-SafeInt")
+        for token in ("-isnot [int]", "-isnot [long]", "-lt $Min", "-gt $Max", "throw"):
+            self.assertIn(token, safe)
+        reg = self._function("Restore-RegValue")
+        for token in ("Get-RecordBool $rec.existed", "Get-RecordChoice $rec.type @('DWord', 'QWord', 'String', 'ExpandString')",
+                      "ConvertTo-SafeInt $rec.value $range[0] $range[1]", "[\\x20-\\x7E]{0,260}"):
+            self.assertIn(token, reg)
+        asr = self._function("Restore-AsrRule")
+        for token in ("$Id -notmatch $script:GuidPattern", "$script:KnownAsr -notcontains $Id",
+                      "ConvertTo-SafeInt $rec.action 0 6", "Get-RecordBool $rec.listed"):
+            self.assertIn(token, asr)
+        self.assertIn("ConvertTo-SafeInt $rec.value 0 2", self._function("Restore-DefenderValue"))
+        self.assertIn("$script:KnownMp -notcontains $Name", self._function("Restore-DefenderValue"))
+        fw = self._function("Restore-FirewallState")
+        self.assertIn("@('True', 'False', 'NotConfigured')", fw)
+        self.assertIn("@('Allow', 'Block', 'NotConfigured')", fw)
+        self.assertIn("$script:KnownAudit -notcontains $Guid", self._function("Restore-AuditSubcategory"))
+        feature = self._function("Restore-FeatureState")
+        self.assertIn("$script:KnownFeatures -notcontains $Name", feature)
+        self.assertIn("-notmatch '^[A-Za-z]{1,40}$'", feature)
+        self.assertIn("ConvertTo-SafeInt $rec.bytes", self._function("Restore-EventLogState"))
+        # The GUID pattern of the script is the same as the one used here, and it takes the ASR rules but nothing else.
+        m = re.search(r"\$script:GuidPattern = '([^']+)'", self.ps1_text)
+        self.assertEqual(m.group(1), "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+        guid_re = re.compile(m.group(1))
+        for rule in (app.WINDOWS_ASR_LSASS, *app.WINDOWS_ASR_AUDIT_RULES, *app.WINDOWS_ASR_AUDIT_EXTRA_RULES):
+            self.assertTrue(guid_re.match(rule))
+        for bad in ("", "9e6c4e1f", app.WINDOWS_ASR_LSASS + "x", "; calc", app.WINDOWS_ASR_LSASS.replace("9", "g", 1)):
+            self.assertIsNone(guid_re.match(bad), bad)
+
+    def test_unrecognised_records_are_reported_and_left_alone(self):
+        body = self._function("Test-StateEntries")
+        for token in ("Get-KnownRegRange $Matches[1] $Matches[2]", "$id -match $script:GuidPattern",
+                      "$script:KnownAsr -contains $id", "$script:KnownAudit -contains", "$script:KnownMp -contains",
+                      "$script:KnownFeatures -contains", "Write-Result 'WARN' 'Unrecognised record"):
+            self.assertIn(token, body)
+        self.assertNotIn("Remove-StateEntry", body)  # an unknown record is kept in the file, not silently deleted
+        self.assertIn("Test-StateEntries", self._start())
+
+    # ---- 3. Undo is honest ---------------------------------------------------------------------------------------
+    def test_undo_exits_non_zero_when_anything_was_not_put_back(self):
+        undo_end = app._WINDOWS_PS_END["Undo"]
+        self.assertIn("if (($script:CountWarn + $script:CountFail) -gt 0) { exit 1 }", undo_end)
+        self.assertLess(undo_end.index("[DONE]"), undo_end.index("{ exit 1 }"))
+        for mode in ("Apply", "Audit"):  # Setup mode (Apply) and Audit keep exit code 0
+            self.assertNotIn("exit", app._WINDOWS_PS_END[mode])
+        self.assertTrue(self.ps1_text.rstrip().endswith("exit 0"))
+        text = self.ps1_text.replace("\r\n", "\n")
+        i = text.index("{ exit 1 }")
+        self.assertLess(text.rindex("} elseif ($Mode -eq 'Undo') {", 0, i), i)
+        self.assertLess(i, text.index("} else {\n", i))
+        # The header and the end of Undo say so.
+        self.assertIn("for Undo, when any [WARN] or [FAIL] was logged", text)
+        self.assertIn("The exit code is 1.", undo_end)
+
+    def test_smb1_is_never_written_back_as_one(self):
+        reg = self._function("Restore-RegValue")
+        guard = "($Name -eq 'SMB1') -and (($kind -ne 'DWord') -or ($val -ne 0))"
+        self.assertIn(guard, reg)
+        self.assertLess(reg.index(guard), reg.index("New-ItemProperty"))
+        self.assertLess(reg.index(guard), reg.index("return 'not restored'"))
+        self.assertLess(reg.index(guard), reg.index("Test-Path -LiteralPath $Path"))
+        for line in self.ps1_text.replace("\r\n", "\n").split("\n"):
+            low = line.strip().lower()
+            if "smb1" in low and "-value 1" in low:
+                # Only ever text of a warning that gives the manual command, never a command of its own.
+                self.assertTrue(low.startswith("write-result 'warn'"), line)
+        self.assertNotRegex(self.ps1_text, r"(?m)^\s*(Set|New)-ItemProperty[^\n]*SMB1")
+        self.assertNotIn("'SMB1' -Value 1", self.ps1_text)
+        self.assertIn("-Name 'SMB1' -Value 0", self._branches("smb1")[0])
+        self.assertNotIn("New-ItemProperty", self._undo("smb1"))
+        self.assertIn("Restore-RegValue -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters' -Name 'SMB1'",
+                      self._undo("smb1"))
+        # A previous value of 0, or none at all, is put back like any other.
+        self.assertIn("Remove-ItemProperty", reg)
+
+    def test_a_record_that_could_not_be_put_back_is_kept(self):
+        for name in ("Restore-RegValue", "Restore-AsrRule", "Restore-DefenderValue", "Restore-AuditSubcategory",
+                     "Restore-FirewallState"):
+            with self.subTest(function=name):
+                body = self._function(name)
+                self.assertIn("return 'not restored'", body)
+                self.assertIn("run Undo again to retry", body)
+                last_catch = body.split("} catch {")[-1]
+                self.assertIn("Write-Result 'WARN'", last_catch)
+                self.assertNotIn("Remove-StateEntry", last_catch)  # the record stays
+                self.assertNotIn("throw", last_catch)  # and the function does not throw out of Undo
+        reg = self._function("Restore-RegValue")
+        self.assertIn("-ErrorAction Stop", reg)  # a failing removal is an error, not silently ignored
+        self.assertNotIn("SilentlyContinue", reg)
+        # The record is dropped only after the change was made AND read back.
+        done = reg.rindex("Remove-StateEntry $key")
+        self.assertGreater(done, reg.index("$result = 'removed ' + $Name"))
+        self.assertGreater(done, reg.index("$result = 'restored ' + $Name"))
+        self.assertGreater(reg.index("is still there after the removal"), reg.index("Remove-ItemProperty"))
+        self.assertGreater(reg.index("after it was put back"), reg.index("New-ItemProperty"))
+
+    def test_undo_summary_does_not_say_nothing_recorded_when_a_restore_failed(self):
+        summary = self._function("Write-UndoSummary")
+        self.assertIn("-ne 'not restored'", summary)
+        self.assertRegex(summary, r"elseif \(\$kept\.Count -eq 0\) \{\n\s+Write-Result 'SKIP' \$What 'nothing recorded")
+        audit = self._undo("audit")
+        self.assertIn("$r += Restore-AuditSubcategory $guid", audit)
+        self.assertEqual(audit.count("catch {"), 1)  # no inner handler that hides the failure
+        self.assertIn("could not be restored", self._function("Restore-AuditSubcategory"))
+        # A WARN line is always counted (and therefore makes the exit code 1).
+        self.assertIn("elseif ($Status -eq 'WARN') { $script:CountWarn++ }", self._function("Write-Result"))
+
+    def test_firewall_restore_reads_back_and_reports_what_it_really_did(self):
+        fw = self._function("Restore-FirewallState")
+        self.assertLess(fw.index("Set-NetFirewallProfile @splat"),
+                        fw.index("Get-NetFirewallProfile -Profile $n -PolicyStore PersistentStore"))
+        self.assertLess(fw.index("Get-NetFirewallProfile -Profile $n -PolicyStore PersistentStore"), fw.index("Remove-StateEntry $key"))
+        self.assertIn("throw ('read back after setting", fw)
+        self.assertIn("Write-Result 'WARN' ('Firewall profile ' + $n + ' only partly put back')", fw)
+        self.assertIn("NotConfigured, which cannot be set in the local store", fw)
+        for ret in ("return 'not restored'", "return 'no record'"):
+            self.assertIn(ret, fw)
+        # A profile whose parts were all NotConfigured is not reported as restored.
+        self.assertIn("if ($splat.Count -gt 1) { $done += ('profile ' + $n) } else { $kept++ }", fw)
+
+    def test_undo_summary_lists_what_it_cannot_revert(self):
+        notes = app._WINDOWS_PS_END["Undo"]
+        for token in ("SMBv1", "PowerShell 2.0", "Enable-WindowsOptionalFeature", "never written back as 1",
+                      "Security event log keeps its raised size", "never shrinks it",
+                      "already in the wanted state before Apply was never recorded", "auditpol /restore",
+                      "running Undo again retries it"):
+            with self.subTest(token=token):
+                self.assertIn(token, notes)
+        self.assertEqual(notes.count("[NOTE]"), 6)
+
+    # ---- 5. optional features ------------------------------------------------------------------------------------
+    def test_feature_state_is_read_again_and_each_feature_has_its_own_handler(self):
+        get = self._function("Get-FeatureState")
+        self.assertIn("[switch]$Fresh", get)
+        self.assertIn("$script:Features = $null", get)
+        self.assertEqual(self.ps1_text.count("Get-WindowsOptionalFeature -Online"), 1)
+        code = self._branches("ps2")[0]
+        loop = code[code.index("foreach ($name in"):]
+        self.assertLess(loop.index("try {"), loop.index("Get-FeatureState $name -Fresh:$fresh"))
+        self.assertLess(loop.index("Disable-WindowsOptionalFeature"), loop.index("} catch {"))
+        self.assertLess(loop.index("Save-FeatureState $name $state"), loop.index("Disable-WindowsOptionalFeature"))
+        self.assertIn("$after = Get-FeatureState $name -Fresh", loop)
+        # An error is judged by the state it left: a feature that is already off is not a failure.
+        catch = loop[loop.index("} catch {"):]
+        self.assertIn("$again = Get-FeatureState $name -Fresh", catch)
+        self.assertIn("$disabled += $name", catch)
+        self.assertIn("$failed += ($name + ': ' + $why)", catch)
+
+    def test_pending_feature_changes_need_a_restart_and_are_not_reported_as_off(self):
+        for sid in ("ps2", "smb1"):
+            with self.subTest(setting=sid):
+                code = self._branches(sid)[0]
+                self.assertIn("@('DisablePending', 'EnablePending') -contains", code)
+                self.assertRegex(code, r"Write-Result 'WARN' '[^']* needs a restart'")
+                self.assertIn("-Fresh", code)
+                audit = self._branches(sid)[1]
+                self.assertIn("DisablePending", audit)
+        code = self._branches("ps2")[0]
+        self.assertLess(code.index("needs a restart"), code.index("'already off'"))
+        self.assertLess(re.search(r"\$failed\.Count -gt 0\) \{\n\s+Write-Result 'FAIL'", code).start(), code.index("needs a restart"))
+        smb = self._branches("smb1")[0]
+        self.assertLess(smb.index("-contains $state"), smb.index("optional feature already off"))
+
+    # ---- 6. Audit mode ---------------------------------------------------------------------------------------------
+    def test_audit_mode_says_dism_may_write_its_own_logs(self):
+        text = self.ps1_text.replace("\r\n", "\n")
+        head = text.split("[CmdletBinding()]")[0]
+        self.assertIn("C:\\Windows\\Logs\\DISM", head)
+        self.assertIn("not a configuration change", head)
+        m = re.search(r"if \(\$Mode -eq 'Audit'\) \{\n    Write-Info 'Audit mode: nothing is changed[^\n]*\n"
+                      r"    Write-Info '[^\n]*DISM[^\n]*C:\\Windows\\Logs\\DISM[^\n]*not a configuration change\.'\n\} else \{", text)
+        self.assertIsNotNone(m)
+        # Still no write of any configuration in the Audit branches.
+        for sid, code in app._WINDOWS_PS_AUDIT.items():
+            self.assertIsNone(MUTATORS.search(code), sid)
+
+    def test_python_side_tables_are_consistent(self):
+        tables = app._ps_known_tables()
+        self.assertEqual(set(tables), {"@KNOWN_REG@", "@KNOWN_ASR@", "@KNOWN_AUDIT@", "@KNOWN_FEATURES@", "@KNOWN_MP@", "@NETBT_REGEX@"})
+        names = [(p, n) for p, n, _lo, _hi in app.WINDOWS_REG_VALUES]
+        self.assertEqual(len(names), len(set(names)))
+        for _p, _n, lo, hi in app.WINDOWS_REG_VALUES:
+            self.assertLessEqual(lo, hi)
+        self.assertEqual(app.WINDOWS_OPTIONAL_FEATURES, ("SMB1Protocol", "MicrosoftWindowsPowerShellV2Root", "MicrosoftWindowsPowerShellV2"))
+# ===== end hardening3: FIX-PS1 tests =====
 
 
 if __name__ == "__main__":
