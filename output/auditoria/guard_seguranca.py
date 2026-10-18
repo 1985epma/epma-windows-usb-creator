@@ -502,8 +502,18 @@ else:
                  "qualquer chamada que apague a unidade.")
     # hardening2: a opção "durante a instalação" (arquivo de respostas) só vale para o alvo Windows; qualquer outro
     # alvo é recusado ANTES de validar o nome do dispositivo, de gerar os arquivos e de tocar na unidade.
+    # A condição precisa citar during_setup E comparar o alvo com SEED_WINDOWS ("target != SEED_WINDOWS"): um `if`
+    # qualquer que mencione during_setup e lance um erro não prova que os outros alvos são recusados.
+    def _recusa_fora_do_windows(teste):
+        texto = ast.unparse(teste)
+        if "during_setup" not in texto or "SEED_WINDOWS" not in texto:
+            return False
+        return any(isinstance(c, ast.Compare) and ast.unparse(c.left) == "target"
+                   and isinstance(c.ops[0], ast.NotEq) and ast.unparse(c.comparators[0]) == "SEED_WINDOWS"
+                   for c in ast.walk(teste))
+
     cond_durante = [no.lineno for no in ast.walk(seed_fn)
-                    if isinstance(no, ast.If) and "during_setup" in ast.unparse(no.test)
+                    if isinstance(no, ast.If) and _recusa_fora_do_windows(no.test)
                     and any(isinstance(f, ast.Raise) for f in no.body)]
     if (cond_durante and "validate_device_name" in primeira_linha
             and min(cond_durante) < primeira_linha["validate_device_name"]):

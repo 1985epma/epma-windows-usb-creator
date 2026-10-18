@@ -16,7 +16,8 @@ from tests.helpers import TempDirTestCase, app
 from tests.test_fixes_gui import USB_DISK, GuiTestCase
 
 NEW_TEXTS = (
-    "Hardening seed", "Auto-install files", "Add hardening settings to the Windows installation (optional)",
+    "Hardening seed", "Auto-install files", "Second USB drive", "Hardening scripts",
+    "Hardening scripts and answer file", "More about this choice", "Add hardening settings to the Windows installation (optional)",
     "What does it change?", "Hide the list", "Install target:", "Ubuntu (autoinstall)", "Fedora / RHEL (kickstart)",
     "Debian (script + preseed)", "Create Seed Drive", "the hardening seed files",
     "Windows 11 and add the hardening files", "Seed drive created and verified",
@@ -34,17 +35,19 @@ NEW_TEXTS_WINDOWS = (
     "Windows 11 (run after install)", "Windows 11 (during setup, experimental)",
     "Run harden.cmd as administrator on a Windows 11 that is already installed; audit.cmd shows a report first, "
     "undo.cmd goes back.",
-    "EXPERIMENTAL, never tested on real Windows.",
+    "EXPERIMENTAL, never tested on real Windows. Plug this drive in BEFORE you start the Windows installer and "
+    "keep it in until after the first restart. Only 64-bit Intel/AMD (x64) PCs; on ARM use \"run after install\".",
     "the hardening seed files (experimental: includes an answer file for Windows Setup)",
     "The files were checked on the drive and it was ejected — you can unplug it now.",
     "The files were checked on the drive, but it could not be ejected automatically. Eject it from the file "
     "manager before unplugging.",
     "Windows 11 setup drive (experimental) created and verified",
     "Windows 11 hardening drive created and verified",
-    "EXPERIMENTAL: plug it in next to the Windows installer USB drive BEFORE Windows Setup starts; Setup then reads "
-    "the answer file (autounattend.xml) on it. An invalid answer file can stop an installation, and the scripts "
-    "were never run on real Windows: try it on a test machine first. harden.cmd, audit.cmd and undo.cmd are on "
-    "the drive as well.",
+    "EXPERIMENTAL: plug it in next to the Windows installer USB drive BEFORE you start the Windows installer, and "
+    "keep it in until after the first restart of the installation (the hardening runs at the end of Setup). Only "
+    "64-bit Intel/AMD (x64) PCs are covered; on an ARM PC use \"run after install\". If nothing was hardened, run "
+    "audit.cmd on this drive to see what is in effect; the log is {log}. An invalid answer file can stop an "
+    "installation, and the scripts were never run on real Windows: try it on a test machine first.",
     "On a Windows 11 that is already installed, open this drive and run audit.cmd (shows a report, changes "
     "nothing), harden.cmd (as administrator) or undo.cmd (goes back). The scripts were never run on real Windows: "
     "try them on a test machine first.",
@@ -100,21 +103,33 @@ class SeedCardTableTests(unittest.TestCase):
                 self.assertTrue(note)
                 self.assertIn(note, app.PT_BR.values())
 
-    def test_the_during_setup_note_shows_the_first_three_lines_of_the_engine_warning(self):
+    def test_the_during_setup_note_is_short_and_has_the_facts_that_matter(self):
+        note = app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)
+        self.assertEqual(note.count("EXPERIMENTAL"), 1)
+        self.assertIn("BEFORE you start the Windows installer", note)
+        self.assertIn("until after the first restart", note)
+        self.assertIn("64-bit Intel/AMD (x64)", note)
+        self.assertIn("run after install", note)  # what to use on ARM: the radio's own wording
+        self.assertLessEqual(len(note), 240)
+        self.assertNotRegex(note.lower(), r"\b(cis|stig|nist|complian|certif)")
+
+    def test_the_full_description_of_the_during_setup_choice_comes_from_the_engine(self):
         with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
                                return_value=FAKE_DURING_SETUP):
-            note = app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)
-        self.assertEqual(note, " ".join(FAKE_DURING_SETUP[:3]))
-        self.assertNotIn("fourth line", note)
-
-    def test_the_during_setup_note_always_says_experimental_and_accepts_one_text(self):
+            text = app.App._seed_experimental_details()
+        self.assertEqual(text.splitlines(), ["• " + line for line in FAKE_DURING_SETUP])
         with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                               return_value="Adds an answer file.\nIt may stop Setup.\n"):
-            note = app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)
-        self.assertTrue(note.startswith("EXPERIMENTAL"), note)
-        self.assertIn("Adds an answer file. It may stop Setup.", note)
-        with mock.patch.object(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP):
-            self.assertEqual(app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP).count("EXPERIMENTAL"), 1)
+                               return_value="Adds an answer file.\n\nIt may stop Setup.\n"):
+            self.assertEqual(app.App._seed_experimental_details(), "• Adds an answer file.\n• It may stop Setup.")
+
+    def test_the_step_heading_follows_the_choice(self):
+        headings = {choice: app.App.seed_step_heading(choice) for choice in app.SEED_CHOICES}
+        self.assertEqual({headings[c] for c in (app.SEED_UBUNTU, app.SEED_FEDORA, app.SEED_DEBIAN)},
+                         {"Auto-install files"})
+        self.assertEqual(headings[app.SEED_WINDOWS], "Hardening scripts")
+        self.assertEqual(headings[app.SEED_CHOICE_WINDOWS_SETUP], "Hardening scripts and answer file")
+        for text in set(headings.values()):
+            self.assertIn(text, app.PT_BR)
 
     def test_the_run_after_install_note_is_the_one_fixed_by_the_design(self):
         self.assertEqual(app.App.seed_target_note(None, app.SEED_WINDOWS),
@@ -129,7 +144,13 @@ class SeedCardTableTests(unittest.TestCase):
             self.assertIn(name, after[1])
         self.assertIn("never run on real Windows", after[1])
         self.assertNotIn("EXPERIMENTAL", after[1] + after[0])
-        self.assertIn("next to the Windows installer USB drive BEFORE Windows Setup starts", setup[1])
+        self.assertIn("BEFORE you start the Windows installer", setup[1])
+        self.assertIn("until after the first restart of the installation", setup[1])
+        self.assertIn("Only 64-bit Intel/AMD (x64) PCs are covered", setup[1])
+        self.assertIn("on an ARM PC use \"run after install\"", setup[1])
+        self.assertIn("run audit.cmd on this drive", setup[1])
+        self.assertIn("C:\\Windows\\Temp\\epma-hardening.log", setup[1])
+        self.assertNotIn("{log}", setup[1])
         self.assertIn("EXPERIMENTAL", setup[1])
         self.assertIn("experimental", setup[0])
         self.assertIn("never run on real Windows", setup[1])
@@ -153,7 +174,7 @@ class HardeningLayoutTests(GuiTestCase):
         self.assertEqual(list(win.cards), list(app.CARD_ORDER))
         self.assertEqual(win.card_titles[app.CARD_SEED], "Hardening seed")
         seed = win.cards[app.CARD_SEED]
-        self.assertEqual(seed._subtitle, "Auto-install files")
+        self.assertEqual(seed._subtitle, "Second USB drive")  # true for all five choices (not only "auto-install")
         self.assertEqual([int(win.cards[k].grid_info()["column"]) for k in app.CARD_ORDER], [0, 1, 2, 3, 4])
 
     def test_the_five_columns_are_equal_and_the_gaps_are_the_same(self):
@@ -259,12 +280,12 @@ class HardeningLayoutTests(GuiTestCase):
         texts = " ".join(str(w.cget("text")) for w in panel.winfo_children() if w.winfo_class() == "TLabel")
         self.assertIn("SECOND, small USB drive (not the installer)", texts)
         self.assertIn("ERASES it", texts)
-        self.assertIn("No image file is needed", texts)
+        self.assertIn("No image is needed", texts)
         self.assertEqual(win.seed_target_var.get(), app.SEED_UBUNTU)
         self.assertEqual(list(win.seed_radios), list(app.SEED_CHOICES))
         self.assertEqual([str(r.cget("text")) for r in win.seed_radios.values()], list(RADIO_TEXTS))
         self.assertIn("Windows 11", texts)
-        self.assertIn("never run on a real Windows computer", texts)
+        self.assertNotIn("never run on a real Windows", texts, "the caveat lives in the note and the result texts")
         for choice, radio in win.seed_radios.items():
             self.assertEqual(radio.winfo_class(), "TRadiobutton")
             self.assertEqual(self.state(radio), "normal", "every choice is equally usable")
@@ -298,7 +319,8 @@ class HardeningLayoutTests(GuiTestCase):
             if radio.master not in rows:
                 rows.append(radio.master)
         self.assertEqual(len(rows), 2, "two rows")
-        self.assertEqual([len(r.winfo_children()) for r in rows], [3, 2])
+        self.assertEqual([len([w for w in r.winfo_children() if w in win.seed_radios.values()]) for r in rows],
+                         [3, 2])
         for row in rows:
             self.assertIs(row.master, area)
         self.assertLessEqual(area.winfo_reqwidth(), 780, "the radio area asks for more than the window is wide")
@@ -401,7 +423,21 @@ class SeedImageStepTests(GuiTestCase, TempDirTestCase):
             self.assertEqual(widget.winfo_manager(), "", widget)
         self.assertEqual(str(win.step_headings[2].label.cget("text")), "Auto-install files")
         self.assertEqual(win.step_headings[2].title, "Auto-install files")
+        for choice, heading in ((app.SEED_WINDOWS, "Hardening scripts"),
+                                (app.SEED_CHOICE_WINDOWS_SETUP, "Hardening scripts and answer file"),
+                                (app.SEED_FEDORA, "Auto-install files")):
+            win.seed_radios[choice].invoke()  # the heading says what the chosen drive carries
+            self.assertEqual(str(win.step_headings[2].label.cget("text")), heading)
+            self.assertEqual(win.step_headings[2].title, heading)
+        win.seed_radios[app.SEED_WINDOWS].invoke()
         self.assertEqual(win.create_btn.cget("text"), "Create Seed Drive")
+        win.select_card(app.CARD_WINDOWS)  # leaving the card: "Image"; coming back: the chosen drive's heading
+        self.assertEqual(win.step_headings[2].title, "Image")
+        win.select_card(app.CARD_SEED)
+        self.assertEqual(win.step_headings[2].title, "Hardening scripts")
+        win.seed_radios[app.SEED_UBUNTU].invoke()
+        win.select_card(app.CARD_WINDOWS)
+        win.select_card(app.CARD_SEED)
         win.select_card(app.CARD_LINUX)
         self.assertEqual(self.order(), before)
         self.assertEqual(win.step_headings[2].title, "Image")
@@ -1002,9 +1038,10 @@ class WriteFlowTests(GuiTestCase):
         panel = win.success_panel
         self.assertTrue(panel.shown)
         self.assertTrue(panel.title_text.startswith("Windows 11 setup drive (experimental) created and verified"))
-        self.assertIn("next to the Windows installer USB drive BEFORE Windows Setup starts", panel.message_text)
+        self.assertIn("BEFORE you start the Windows installer", panel.message_text)
         self.assertIn("EXPERIMENTAL", panel.message_text)
-        self.assertIn("autounattend.xml", panel.message_text)
+        self.assertIn("64-bit Intel/AMD (x64)", panel.message_text)
+        self.assertIn("epma-hardening.log", panel.message_text)
 
     def test_success_panel_for_a_windows_drive_that_could_not_be_ejected(self):
         win = self.win
@@ -1081,6 +1118,73 @@ class PortugueseSeedLayoutTests(GuiTestCase):
         self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP)
 
 
+class SeedCardHeightTests(GuiTestCase):
+    """The Hardening seed card must not push the Create button off a small screen (1440x900 laptops).
+
+    Real (unmocked) panel and notes, the engine's own description of the during-setup mode, 780 px wide. The
+    limit was measured on the development machine (macOS, linespace 16 px); on a platform whose default font is
+    taller the limit grows in proportion, so a different font cannot fail this test by itself.
+    """
+
+    LIMIT = 760           # measured here: 738 (EN) and 754 (PT), the worst case being the longest note
+    REFERENCE_LINESPACE = 16
+    LANGUAGE = "en"
+
+    def setUp(self):
+        patcher = mock.patch.object(app, "ACTIVE_LANGUAGE", self.LANGUAGE)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        super().setUp()
+
+    @staticmethod
+    def linespace():
+        return app.tkfont.nametofont("TkDefaultFont").metrics("linespace")
+
+    def limit(self):
+        return self.LIMIT * max(1.0, self.linespace() / self.REFERENCE_LINESPACE)
+
+    def test_every_choice_keeps_the_requested_window_height_within_the_limit(self):
+        win = self.win
+        win.geometry("780x700")
+        win.select_card(app.CARD_SEED)
+        for choice in app.SEED_CHOICES:
+            with self.subTest(choice=choice, language=self.LANGUAGE):
+                win.seed_radios[choice].invoke()
+                win.update()
+                self.assertLessEqual(win.winfo_reqheight(), self.limit(),
+                                     f"{choice}: the window asks for {win.winfo_reqheight()} px")
+                note_lines = win.seed_note.winfo_reqheight() / self.linespace()
+                self.assertLessEqual(note_lines, 2.5, "at most two short note lines")
+                self.assertEqual(win._panel_holder.winfo_reqheight(), win.panels[app.CARD_SEED].winfo_reqheight())
+                self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP)
+
+    def test_the_link_to_the_full_text_is_only_on_the_experimental_choice_and_opens_the_engine_text(self):
+        win = self.win
+        win.geometry("780x700")
+        win.select_card(app.CARD_SEED)
+        for choice in app.SEED_CHOICES:
+            win.seed_radios[choice].invoke()
+            self.assertEqual(bool(win.seed_more.winfo_manager()), choice == app.SEED_CHOICE_WINDOWS_SETUP, choice)
+        win.update()
+        before = win.winfo_reqheight()
+        win.seed_more.set_open(True)
+        win.update()
+        shown = str(win.seed_more_text.cget("text"))
+        self.assertTrue(shown.startswith("• "))
+        self.assertEqual(shown, app.App._seed_experimental_details())
+        self.assertGreater(win.winfo_reqheight(), before)  # the window grows only while the text is open
+        self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP, "the open link text fits too")
+        win.seed_radios[app.SEED_UBUNTU].invoke()  # another choice: the text and its link are gone again
+        win.update()
+        self.assertFalse(win.seed_more.is_open)
+        self.assertEqual(win.seed_more_text.winfo_manager(), "")
+        self.assertEqual(win.seed_more.winfo_manager(), "")
+
+
+class SeedCardHeightPortugueseTests(SeedCardHeightTests):
+    LANGUAGE = "pt"
+
+
 class PortugueseWindowTests(unittest.TestCase):
     def test_every_new_text_has_a_different_portuguese_text(self):
         for text in NEW_TEXTS:
@@ -1115,6 +1219,20 @@ class PortugueseWindowTests(unittest.TestCase):
                                    return_value=["Line one."]):
                 self.assertTrue(app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP).startswith(
                     "EXPERIMENTAL, nunca testado"))
+
+    def test_the_portuguese_name_of_the_run_later_mode_is_the_same_everywhere_in_the_window(self):
+        name = "executar depois de instalar"
+        with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
+            texts = [t for _k, t in app.App.seed_target_texts()]
+            texts += [app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)]
+            texts += list(app.App._windows_seed_success_texts(True, True))
+        self.assertIn(name, texts[3])
+        self.assertIn(name, texts[5])
+        self.assertIn(name, texts[-1])
+        for text in texts:
+            self.assertNotIn("após a instalação", text)
+            self.assertNotIn("executar após", text)
+            self.assertNotIn("rodar depois", text)
 
     def test_the_confirmation_wording_is_translated(self):
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
