@@ -194,10 +194,10 @@ class SetupCompleteTests(HardeningWindowsBase):
         # same-USB mode: the script and SetupComplete.cmd come out of one call
         script = self.files[PS1_PATH]
         self.assertEqual(self.want(), hashlib.sha256(script).hexdigest())
-        # seed drive: the file next to it is the same text as the same-USB SetupComplete.cmd
-        _label, seed = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, during_setup=True)
-        self.assertEqual(seed["SetupComplete.cmd"], self.cmd_bytes)
+        # seed drive: harden.ps1 is the same script, and the seed drive has no SetupComplete.cmd
+        _label, seed = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE)
         self.assertEqual(hashlib.sha256(seed["harden.ps1"]).hexdigest(), self.want())
+        self.assertNotIn("SetupComplete.cmd", seed)
 
     def test_none_profile_and_empty_script_are_refused(self):
         with self.assertRaises(ValueError):

@@ -622,19 +622,6 @@ PT_BR = {
     "Opt-in (-DisableLegacyNetwork, never applied by default): turn off WPAD proxy auto-discovery for WinHTTP -- risk: A network that hands out its proxy only through WPAD (some offices and schools) no longer gives it to Windows services and apps that use WinHTTP, so they can lose internet access until a proxy is set by hand. The WinHTTP auto-proxy service itself is left running.": "Opcional (-DisableLegacyNetwork, nunca aplicado por padrão): desativar a descoberta automática de proxy WPAD para o WinHTTP -- risco: Uma rede que só informa o proxy pelo WPAD (alguns escritórios e escolas) deixa de entregá-lo aos serviços e aplicativos do Windows que usam o WinHTTP, que podem ficar sem internet até que um proxy seja configurado manualmente. O próprio serviço de proxy automático do WinHTTP continua em execução.",
     # ===== end hardening2: windows script =====
     # ===== end hardening: windows content =====
-    # ===== hardening2: windows xml =====
-    # One entry per line of describe_windows_seed_during_setup().
-    "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.": "EXPERIMENTAL: este modo não foi testado em uma instalação real do Windows. Se algo parecer errado, use o modo \"executar depois de instalar\".",
-    "The seed drive carries an answer file (autounattend.xml), SetupComplete.cmd and harden.ps1. Windows Setup looks for the answer file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start Setup.": "O pendrive do kit leva um arquivo de resposta (autounattend.xml), o SetupComplete.cmd e o harden.ps1. A instalação do Windows procura o arquivo de resposta na raiz das unidades removíveis; por isso, conecte o pendrive do kit ao lado do pendrive instalador do Windows antes de começar.",
-    "The answer file adds one step, early on the first start of the new system (the specialize pass): it only copies files. It looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, copies harden.ps1 and SetupComplete.cmd into C:\\Windows\\Setup\\Scripts. A SetupComplete.cmd that already exists there is never overwritten.": "O arquivo de resposta adiciona uma etapa, logo no primeiro início do sistema novo (a fase specialize): ela só copia arquivos. Procura o arquivo EPMA-SEED.txt nas unidades D: a Z: e, onde o encontrar, copia o harden.ps1 e o SetupComplete.cmd para C:\\Windows\\Setup\\Scripts. Um SetupComplete.cmd que já exista ali nunca é sobrescrito.",
-    "Windows runs SetupComplete.cmd at the very end of Setup. It checks the SHA-256 of the harden.ps1 next to it and, if it matches, runs harden.ps1 in Apply mode and writes a log to C:\\Windows\\Temp\\epma-hardening.log. If it does not match, nothing is hardened.": "O Windows executa o SetupComplete.cmd no fim da instalação. Ele confere o SHA-256 do harden.ps1 que está ao lado dele e, se coincidir, executa o harden.ps1 no modo Apply e grava um log em C:\\Windows\\Temp\\epma-hardening.log. Se não coincidir, nada é reforçado.",
-    "The seed drive must be plugged in before Setup starts and still there at the first restart. After the first screens of the new Windows (region, keyboard, network) appear it can be unplugged. If it is gone earlier, nothing is hardened and the installation goes on normally.": "O pendrive do kit precisa estar conectado antes de a instalação começar e ainda presente na primeira reinicialização. Depois que as primeiras telas do novo Windows (região, teclado, rede) aparecerem, ele pode ser retirado. Se tiver sido retirado antes, nada é reforçado e a instalação continua normalmente.",
-    "The SHA-256 check only protects against a harden.ps1 that does not match this SetupComplete.cmd. It does not authenticate the drive: Setup trusts the first drive from D: to Z: that carries EPMA-SEED.txt, so use only a seed drive that you made yourself.": "A conferência do SHA-256 só protege contra um harden.ps1 que não corresponde a este SetupComplete.cmd. Ela não autentica o pendrive: a instalação confia na primeira unidade de D: a Z: que tenha o EPMA-SEED.txt; por isso, use apenas um pendrive do kit que você mesmo criou.",
-    "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.": "Ele não escolhe nem apaga um disco, não define chave de produto, não aceita termos de licença, não cria contas, não define idioma nem região, não ignora as verificações de hardware, não baixa nada e não reinicia o PC. A instalação continua interativa.",
-    "If no drive has the marker file, nothing happens and Setup continues as usual.": "Se nenhuma unidade tiver o arquivo marcador, nada acontece e a instalação continua como de costume.",
-    "If Setup stops with \"Windows could not parse or process the unattended answer file\", unplug the seed drive and start the installation again from the beginning (Setup keeps a copy of the answer file), then use harden.cmd after installing.": "Se a instalação parar com \"Windows could not parse or process the unattended answer file\" (o Windows não conseguiu analisar ou processar o arquivo de resposta), retire o pendrive do kit e recomece a instalação desde o início (a instalação guarda uma cópia do arquivo de resposta); depois use o harden.cmd após instalar.",
-    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC, inclusive PCs ARM64, o arquivo de resposta não faz nada: use o modo \"executar depois de instalar\".",
-    # ===== end hardening2: windows xml =====
 }
 
 
@@ -7071,133 +7058,6 @@ def hardening_files_windows(profile):
 # ===== end hardening: windows content =====
 
 
-# ===== hardening2: windows xml =====
-# The answer file (autounattend.xml) of the EXPERIMENTAL "during setup" seed drive. It lives on a SECOND small USB
-# next to the Windows installer USB: Windows Setup looks for autounattend.xml on the root of removable drives.
-#
-# Design: the smallest file that can work, and nothing that could change how Setup behaves.
-# * ONE pass, `specialize`, ONE component, Microsoft-Windows-Deployment, TWO RunSynchronousCommand. Every other
-#   pass and setting is absent on purpose, so Windows Setup stays fully interactive (disk, language, licence,
-#   account). No disk, product key, licence, account, locale, autologon, hardware-check or restart setting is declared.
-# * The commands only STAGE files, with plain cmd and NO PowerShell: RunSynchronous blocks Setup with no timeout, and
-#   the specialize pass is too early for DISM, Defender and the firewall cmdlets (services and servicing are not ready
-#   yet). It copies harden.ps1 and SetupComplete.cmd from the seed drive into %SystemRoot%\Setup\Scripts. Windows runs
-#   %WINDIR%\Setup\Scripts\SetupComplete.cmd at the END of Setup, where the full hardening runs at the proven point (the
-#   same one the same-USB mode uses), so the seed drive does not have to be plugged in at that moment. An existing
-#   SetupComplete.cmd is never overwritten (`if not exist`): then only harden.ps1 is staged and the existing file wins.
-# * The same command works whatever drive letter the seed drive gets: Setup caches the answer file and runs the
-#   specialize pass on the first start of the new system, when the letters can differ from the ones seen in Setup.
-#   So the command looks for the marker file on the drives D: to Z: and only acts where it finds it (first match).
-# * Path is a command line, not a batch file: nothing is doubled. It is handed to cmd.exe, which is also what makes
-#   `for` and `if exist` available. The text after `/c` starts with `(`, not with a quote, so cmd does not strip any
-#   quote character (it only strips when the first character after /c is a quote). `%d` is the single-percent loop
-#   variable of the command line (a batch file would need `%%d`); it holds `D:` ... `Z:` (with the colon), so
-#   the text never contains `%d:`, which cmd could read as the substring/replace syntax of a variable. Every `if` that
-#   is followed by more commands is wrapped in parentheses (`if c a & b` would make b conditional). The only
-#   character that XML must escape is `&` (written `&amp;` in the file; a parser hands the plain `&` back, and a
-#   test re-reads it).
-# * `exit 0` after the staging (stops the search: the first drive with the marker wins) and `exit 0` after the loop
-#   (nothing found): the exit code of this step is always 0, so a missing seed or a failed copy never makes the
-#   installation fail. Nothing restarts, shuts down or downloads anything.
-# * amd64 only. UNVERIFIED: a processorArchitecture="arm64" component of the same name is probably right for
-#   Windows 11 on ARM, but it could not be confirmed offline, so it is left out: those PCs simply skip this step
-#   (use the "after install" mode there).
-# * UNVERIFIED (no Windows, no ADK schema and no web access where this was written; never run on real Windows):
-#   (1) that Setup accepts an answer file with only a specialize pass and stays interactive (published samples and
-#   common practice say yes); (2) that a removable drive already has a letter when the specialize pass runs, i.e.
-#   that the seed drive must still be plugged in at the first restart; (3) that Setup does not expand `%d` itself
-#   before the command runs, and that cmd (command-line mode) leaves the undefined `%d` alone while it expands
-#   `%SystemRoot%` later in the same line; (4) that `if exist` on an empty card reader or an unready drive is
-#   silent (cmd normally is); (5) the order Order/Path/Description (taken from published Microsoft samples) and whether
-#   a non-zero exit would stop Setup (not relied on: the step always exits 0); (6) that Windows runs a
-#   SetupComplete.cmd that was staged this way (it is the documented location and file name; the same-USB mode
-#   relies on the same fact).
-WINDOWS_SEED_ANSWER_FILE = "autounattend.xml"
-WINDOWS_SEED_MARKER = "EPMA-SEED.txt"  # root of the seed drive; the answer file acts only where it finds this
-WINDOWS_SEED_PS1_FILE = "harden.ps1"  # root of the seed drive; staged next to SetupComplete.cmd
-WINDOWS_SEED_SETUPCOMPLETE_FILE = "SetupComplete.cmd"  # root of the seed drive; staged unless one already exists
-WINDOWS_SEED_STAGE_DIR = "%SystemRoot%\\Setup\\Scripts"  # where Windows looks for SetupComplete.cmd
-WINDOWS_SEED_DRIVE_LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ"  # C: is the installed system; A: and B: are floppy letters
-WINDOWS_SEED_PATH_MAX = 259  # documented limit of the Path element of RunSynchronousCommand
-WINDOWS_SEED_STEP_TEXTS = (
-    "EPMA USB CREATOR: copy harden.ps1 from the seed drive, if one is plugged in",
-    "EPMA USB CREATOR: copy SetupComplete.cmd from the seed drive, unless one exists",
-)
-_WINDOWS_SEED_FOR = (
-    "cmd /c (for %d in (" + " ".join(c + ":" for c in WINDOWS_SEED_DRIVE_LETTERS) + ") do if exist %d\\" + WINDOWS_SEED_MARKER
-    + " ({body} & exit 0)) & exit 0"
-)
-# Two commands, run one after the other, because the whole drive search does not fit twice into one Path (259).
-WINDOWS_SEED_COMMANDS = (
-    _WINDOWS_SEED_FOR.replace("{body}", "md " + WINDOWS_SEED_STAGE_DIR + " & copy /y %d\\" + WINDOWS_SEED_PS1_FILE
-                              + " " + WINDOWS_SEED_STAGE_DIR + "\\"),
-    _WINDOWS_SEED_FOR.replace("{body}", "(if not exist " + WINDOWS_SEED_STAGE_DIR + "\\" + WINDOWS_SEED_SETUPCOMPLETE_FILE
-                              + " copy %d\\" + WINDOWS_SEED_SETUPCOMPLETE_FILE + " " + WINDOWS_SEED_STAGE_DIR + "\\)"),
-)
-WINDOWS_SEED_NAMESPACE = "urn:schemas-microsoft-com:unattend"
-
-
-def windows_seed_autounattend(profile):
-    """The autounattend.xml of the EXPERIMENTAL "during setup" Windows seed drive, as bytes.
-
-    UTF-8 (ASCII only) with an XML declaration, CRLF line ends, deterministic. Only the specialize pass is declared
-    and its two commands only copy harden.ps1 and SetupComplete.cmd (see the block comment above). Empty bytes for
-    HARDENING_NONE; an unknown profile raises ValueError.
-    """
-    if not _windows_hardening_check(profile):
-        return b""
-    for command in WINDOWS_SEED_COMMANDS:
-        if len(command) > WINDOWS_SEED_PATH_MAX:  # a constant today; the check keeps a later edit honest
-            raise ValueError("a seed answer file command is longer than the documented Path limit")
-    steps = []
-    for order, (command, text) in enumerate(zip(WINDOWS_SEED_COMMANDS, WINDOWS_SEED_STEP_TEXTS, strict=True), 1):
-        steps += [
-            '        <RunSynchronousCommand wcm:action="add">',
-            "          <Order>" + str(order) + "</Order>",
-            "          <Path>" + command.replace("&", "&amp;") + "</Path>",
-            "          <Description>" + text + "</Description>",
-            "        </RunSynchronousCommand>",
-        ]
-    lines = (
-        '<?xml version="1.0" encoding="utf-8"?>',
-        '<unattend xmlns="' + WINDOWS_SEED_NAMESPACE + '">',
-        '  <settings pass="specialize">',
-        '    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64"'
-        ' publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"'
-        ' xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"'
-        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
-        "      <RunSynchronous>",
-        *steps,
-        "      </RunSynchronous>",
-        "    </component>",
-        "  </settings>",
-        "</unattend>",
-    )
-    return ("\r\n".join(lines) + "\r\n").encode("ascii")
-
-
-def describe_windows_seed_during_setup():
-    """Plain English lines (ASCII) for the GUI and the help: what the EXPERIMENTAL "during setup" mode does and does not do.
-
-    Every line has an entry in PT_BR (the GUI shows them through _()).
-    """
-    return [
-        "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.",
-        "The seed drive carries an answer file (autounattend.xml), SetupComplete.cmd and harden.ps1. Windows Setup looks for the answer file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start Setup.",
-        "The answer file adds one step, early on the first start of the new system (the specialize pass): it only copies files. It looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, copies harden.ps1 and SetupComplete.cmd into C:\\Windows\\Setup\\Scripts. A SetupComplete.cmd that already exists there is never overwritten.",
-        "Windows runs SetupComplete.cmd at the very end of Setup. It checks the SHA-256 of the harden.ps1 next to it and, if it matches, runs harden.ps1 in Apply mode and writes a log to C:\\Windows\\Temp\\epma-hardening.log. If it does not match, nothing is hardened.",
-        "The seed drive must be plugged in before Setup starts and still there at the first restart. After the first screens of the new Windows (region, keyboard, network) appear it can be unplugged. If it is gone earlier, nothing is hardened and the installation goes on normally.",
-        "The SHA-256 check only protects against a harden.ps1 that does not match this SetupComplete.cmd. It does not authenticate the drive: Setup trusts the first drive from D: to Z: that carries EPMA-SEED.txt, so use only a seed drive that you made yourself.",
-        "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.",
-        "If no drive has the marker file, nothing happens and Setup continues as usual.",
-        "If Setup stops with \"Windows could not parse or process the unattended answer file\", unplug the seed drive and start the installation again from the beginning (Setup keeps a copy of the answer file), then use harden.cmd after installing.",
-        "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.",
-    ]
-# ===== end hardening2: windows xml =====
-
-
-
-
 # ===== hardening: seed content =====
 # The files of the "seed drive": a small second USB that is plugged in next to a Linux installer USB.
 # Nothing here selects a disk, creates an account or stores a secret: storage, accounts and the final
@@ -7485,17 +7345,16 @@ def _seed_readme(target):
     return "\n".join(out) + "\n"
 
 
-def hardening_files_seed(target, profile, during_setup=False):
+def hardening_files_seed(target, profile):
     """(FAT32 volume label, {relative_path: bytes}) of the seed drive for `target`.
 
     target: SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN or SEED_WINDOWS. profile: HARDENING_BASELINE (HARDENING_NONE
     has no files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
     never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile).
-    during_setup only matters for SEED_WINDOWS (EXPERIMENTAL answer file for Windows Setup); the three
-    Linux targets ignore it."""
+    SEED_WINDOWS is the set of the Windows seed drive (harden.cmd, audit.cmd, undo.cmd, harden.ps1, README.txt)."""
     _seed_check_args(target, profile)
     if target == SEED_WINDOWS:
-        return _windows_seed_files(profile, bool(during_setup))
+        return _windows_seed_files(profile)
     text = linux_hardening_script(profile)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("The hardening script is empty")
@@ -7515,13 +7374,10 @@ def hardening_files_seed(target, profile, during_setup=False):
 
 # ===== hardening2: win-seed =====
 # The Windows 11 seed drive: a second small USB with harden.cmd / audit.cmd / undo.cmd (double-click launchers that
-# ask for administrator rights), harden.ps1 (windows_hardening_ps1) and a README. With during_setup=True (EXPERIMENTAL)
-# it also carries autounattend.xml (windows_seed_autounattend), SetupComplete.cmd (the same file as the same-USB mode,
-# the answer file stages it) and a marker file the answer file looks for. Nothing
+# ask for administrator rights), harden.ps1 (windows_hardening_ps1) and a README. Exactly these five files. Nothing
 # here selects a disk, creates an account or stores a secret. Output is deterministic: same input, same bytes.
 SEED_WINDOWS_LABEL = "EPMA-SEED"
 SEED_LABELS[SEED_WINDOWS] = SEED_WINDOWS_LABEL
-SEED_WINDOWS_MARKER = "EPMA-SEED.txt"
 SEED_WINDOWS_README_WIDTH = 76
 SEED_WINDOWS_LOG_SHOWN = "C:\\Windows\\Temp\\epma-hardening.log"  # the log of harden.ps1, as shown to the user
 # (file name, harden.ps1 -Mode, asks "Continue? [y/N]" first, lines echoed before anything happens)
@@ -7620,7 +7476,7 @@ def _windows_seed_launcher(name, mode, confirm, banner):
     return ("\r\n".join(lines) + "\r\n").encode("ascii")
 
 
-def _windows_seed_readme(profile, during_setup):
+def _windows_seed_readme(profile):
     """README.txt of the Windows seed drive: ASCII, CRLF (Notepad), lines of at most 76 characters."""
     import textwrap
     out = []
@@ -7644,7 +7500,7 @@ def _windows_seed_readme(profile, during_setup):
          "double-click launchers that apply a small set of recommended security settings to "
          "Windows 11. It is a SECOND small USB. It is NOT a Windows installer and it does not "
          "boot by itself. Nothing is installed and nothing is downloaded.")
-    heading("Way 1 (recommended): run it after Windows is installed")
+    heading("How to use it: run it after Windows is installed")
     for n, text in enumerate((
             "Install Windows 11 as usual, then sign in with an administrator account.",
             "Plug this drive in and open it in File Explorer.",
@@ -7707,51 +7563,10 @@ def _windows_seed_readme(profile, during_setup):
             "with administrator rights when you use a launcher. Keep it with you.",
     ):
         para(text, "- ", "  ")
-    if during_setup:
-        heading("EXPERIMENTAL: apply it while Windows is being installed")
-        para("This drive also holds an answer file, autounattend.xml, a SetupComplete.cmd and a "
-             "small marker file, " + SEED_WINDOWS_MARKER + " (the answer file looks for it to "
-             "find the letter of this drive: do not rename or remove it). This way of using the "
-             "drive is EXPERIMENTAL and has not been tried by its authors on a real Windows PC. "
-             "Way 1 above is the safer path.")
-        blank()
-        for n, text in enumerate((
-                "Plug this drive in next to the Windows installer USB BEFORE you start Setup. "
-                "It must still be plugged in at the first restart of Setup. After the first "
-                "screens of the new Windows (region, keyboard, network) appear you can unplug "
-                "it: it is not needed at the end of Setup.",
-                "Start Windows Setup from the installer USB as usual. Setup still asks for the "
-                "language, the disk, the edition and your account, as usual.",
-                "Early on the first start of the new system (the specialize phase), the answer "
-                "file only copies harden.ps1 and SetupComplete.cmd from this drive into "
-                "C:\\Windows\\Setup\\Scripts. It does not run PowerShell and it never overwrites "
-                "a SetupComplete.cmd that is already there.",
-                "At the very end of Setup, Windows runs SetupComplete.cmd. It checks the SHA-256 "
-                "of the harden.ps1 next to it and only then runs it in Apply mode. It appends "
-                "to the log " + SEED_WINDOWS_LOG_SHOWN + " ([SKIP] lines say why nothing ran).",
-                "Afterwards, run audit.cmd to see what is in effect.",
-        ), 1):
-            para(text, f"{n}. ")
-        blank()
-        para("Trust: the answer file and SetupComplete.cmd trust any drive that carries "
-             + SEED_WINDOWS_MARKER + " on its root (the first match from D: to Z:). The SHA-256 "
-             "check only protects against a harden.ps1 that does not match the SetupComplete.cmd "
-             "next to it. It does NOT protect against someone who controls the seed drive. Use "
-             "only a seed drive that you made yourself.")
-        blank()
-        para("If Setup stops with \"Windows could not parse or process the unattended answer "
-             "file\", unplug this drive and RESTART the installation from the beginning: Setup "
-             "keeps a copy of the answer file in C:\\Windows\\Panther, so unplugging alone is not "
-             "enough. Then use harden.cmd after installing.")
-        blank()
-        para("This mode covers 64-bit Intel/AMD PCs (amd64) only. On ARM64 PCs use Way 1 above.")
-        blank()
-        para("If the installer USB already has its own autounattend.xml, it is not defined which "
-             "one Windows uses: use only one of them.")
     return ("\r\n".join(out) + "\r\n").encode("ascii")
 
 
-def _windows_seed_files(profile, during_setup):
+def _windows_seed_files(profile):
     """(label, files) of the Windows seed drive; see hardening_files_seed."""
     ps1 = windows_hardening_ps1(profile)
     if not isinstance(ps1, bytes) or not ps1.strip():
@@ -7759,17 +7574,7 @@ def _windows_seed_files(profile, during_setup):
     files = {name: _windows_seed_launcher(name, mode, confirm, banner)
              for name, mode, confirm, banner in SEED_WINDOWS_LAUNCHERS}
     files["harden.ps1"] = ps1
-    files["README.txt"] = _windows_seed_readme(profile, during_setup)
-    if during_setup:
-        # the same SetupComplete.cmd as the same-USB mode, with the SHA-256 of exactly the harden.ps1 written above
-        files[WINDOWS_SEED_SETUPCOMPLETE_FILE] = _windows_setupcomplete_cmd(profile, ps1)
-        xml = windows_seed_autounattend(profile)
-        if not isinstance(xml, bytes) or not xml.strip():
-            raise ValueError("The Windows answer file is empty")
-        files["autounattend.xml"] = xml
-        files[SEED_WINDOWS_MARKER] = (
-            "EPMA hardening seed drive. This file marks the drive; the answer file looks for it.\r\n"
-        ).encode("ascii")
+    files["README.txt"] = _windows_seed_readme(profile)
     return SEED_WINDOWS_LABEL, files
 # ===== end hardening2: win-seed =====
 
@@ -8121,13 +7926,9 @@ def check_seed_target_size(size):
 
 
 def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, cancel_event=None, eject=True,
-                   profile=HARDENING_BASELINE, during_setup=False):
+                   profile=HARDENING_BASELINE):
     """Create a seed drive for `target` (ubuntu, fedora, debian or windows): GPT + FAT32 with the label and the
     files `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
-
-    `during_setup` (EXPERIMENTAL) is only valid with SEED_WINDOWS: the drive then also carries an answer
-    file (autounattend.xml) that makes Windows Setup run the hardening script. Any other target raises
-    ValueError before anything is touched.
 
     Returns True if the drive was ejected. Raises ValueError (nothing touched) for a bad target, label, file
     set or drive, and OperationCanceled on a cancel (see its docstring: `drive_touched` is False when nothing on
@@ -8137,15 +7938,8 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
         raise ValueError(f"Unknown seed target: {target!r}")
     if profile not in HARDENING_PROFILES:
         raise ValueError(f"Unknown hardening profile: {profile!r}")
-    during_setup = bool(during_setup)
-    if during_setup and target != SEED_WINDOWS:  # hardening2: the answer-file mode exists for Windows only
-        raise ValueError("The during-setup (answer file) mode is only available for the Windows seed drive. "
-                         "Nothing was changed.")
     validate_device_name(dev)
-    if target == SEED_WINDOWS:  # the other targets have no such option
-        label, files = hardening_files_seed(target, profile, during_setup=during_setup)
-    else:
-        label, files = hardening_files_seed(target, profile)
+    label, files = hardening_files_seed(target, profile)
     label = validate_seed_label(label)
     files = validate_seed_files(files)
     check_seed_target_size(expected_size)
@@ -8165,7 +7959,7 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
             raise OperationCanceled("Canceled by the user before the drive was touched.",
                                     drive_touched=False) from None
         audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing the {target} hardening seed "
-              f"(profile={profile}, label={label}, {'during_setup=True, ' if during_setup else ''}"
+              f"(profile={profile}, label={label}, "
               f"files={len(files)}, "
               f"bytes={sum(len(d) for d in files.values())}, sha256={_seed_manifest_sha256(files)})")
         try:
@@ -8190,8 +7984,7 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
         except Exception as e:
             audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
             raise
-        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)}"
-              f"{', during_setup=True' if during_setup else ''})")
+        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
         return bool(ejected)
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -8751,8 +8544,8 @@ def help_sections():
 • fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
 • write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
-• harden-seed --target ubuntu|fedora|debian|windows [--during-setup] --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it. --during-setup (EXPERIMENTAL) is only for --target windows.
-• harden-files --target windows|windows-seed|ubuntu|fedora|debian [--during-setup] --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive. --during-setup (EXPERIMENTAL) is only for windows-seed. No drive is involved and no administrator rights are needed.
+• harden-seed --target ubuntu|fedora|debian|windows --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
+• harden-files --target windows|windows-seed|ubuntu|fedora|debian --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive. No drive is involved and no administrator rights are needed.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -8765,7 +8558,7 @@ def help_sections():
 ## harden-seed and harden-files
 • harden-seed asks for the same confirmation as write (type the disk identifier, or pass --yes), checks the drive the same way, verifies what it wrote and ejects. The seed drive is erased like any other target.
 • The seed files never choose a disk, never partition or format anything and never create accounts or set passwords: storage and the user account stay interactive in the installer.
-• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows. With --during-setup (EXPERIMENTAL) it also adds an answer file (autounattend.xml) and a marker file so that Windows Setup runs the hardening script by itself; --dry-run lists every file name and says so. Any other target with --during-setup is a usage error (exit {EXIT_USAGE}).
+• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows.
 • harden-files refuses a folder that is not empty and never overwrites anything.
 
 ## Exit codes
@@ -11689,8 +11482,7 @@ def _print_plan(plan, to_stdout):
     if disk.get("model"):
         emit(f"  Model: {disk['model']}")
     if plan["mode"] == MODE_SEED:
-        emit(f"  Seed : {plan['target']} (volume label {plan['volume_label']})"
-             + (" - during Windows setup, EXPERIMENTAL" if plan.get("during_setup") else ""))
+        emit(f"  Seed : {plan['target']} (volume label {plan['volume_label']})")
         emit(f"  Files: {', '.join(plan['files'])}")
     else:
         emit(f"  ISO  : {plan['iso']} ({human_size(plan['iso_size'])})")
@@ -11918,8 +11710,7 @@ def _call_engine(plan, log, priv, progress, cancel):
     if plan["mode"] == MODE_SEED:
         return build_seed_usb(plan["target"], plan["disk"]["id"], log, priv,
                               expected_size=plan["disk"].get("size"), progress=progress,
-                              cancel_event=cancel, eject=plan["eject"], profile=HARDENING_BASELINE,
-                              during_setup=bool(plan.get("during_setup")))
+                              cancel_event=cancel, eject=plan["eject"], profile=HARDENING_BASELINE)
     extra = {"hardening": plan["hardening"]} if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else {}
     return build_usb(plan["iso"], plan["disk"]["id"], log, priv,
                      expected_size=plan["disk"].get("size"), mode=plan["mode"],
@@ -11948,7 +11739,6 @@ def _run_write(args, plan, result):
     started = time.time()
     audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}"
           + (f" target={plan['target']}" if plan["mode"] == MODE_SEED else "")
-          + (" during_setup=True" if plan.get("during_setup") else "")
           + (f" hardening={plan['hardening']}" if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else ""))
     ejected, failure = None, None
     try:
@@ -12041,31 +11831,24 @@ HARDENED_WINDOWS_ONLY = ("--hardened is only available for Windows images (--mod
 HARDEN_FILES_WINDOWS_SEED = "windows-seed"
 HARDEN_FILES_TARGETS = ("windows", HARDEN_FILES_WINDOWS_SEED,
                         *(t for t in SEED_TARGETS if t != SEED_WINDOWS))
-DURING_SETUP_ONLY_WINDOWS = ("--during-setup only works with the Windows seed drive "
-                             "(harden-seed --target windows, or harden-files --target windows-seed).")
-DURING_SETUP_EXPERIMENTAL = ("EXPERIMENTAL: the answer file (autounattend.xml) makes Windows Setup copy the "
-                             "hardening script, which then runs at the end of Setup. It was never tested on a real "
-                             "installation; an invalid answer file can stop Windows Setup. The default (run "
-                             "harden.cmd after install) is safer.")
 HARDEN_FILES_WINDOWS_SAME_USB_NOTE = ("Note: --target windows is the file set for the SAME USB as the Windows installer "
                                       "(sources\\$OEM$). For the files of a separate Windows seed drive "
                                       "(harden.cmd, audit.cmd, undo.cmd), use --target windows-seed.")
 # ===== end hardening2: cli =====
 
 
-def _hardening_files(kind, during_setup=False):
+def _hardening_files(kind):
     """(volume label or None, validated {relative_path: bytes}) for 'windows', 'windows-seed' or a seed target.
 
     The shared validator that build_usb()/build_seed_usb() apply is used here too, so a plan or a
     folder never holds files the engine would refuse. A refusal becomes a CliError.
-    `during_setup` only matters for the Windows seed drive ('windows-seed'). Note that 'windows' here is always
-    the same-USB set; for `harden-seed --target windows` pass 'windows-seed' (see _seed_files_kind).
+    Note that 'windows' here is always the same-USB set; for `harden-seed --target windows` pass 'windows-seed' (see _seed_files_kind).
     """
     try:
         if kind == "windows":
             label, files = None, hardening_files_windows(HARDENING_BASELINE)
         elif kind == HARDEN_FILES_WINDOWS_SEED:
-            label, files = hardening_files_seed(SEED_WINDOWS, HARDENING_BASELINE, during_setup=bool(during_setup))
+            label, files = hardening_files_seed(SEED_WINDOWS, HARDENING_BASELINE)
         else:
             label, files = hardening_files_seed(kind, HARDENING_BASELINE)
         return label, validate_seed_files(files)
@@ -12085,9 +11868,6 @@ def _hardening_file_names(kind):
 
 def _prepare_seed(args):
     """Validate everything for `harden-seed` and build the plan. Raises CliError; touches nothing."""
-    during_setup = bool(getattr(args, "during_setup", False))
-    if during_setup and args.target != SEED_WINDOWS:
-        raise CliError(DURING_SETUP_ONLY_WINDOWS, EXIT_USAGE)
     try:
         disk_id = validate_device_name(normalize_typed_identifier(args.disk))
     except ValueError as e:
@@ -12101,7 +11881,7 @@ def _prepare_seed(args):
         check_seed_target_size(disk.get("size"))
     except ValueError as e:
         raise CliError(str(e), EXIT_USAGE) from None
-    label, files = _hardening_files(_seed_files_kind(args.target), during_setup)
+    label, files = _hardening_files(_seed_files_kind(args.target))
     names = sorted(files)
     missing = get_missing_dependencies(MODE_SEED)
     if missing:
@@ -12111,20 +11891,18 @@ def _prepare_seed(args):
              f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{label}')",
              f"Copy {len(names)} seed files: " + ", ".join(names),
              "Read the drive back and compare every file byte for byte"]
-    if during_setup:
-        steps.append(DURING_SETUP_EXPERIMENTAL)
     steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
     # The identity (serial, WWN, ...) is kept for the safety re-check, like in _prepare_write().
     return {"iso": None, "iso_size": 0, "mode": MODE_SEED, "target": args.target, "volume_label": label,
             "files": names, "disk": _disk_summary(disk), "identity": tuple(disk.get("identity") or ()),
-            "during_setup": during_setup, "steps": steps, "eject": eject, "dry_run": bool(args.dry_run),
+            "steps": steps, "eject": eject, "dry_run": bool(args.dry_run),
             "hardening": HARDENING_BASELINE, "hardening_files": []}
 
 
 def cmd_harden_seed(args):
     """Erase a small separate USB drive and write the hardening seed files on it (never an OS image)."""
     result = {"ok": False, "mode": MODE_SEED, "target": args.target,
-              "during_setup": bool(getattr(args, "during_setup", False)), "disk": None, "verified": False,
+              "disk": None, "verified": False,
               "ejected": False, "error": None, "exit_code": EXIT_ERROR}
     try:
         plan = _prepare_seed(args)
@@ -12202,9 +11980,6 @@ def _install_staged(stage, out, out_existed):
 def cmd_harden_files(args):
     """Write the hardening files for one target into a new or empty folder. No drive, no privileges."""
     target = args.target
-    during_setup = bool(getattr(args, "during_setup", False))
-    if during_setup and target != HARDEN_FILES_WINDOWS_SEED:
-        raise CliError("--during-setup only works with --target windows-seed.", EXIT_USAGE)
     out = os.path.abspath(os.path.expanduser(args.out))
     if os.path.islink(out):
         raise CliError(f"{out} is a symbolic link. Pass a real folder that is new or empty.")
@@ -12218,7 +11993,7 @@ def cmd_harden_files(args):
     parent = os.path.dirname(out)
     if not os.path.isdir(parent):
         raise CliError(f"The parent folder does not exist: {parent}")
-    label, files = _hardening_files(target, during_setup)
+    label, files = _hardening_files(target)
     stage = None
     try:
         # Staging beside the destination keeps the final move on one filesystem (an atomic rename).
@@ -12233,15 +12008,13 @@ def cmd_harden_files(args):
             shutil.rmtree(stage, ignore_errors=True)
     names = sorted(files)
     if args.json:
-        _out(json.dumps({"target": target, "during_setup": during_setup, "out": out, "volume_label": label,
+        _out(json.dumps({"target": target, "out": out, "volume_label": label,
                          "files": [{"path": n, "bytes": len(files[n])} for n in names]}, indent=2))
     else:
         for name in names:
             _out(name)
     _err(f"Wrote {len(names)} files to {out}. They are plain text: read them before using them. "
          "No drive was touched.")
-    if during_setup:
-        _err(DURING_SETUP_EXPERIMENTAL)
     if target == "windows":
         _err(HARDEN_FILES_WINDOWS_SAME_USB_NOTE)
     return EXIT_OK
@@ -12348,17 +12121,12 @@ def build_cli_parser():
                         "windows (Windows 11: harden.cmd to run after install)")
     p.add_argument("--disk", required=True, metavar="DISKID",
                    help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
-    p.add_argument("--during-setup", action="store_true",
-                   help="EXPERIMENTAL, --target windows only: also add an answer file (autounattend.xml) so "
-                        "that Windows Setup copies the hardening script and runs it at the end of installation")
     _add_write_flags(p)
     p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
             epilog="Nothing is overwritten: a folder that is not empty is refused.")
     p.add_argument("--target", required=True, choices=HARDEN_FILES_TARGETS,
                    help="windows (files for the same USB as Windows), windows-seed (files for the Windows seed "
                         "drive), ubuntu, fedora or debian")
-    p.add_argument("--during-setup", action="store_true",
-                   help="EXPERIMENTAL, --target windows-seed only: include the answer file (autounattend.xml)")
     p.add_argument("--out", required=True, metavar="DIR", help="a new folder, or an empty one")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     return parser

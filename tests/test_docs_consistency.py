@@ -324,7 +324,6 @@ def used_translation_keys():
     used = set(DYNAMICALLY_TRANSLATED)
     # The GUI passes every line of describe_hardening_windows() to _() as a variable.
     used.update(app.describe_hardening_windows(app.HARDENING_BASELINE))
-    used.update(app.describe_windows_seed_during_setup())  # hardening2: shown by the GUI through _() as a variable
     for node in ast.walk(TREE):
         if not isinstance(node, ast.Call):
             continue

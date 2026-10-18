@@ -34,10 +34,10 @@ EXPECTED_FILES = {
     "ubuntu": {"user-data", "meta-data", "harden-linux.sh", "README.txt"},
     "fedora": {"ks.cfg", "harden-linux.sh", "README.txt"},
     "debian": {"preseed.cfg", "harden-linux.sh", "README.txt"},
-    # Windows, "run after install" mode (no answer file); WINDOWS_SETUP_FILES are added by during_setup=True
+    # Windows: only the "run after install" files (no answer file, no marker, no SetupComplete.cmd)
     "windows": {"harden.cmd", "audit.cmd", "undo.cmd", "harden.ps1", "README.txt"},
 }
-WINDOWS_SETUP_FILES = {"autounattend.xml", "EPMA-SEED.txt", "SetupComplete.cmd"}
+WINDOWS_REMOVED_FILES = ("autounattend.xml", "EPMA-SEED.txt", "SetupComplete.cmd")  # must NOT be on the drive
 WINDOWS_CMD_FILES = ("harden.cmd", "audit.cmd", "undo.cmd")
 # The big script of each target (not checked as a plain ASCII config file).
 SCRIPT_FILES = {"ubuntu": "harden-linux.sh", "fedora": "harden-linux.sh", "debian": "harden-linux.sh",
@@ -46,7 +46,6 @@ CONFIG_FILES = {"ubuntu": "user-data", "fedora": "ks.cfg", "debian": "preseed.cf
 
 # Stand-ins for the two Windows pieces that other parts of the feature write (both are patched in the tests).
 FAKE_PS1 = b"\xef\xbb\xbf# fake harden.ps1 used by the tests\r\nparam([string]$Mode = 'Apply')\r\nWrite-Host $Mode\r\n"
-FAKE_XML = b'<?xml version="1.0" encoding="utf-8"?>\r\n<unattend xmlns="urn:schemas-microsoft-com:unattend" />\r\n'
 
 MAX_FILE = 256 * 1024
 MAX_TOTAL = 2 * 1024 * 1024
@@ -228,7 +227,6 @@ def kickstart_sections(text):
 class SeedTestBase(unittest.TestCase):
     script = FAKE_SCRIPT
     ps1 = FAKE_PS1
-    xml = FAKE_XML
 
     def setUp(self):
         super().setUp()
@@ -237,9 +235,6 @@ class SeedTestBase(unittest.TestCase):
         self.addCleanup(patcher.stop)
         patcher = mock.patch.object(app, "windows_hardening_ps1", create=True, side_effect=lambda p: self.ps1)
         self.ps1_mock = patcher.start()
-        self.addCleanup(patcher.stop)
-        patcher = mock.patch.object(app, "windows_seed_autounattend", create=True, side_effect=lambda p: self.xml)
-        self.xml_mock = patcher.start()
         self.addCleanup(patcher.stop)
 
     def seed(self, target, profile=None, **kwargs):
@@ -375,11 +370,9 @@ class CommonSafetyTests(SeedTestBase):
     def test_no_password_hashes_keys_or_claims(self):
         for target in app.SEED_TARGETS:
             names = set(EXPECTED_FILES[target]) - {SCRIPT_FILES[target]}
-            if target == app.SEED_WINDOWS:
-                names |= WINDOWS_SETUP_FILES
             for name in names:
                 with self.subTest(target=target, name=name):
-                    _label, files = self.seed(target, during_setup=True)
+                    _label, files = self.seed(target)
                     text = files[name].decode("ascii")
                     self.assertIsNone(HASH_LIKE.search(text), "looks like a password hash")
                     self.assertNotIn("ssh-rsa", text)
@@ -815,116 +808,98 @@ class ShellRoundTripTests(SeedTestBase, TempDirTestCase):
 
 
 class WindowsSeedTests(SeedTestBase):
-    """The Windows 11 seed drive: launchers, script, README and (experimental) answer file + marker."""
+    """The Windows 11 seed drive: launchers, script and README (the "run after install" mode, the only one)."""
 
-    def files(self, during_setup=False):
-        return self.seed(app.SEED_WINDOWS, during_setup=during_setup)[1]
+    def files(self):
+        return self.seed(app.SEED_WINDOWS)[1]
 
-    def cmd(self, name, during_setup=False):
-        return self.files(during_setup)[name].decode("ascii")
+    def cmd(self, name):
+        return self.files()[name].decode("ascii")
 
     # ---- the file set
     def test_label_is_a_valid_fat32_label(self):
-        for during_setup in (False, True):
-            label, _files = self.seed(app.SEED_WINDOWS, during_setup=during_setup)
-            self.assertEqual(label, "EPMA-SEED")
-            self.assertEqual(app.validate_seed_label(label), label)
-            self.assertEqual(app.SEED_LABELS[app.SEED_WINDOWS], "EPMA-SEED")
+        label, _files = self.seed(app.SEED_WINDOWS)
+        self.assertEqual(label, "EPMA-SEED")
+        self.assertEqual(app.validate_seed_label(label), label)
+        self.assertEqual(app.SEED_LABELS[app.SEED_WINDOWS], "EPMA-SEED")
 
-    def test_exact_file_sets_for_both_modes(self):
-        self.assertEqual(set(self.files(False)), EXPECTED_FILES["windows"])
-        self.assertEqual(set(self.files(True)), EXPECTED_FILES["windows"] | WINDOWS_SETUP_FILES)
-        self.assertEqual(set(self.files()), EXPECTED_FILES["windows"])  # the default is "run after install"
-        self.assertFalse(WINDOWS_SETUP_FILES & set(self.files(False)))
+    def test_the_seed_is_exactly_the_five_run_after_install_files(self):
+        files = self.files()
+        self.assertEqual(set(files), {"harden.cmd", "audit.cmd", "undo.cmd", "harden.ps1", "README.txt"})
+        self.assertEqual(set(files), EXPECTED_FILES["windows"])
+        for removed in WINDOWS_REMOVED_FILES:
+            self.assertNotIn(removed, files)
+            self.assertNotIn(removed.lower(), {n.lower() for n in files})
 
-    def test_during_setup_only_adds_files(self):
-        before, after = self.files(False), self.files(True)
-        for name, data in before.items():
-            if name == "README.txt":
-                continue  # the README gains the experimental section
-            self.assertEqual(after[name], data, name)
-        self.assertTrue(after["README.txt"].startswith(before["README.txt"].split(b"\r\nHONEST CAVEATS")[0]))
+    def test_hardening_files_seed_takes_no_during_setup_option(self):
+        import inspect
+        self.assertEqual(list(inspect.signature(app.hardening_files_seed).parameters), ["target", "profile"])
+        for call in (lambda: app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, during_setup=True),
+                     lambda: app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, True),
+                     lambda: app.hardening_files_seed(app.SEED_UBUNTU, app.HARDENING_BASELINE, during_setup=False)):
+            with self.assertRaises(TypeError):
+                call()
 
-    def test_files_pass_the_drive_validator_in_both_modes(self):
-        for during_setup in (False, True):
-            files = self.files(during_setup)
-            self.assertEqual(app.validate_seed_files(files), files)
-            for name, data in files.items():
-                self.assertRegex(name, r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # flat, ASCII
-                self.assertTrue(data, name)
-                self.assertLessEqual(len(data), MAX_FILE)
-            self.assertLessEqual(sum(len(d) for d in files.values()), MAX_TOTAL)
+    def test_the_answer_file_machinery_is_gone_from_the_module(self):
+        for name in ("windows_seed_autounattend", "describe_windows_seed_during_setup", "WINDOWS_SEED_ANSWER_FILE",
+                     "WINDOWS_SEED_MARKER", "WINDOWS_SEED_COMMANDS", "WINDOWS_SEED_STEP_TEXTS",
+                     "WINDOWS_SEED_NAMESPACE", "WINDOWS_SEED_DRIVE_LETTERS", "WINDOWS_SEED_PATH_MAX",
+                     "SEED_WINDOWS_MARKER"):
+            self.assertFalse(hasattr(app, name), name)
+        self.assertFalse(app.PT_BR.get("EXPERIMENTAL: this mode has not been tested on a real Windows installation. "
+                                       "If anything looks wrong, use the \"run after install\" mode instead."))
 
-    def test_script_and_answer_file_come_from_the_other_parts_at_call_time(self):
-        files = self.files(True)
+    def test_files_pass_the_drive_validator(self):
+        files = self.files()
+        self.assertEqual(app.validate_seed_files(files), files)
+        for name, data in files.items():
+            self.assertRegex(name, r"^[A-Za-z0-9][A-Za-z0-9._-]*$")  # flat, ASCII
+            self.assertTrue(data, name)
+            self.assertLessEqual(len(data), MAX_FILE)
+        self.assertLessEqual(sum(len(d) for d in files.values()), MAX_TOTAL)
+
+    def test_script_comes_from_the_other_part_at_call_time(self):
+        files = self.files()
         self.assertEqual(files["harden.ps1"], FAKE_PS1)
-        self.assertEqual(files["autounattend.xml"], FAKE_XML)
         self.ps1_mock.assert_called_with(app.HARDENING_BASELINE)
-        self.xml_mock.assert_called_once_with(app.HARDENING_BASELINE)
         self.ps1 = b"\xef\xbb\xbf# second\r\n"
-        self.xml = b"<unattend/>\r\n"
-        files = self.files(True)
-        self.assertEqual(files["harden.ps1"], b"\xef\xbb\xbf# second\r\n")
-        self.assertEqual(files["autounattend.xml"], b"<unattend/>\r\n")
-
-    def test_answer_file_is_not_even_requested_after_install_mode(self):
-        self.files(False)
-        self.ps1_mock.assert_called_once_with(app.HARDENING_BASELINE)
-        self.xml_mock.assert_not_called()
+        self.assertEqual(self.files()["harden.ps1"], b"\xef\xbb\xbf# second\r\n")
 
     def test_linux_script_is_not_used(self):
-        self.files(True)
+        self.files()
         self.script_mock.assert_not_called()
 
     def test_empty_pieces_are_refused(self):
         for bad in (b"", b"  \r\n", "text", None):
             self.ps1 = bad
             with self.subTest(ps1=bad), self.assertRaises(ValueError):
-                self.files(False)
-        self.ps1 = FAKE_PS1
-        for bad in (b"", b"\r\n", "<x/>", None):
-            self.xml = bad
-            with self.subTest(xml=bad), self.assertRaises(ValueError):
-                self.files(True)
-            self.files(False)  # the answer file is only needed in the experimental mode
+                self.files()
 
     def test_profile_and_target_are_validated(self):
-        for during_setup in (False, True):
-            for bad in (app.HARDENING_NONE, "strict", "", None, "BASELINE"):
-                with self.subTest(profile=bad, during_setup=during_setup), self.assertRaises(ValueError):
-                    app.hardening_files_seed(app.SEED_WINDOWS, bad, during_setup=during_setup)
+        for bad in (app.HARDENING_NONE, "strict", "", None, "BASELINE"):
+            with self.subTest(profile=bad), self.assertRaises(ValueError):
+                app.hardening_files_seed(app.SEED_WINDOWS, bad)
         self.ps1_mock.assert_not_called()
 
     def test_deterministic(self):
-        for during_setup in (False, True):
-            self.assertEqual(self.seed(app.SEED_WINDOWS, during_setup=during_setup),
-                             self.seed(app.SEED_WINDOWS, during_setup=during_setup))
-
-    def test_linux_targets_ignore_during_setup(self):
-        for target in LINUX_TARGETS:
-            with self.subTest(target=target):
-                self.assertEqual(self.seed(target, during_setup=True), self.seed(target, during_setup=False))
-                self.assertEqual(self.seed(target, during_setup=True), self.seed(target))
-        self.ps1_mock.assert_not_called()
-        self.xml_mock.assert_not_called()
+        self.assertEqual(self.seed(app.SEED_WINDOWS), self.seed(app.SEED_WINDOWS))
 
     # ---- the launchers
     def test_launchers_are_crlf_ascii_without_bom(self):
-        for during_setup in (False, True):
-            for name in WINDOWS_CMD_FILES:
-                with self.subTest(name=name, during_setup=during_setup):
-                    data = self.files(during_setup)[name]
-                    self.assertFalse(data.startswith(b"\xef\xbb\xbf"), "BOM")
-                    text = data.decode("ascii")
-                    self.assertNotIn("\0", text)
-                    self.assertNotIn("\t", text)
-                    self.assertTrue(text.endswith("\r\n"))
-                    self.assertEqual(text.count("\n"), text.count("\r\n"), "bare LF")
-                    self.assertEqual(text.count("\r"), text.count("\r\n"), "bare CR")
-                    for n, line in enumerate(text.split("\r\n")[:-1], 1):
-                        self.assertEqual(line, line.rstrip(), f"{name}:{n} trailing whitespace")
-                        self.assertLessEqual(len(line), 200, f"{name}:{n}")
-                    self.assertTrue(text.startswith("@echo off\r\n"))
+        for name in WINDOWS_CMD_FILES:
+            with self.subTest(name=name):
+                data = self.files()[name]
+                self.assertFalse(data.startswith(b"\xef\xbb\xbf"), "BOM")
+                text = data.decode("ascii")
+                self.assertNotIn("\0", text)
+                self.assertNotIn("\t", text)
+                self.assertTrue(text.endswith("\r\n"))
+                self.assertEqual(text.count("\n"), text.count("\r\n"), "bare LF")
+                self.assertEqual(text.count("\r"), text.count("\r\n"), "bare CR")
+                for n, line in enumerate(text.split("\r\n")[:-1], 1):
+                    self.assertEqual(line, line.rstrip(), f"{name}:{n} trailing whitespace")
+                    self.assertLessEqual(len(line), 200, f"{name}:{n}")
+                self.assertTrue(text.startswith("@echo off\r\n"))
 
     def test_launchers_say_what_they_do(self):
         for name in WINDOWS_CMD_FILES:
@@ -1087,16 +1062,15 @@ class WindowsSeedTests(SeedTestBase):
 
     # ---- the README
     def test_readme_is_crlf_ascii_and_at_most_80_columns(self):
-        for during_setup in (False, True):
-            data = self.files(during_setup)["README.txt"]
-            text = data.decode("ascii")
-            self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
-            self.assertTrue(text.endswith("\r\n"))
-            self.assertEqual(text.count("\n"), text.count("\r\n"))
-            for n, line in enumerate(text.split("\r\n")[:-1], 1):
-                self.assertLessEqual(len(line), 80, f"README line {n}: {line!r}")
-                self.assertEqual(line, line.rstrip())
-            self.assertNotIn("\t", text)
+        data = self.files()["README.txt"]
+        text = data.decode("ascii")
+        self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(text.endswith("\r\n"))
+        self.assertEqual(text.count("\n"), text.count("\r\n"))
+        for n, line in enumerate(text.split("\r\n")[:-1], 1):
+            self.assertLessEqual(len(line), 80, f"README line {n}: {line!r}")
+            self.assertEqual(line, line.rstrip())
+        self.assertNotIn("\t", text)
 
     def test_readme_explains_what_the_drive_is_and_how_to_use_it(self):
         text = " ".join(self.text(app.SEED_WINDOWS, "README.txt").split())
@@ -1125,180 +1099,92 @@ class WindowsSeedTests(SeedTestBase):
         self.assertIn("WHAT IT LEAVES ALONE", text)
 
     def test_readme_is_honest(self):
-        for during_setup in (False, True):
-            text = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=during_setup).split())
-            self.assertIn("EXPERIMENTAL", text.upper())
-            self.assertIn("never executed by its authors on a real Windows", text)
-            self.assertIn("not a compliance claim, certification or guarantee", text)
-            self.assertIn("inspired by common security baselines", text)
-            self.assertIn("spare PC", text)
-            self.assertIn("virtual machine", text)
-            self.assertIn("Tamper Protection", text)
-            self.assertIn("another antivirus", text.lower())
-            self.assertIn("[WARN]", text)
-            self.assertIn("Nothing here selects a disk", text)
-            self.assertIn("nothing creates an account", text)
-            self.assertIsNone(CLAIMS.search(text), "compliance word")
-            for word in ("CIS", "STIG", "NIST", "compliant", "certified", "guaranteed"):
-                self.assertNotIn(word, text)
-
-    def test_experimental_section_only_with_during_setup(self):
-        plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
-        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        for needle in ("autounattend.xml", "EPMA-SEED.txt", "specialize", "EXPERIMENTAL: APPLY IT WHILE",
-                       "SetupComplete.cmd", "SHA-256", "Panther", "ARM64"):
-            self.assertNotIn(needle, plain)
-            self.assertIn(needle, setup)
-        for needle in ("next to the Windows installer USB BEFORE you start Setup",
-                       "It must still be plugged in at the first restart of Setup",
-                       "you can unplug it: it is not needed at the end of Setup",
-                       "Setup still asks for the language, the disk, the edition and your account",
-                       "the answer file only copies harden.ps1 and SetupComplete.cmd from this drive into "
-                       "C:\\Windows\\Setup\\Scripts",
-                       "It does not run PowerShell and it never overwrites a SetupComplete.cmd that is already there",
-                       "At the very end of Setup, Windows runs SetupComplete.cmd",
-                       "It checks the SHA-256 of the harden.ps1 next to it and only then runs it in Apply mode",
-                       "It appends to the log C:\\Windows\\Temp\\epma-hardening.log ([SKIP] lines say why nothing ran)",
-                       "it is not defined which one Windows uses: use only one of them",
-                       "already has its own autounattend.xml", "has not been tried by its authors on a real Windows"):
-            self.assertIn(needle, setup)
-        self.assertNotIn("Setup then runs harden.ps1 at the end of the specialize phase", setup)  # the old design
-        self.assertLess(setup.index("HONEST CAVEATS"), setup.index("EXPERIMENTAL: APPLY IT WHILE"))
-
-    def test_during_setup_readme_says_who_is_trusted_and_what_the_hash_does_not_do(self):
-        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        for needle in ("the answer file and SetupComplete.cmd trust any drive that carries EPMA-SEED.txt on its root "
-                       "(the first match from D: to Z:)",
-                       "The SHA-256 check only protects against a harden.ps1 that does not match the "
-                       "SetupComplete.cmd next to it",
-                       "It does NOT protect against someone who controls the seed drive",
-                       "Use only a seed drive that you made yourself"):
-            self.assertIn(needle, setup)
+        text = " ".join(self.text(app.SEED_WINDOWS, "README.txt").split())
+        self.assertIn("EXPERIMENTAL", text.upper())  # the scripts were never run by their authors on real Windows
+        self.assertIn("never executed by its authors on a real Windows", text)
+        self.assertIn("not a compliance claim, certification or guarantee", text)
+        self.assertIn("inspired by common security baselines", text)
+        self.assertIn("spare PC", text)
+        self.assertIn("virtual machine", text)
+        self.assertIn("Tamper Protection", text)
+        self.assertIn("another antivirus", text.lower())
+        self.assertIn("[WARN]", text)
+        self.assertIn("Nothing here selects a disk", text)
+        self.assertIn("nothing creates an account", text)
+        self.assertIsNone(CLAIMS.search(text), "compliance word")
+        for word in ("CIS", "STIG", "NIST", "compliant", "certified", "guaranteed"):
+            self.assertNotIn(word, text)
+        self.assertIn("This drive is not protected or authenticated in any way", text)
         for claim in ("tamper-proof", "digitally signed", "verified drive", "trusted drive", "secure drive",
                       "authenticated drive", "protects the drive"):
-            self.assertNotIn(claim, setup.lower())
-        self.assertIn("This drive is not protected or authenticated in any way", setup)
+            self.assertNotIn(claim, text.lower())
 
-    def test_during_setup_readme_explains_the_answer_file_error(self):
-        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        for needle in ("Windows could not parse or process the unattended answer file",
-                       "unplug this drive and RESTART the installation from the beginning",
-                       "C:\\Windows\\Panther", "unplugging alone is not enough",
-                       "Then use harden.cmd after installing",
-                       "64-bit Intel/AMD PCs (amd64) only. On ARM64 PCs use Way 1"):
-            self.assertIn(needle, setup)
-        plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
-        self.assertNotIn("Windows could not parse", plain)
+    def test_readme_has_no_during_setup_text(self):
+        raw = self.text(app.SEED_WINDOWS, "README.txt")
+        text = " ".join(raw.split())
+        for needle in ("autounattend.xml", "answer file", "EPMA-SEED.txt", "specialize", "SetupComplete.cmd",
+                       "SHA-256", "Panther", "ARM64", "amd64", "marker", "Way 1", "Way 2", "WHILE WINDOWS IS BEING",
+                       "BEFORE you start Setup", "first restart", "Windows could not parse"):
+            self.assertNotIn(needle, text, needle)
+        self.assertNotIn("EXPERIMENTAL:", text)
+        self.assertIn("RUN IT AFTER WINDOWS IS INSTALLED", text)
 
     def test_readme_audit_and_launcher_sentences_are_accurate(self):
-        for during_setup in (False, True):
-            text = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=during_setup).split())
-            self.assertIn("audit.cmd does not ask you to confirm anything", text)
-            self.assertIn("[DIFF] means NOT in effect", text)
-            self.assertIn("harden.cmd and undo.cmd also ask you to confirm; audit.cmd does not", text)
-            self.assertNotIn("Each launcher only asks for administrator rights, asks you to confirm", text)
-            self.assertNotIn("audit.cmd prints a [WARN]", text)
+        text = " ".join(self.text(app.SEED_WINDOWS, "README.txt").split())
+        self.assertIn("audit.cmd does not ask you to confirm anything", text)
+        self.assertIn("[DIFF] means NOT in effect", text)
+        self.assertIn("harden.cmd and undo.cmd also ask you to confirm; audit.cmd does not", text)
+        self.assertNotIn("Each launcher only asks for administrator rights, asks you to confirm", text)
+        self.assertNotIn("audit.cmd prints a [WARN]", text)
 
     def test_readme_explains_the_opt_in_switch_and_the_undo_limits(self):
-        for during_setup in (False, True):
-            raw = self.text(app.SEED_WINDOWS, "README.txt", during_setup=during_setup)
-            text = " ".join(raw.split())
-            self.assertIn("powershell -ExecutionPolicy Bypass -File harden.ps1 -Mode Apply -DisableLegacyNetwork", text)
-            self.assertIn("open PowerShell as administrator", text)
-            self.assertIn("LIMITS OF UNDO.CMD", text)
-            for needle in ("It does not turn SMBv1 or PowerShell 2.0 on again",
-                           "does not lower the Security log size",
-                           "already in the wanted state before harden.cmd ran is not recorded",
-                           "undo.cmd can finish with a non-zero exit code when one of its steps failed"):
-                self.assertIn(needle, text)
+        raw = self.text(app.SEED_WINDOWS, "README.txt")
+        text = " ".join(raw.split())
+        self.assertIn("powershell -ExecutionPolicy Bypass -File harden.ps1 -Mode Apply -DisableLegacyNetwork", text)
+        self.assertIn("open PowerShell as administrator", text)
+        self.assertIn("LIMITS OF UNDO.CMD", text)
+        for needle in ("It does not turn SMBv1 or PowerShell 2.0 on again",
+                       "does not lower the Security log size",
+                       "already in the wanted state before harden.cmd ran is not recorded",
+                       "undo.cmd can finish with a non-zero exit code when one of its steps failed"):
+            self.assertIn(needle, text)
 
-    def test_readme_logs_per_mode(self):
-        plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
-        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        for text in (plain, setup):
-            self.assertIn("harden.cmd and undo.cmd write a log to C:\\Windows\\Temp\\epma-hardening.log. "
-                          "audit.cmd only prints in its window", text)
-        self.assertIn("It appends to the log C:\\Windows\\Temp\\epma-hardening.log", setup)
-        self.assertNotIn("SetupComplete.cmd", plain)
-
-    def test_seed_drive_no_longer_has_to_stay_until_the_end(self):
-        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        self.assertNotIn("Keep both drives plugged in", setup)
-        self.assertNotIn("until the first screens", setup)
-
-    # ---- SetupComplete.cmd on the seed drive (during setup)
-    def test_setupcomplete_is_on_the_drive_only_in_during_setup_and_holds_the_hash_of_harden_ps1(self):
-        import hashlib
-        self.assertNotIn("SetupComplete.cmd", self.files(False))
-        files = self.files(True)
-        text = files["SetupComplete.cmd"].decode("ascii")
-        self.assertIn('set "EPMA_WANT=' + hashlib.sha256(FAKE_PS1).hexdigest() + '"', text)
-        self.assertEqual(files["SetupComplete.cmd"], app._windows_setupcomplete_cmd(app.HARDENING_BASELINE, FAKE_PS1))
-        # the hash line follows the script
-        self.ps1 = b"\xef\xbb\xbf# second\r\n"
-        other = self.files(True)["SetupComplete.cmd"].decode("ascii")
-        self.assertIn('set "EPMA_WANT=' + hashlib.sha256(self.ps1).hexdigest() + '"', other)
-        self.assertNotEqual(other, text)
-        self.assertEqual([ln for ln in other.split("\r\n") if not ln.startswith('set "EPMA_WANT')],
-                         [ln for ln in text.split("\r\n") if not ln.startswith('set "EPMA_WANT')])
-
-    def test_setupcomplete_on_the_drive_checks_before_it_runs(self):
-        text = self.cmd("SetupComplete.cmd", True)
-        self.assertLess(text.index("-hashfile"), text.index("-File"))
-        self.assertIn("harden.ps1 was NOT run", text)
-        self.assertTrue(text.endswith("exit /b 0\r\n"))
-
-    # ---- the marker and the answer file
-    def test_marker_file_is_one_short_ascii_line(self):
-        data = self.files(True)["EPMA-SEED.txt"]
-        text = data.decode("ascii")
-        self.assertTrue(text.endswith("\r\n"))
-        self.assertEqual(text.count("\n"), 1)
-        self.assertLessEqual(len(text), 120)
-        self.assertIn("EPMA", text)
-        self.assertIn("seed", text)
-        self.assertIsNone(CLAIMS.search(text))
+    def test_readme_says_where_the_log_is(self):
+        text = " ".join(self.text(app.SEED_WINDOWS, "README.txt").split())
+        self.assertIn("harden.cmd and undo.cmd write a log to C:\\Windows\\Temp\\epma-hardening.log. "
+                      "audit.cmd only prints in its window", text)
 
     # ---- the whole drive
     def test_no_secrets_or_hash_like_strings_anywhere(self):
-        for during_setup in (False, True):
-            for name, data in self.files(during_setup).items():
-                if name in ("harden.ps1", "autounattend.xml"):
-                    continue  # stand-ins here; the real ones are checked in RealWindowsSeedTests
-                if name == "SetupComplete.cmd":
-                    continue  # holds the public SHA-256 of harden.ps1 (checked in its own test)
-                with self.subTest(name=name, during_setup=during_setup):
-                    text = data.decode("ascii")
-                    self.assertIsNone(HASH_LIKE.search(text))
-                    self.assertIsNone(re.search(r"[A-Za-z0-9+/]{40,}={0,2}", text), "long base64-like string")
-                    self.assertIsNone(re.search(r"\b[0-9a-f]{32,}\b", text, re.I), "hash-like string")
-                    for needle in ("BEGIN PRIVATE", "BEGIN OPENSSH", "ssh-rsa", "ssh-ed25519"):
-                        self.assertNotIn(needle, text)
+        for name, data in self.files().items():
+            if name == "harden.ps1":
+                continue  # a stand-in here; the real one is checked in RealWindowsSeedTests
+            with self.subTest(name=name):
+                text = data.decode("ascii")
+                self.assertIsNone(HASH_LIKE.search(text))
+                self.assertIsNone(re.search(r"[A-Za-z0-9+/]{40,}={0,2}", text), "long base64-like string")
+                self.assertIsNone(re.search(r"\b[0-9a-f]{32,}\b", text, re.I), "hash-like string")
+                for needle in ("BEGIN PRIVATE", "BEGIN OPENSSH", "ssh-rsa", "ssh-ed25519"):
+                    self.assertNotIn(needle, text)
 
 
 class RealWindowsSeedTests(unittest.TestCase):
-    """The same drive with the real script and answer file (never skipped: a renamed symbol fails here)."""
+    """The same drive with the real script (never skipped: a renamed symbol fails here)."""
 
     def test_the_symbols_this_class_uses_exist(self):
-        for name in ("windows_hardening_ps1", "windows_seed_autounattend", "hardening_files_seed",
-                     "validate_seed_files"):
+        for name in ("windows_hardening_ps1", "hardening_files_seed", "validate_seed_files"):
             self.assertTrue(callable(getattr(app, name, None)), f"{name} is missing")
 
     def test_real_pieces_end_up_on_the_drive_unchanged(self):
         ps1 = app.windows_hardening_ps1(app.HARDENING_BASELINE)
-        xml = app.windows_seed_autounattend(app.HARDENING_BASELINE)
-        for during_setup in (False, True):
-            label, files = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, during_setup=during_setup)
-            self.assertEqual(label, "EPMA-SEED")
-            self.assertEqual(set(files), EXPECTED_FILES["windows"] | (WINDOWS_SETUP_FILES if during_setup else set()))
-            self.assertEqual(files["harden.ps1"], ps1)
-            if during_setup:
-                self.assertEqual(files["autounattend.xml"], xml)
-            self.assertEqual(app.validate_seed_files(files), files)
-            for name in ("harden.cmd", "audit.cmd", "undo.cmd", "README.txt"):
-                self.assertTrue(files[name].decode("ascii"))
-            self.assertEqual(app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE,
-                                                      during_setup=during_setup), (label, files))
+        label, files = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE)
+        self.assertEqual(label, "EPMA-SEED")
+        self.assertEqual(set(files), EXPECTED_FILES["windows"])
+        self.assertEqual(files["harden.ps1"], ps1)
+        self.assertEqual(app.validate_seed_files(files), files)
+        for name in ("harden.cmd", "audit.cmd", "undo.cmd", "README.txt"):
+            self.assertTrue(files[name].decode("ascii"))
+        self.assertEqual(app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE), (label, files))
 
     def test_launchers_call_parameters_the_real_script_declares(self):
         ps1 = app.windows_hardening_ps1(app.HARDENING_BASELINE).decode("utf-8-sig")
@@ -1307,13 +1193,11 @@ class RealWindowsSeedTests(unittest.TestCase):
             self.assertIn(mode, ps1, f"the real harden.ps1 does not mention -Mode {mode}")
 
     def test_real_pieces_hold_no_secrets_or_claims(self):
-        _label, files = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, during_setup=True)
-        for name in ("harden.ps1", "autounattend.xml"):
-            text = files[name].decode("utf-8-sig")
-            with self.subTest(name=name):
-                self.assertIsNone(HASH_LIKE.search(text))
-                self.assertIsNone(CLAIMS.search(text))
-                self.assertNotIn("BEGIN PRIVATE", text)
+        _label, files = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE)
+        text = files["harden.ps1"].decode("utf-8-sig")
+        self.assertIsNone(HASH_LIKE.search(text))
+        self.assertIsNone(CLAIMS.search(text))
+        self.assertNotIn("BEGIN PRIVATE", text)
 
 
 class RealScriptTests(unittest.TestCase):

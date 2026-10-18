@@ -32,10 +32,6 @@ WIN_FILES = {
     "harden.ps1": b"\xef\xbb\xbf# fake\r\nWrite-Output 'x'\r\n",
     "README.txt": b"Run harden.cmd as administrator.\r\n",
 }
-WIN_FILES_DURING_SETUP = dict(WIN_FILES, **{
-    "autounattend.xml": b'<?xml version="1.0" encoding="utf-8"?>\r\n<unattend xmlns="urn:schemas-microsoft-com:unattend"/>\r\n',
-    "EPMA-SEED.txt": b"marker\r\n",
-})
 # ===== end hardening2: engine-cli tests =====
 
 
@@ -52,7 +48,7 @@ class ValidateSeedFilesAcceptTests(unittest.TestCase):
     def test_dollar_signs_and_nested_folders_are_ordinary(self):
         files = {"sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"x",
                  "sources/$OEM$/$$/Setup/Scripts/harden.ps1": b"y",
-                 "autounattend.xml": b"<z/>"}
+                 "answer-standin.xml": b"<z/>"}
         self.assertEqual(app.validate_seed_files(files), files)
 
     def test_an_empty_file_is_allowed(self):
@@ -383,7 +379,7 @@ class BuildSeedUsbTests(TempDirTestCase):
         self.last_seed_args = (target, profile)
         self.last_seed_kwargs = kwargs
         if target == app.SEED_WINDOWS and self.seed is self.default_seed:
-            return WIN_LABEL, dict(WIN_FILES_DURING_SETUP if kwargs.get("during_setup") else WIN_FILES)
+            return WIN_LABEL, dict(WIN_FILES)
         return self.seed
 
     def inspect_stage(self, args):
@@ -438,9 +434,7 @@ class BuildSeedUsbTests(TempDirTestCase):
             with self.subTest(target=target):
                 self.build(target=target, profile=app.HARDENING_NONE)
                 self.assertEqual(self.last_seed_args, (target, app.HARDENING_NONE))
-                # only the Windows seed has the answer-file option; the others are called as before
-                self.assertEqual(self.last_seed_kwargs,
-                                 {"during_setup": False} if target == app.SEED_WINDOWS else {})
+                self.assertEqual(self.last_seed_kwargs, {})  # exactly (target, profile): no other option
 
     def test_the_files_are_staged_privately_and_removed_afterwards(self):
         self.build()
@@ -640,7 +634,7 @@ class BuildSeedUsbTests(TempDirTestCase):
         self.assertEqual(entered, ["in", "write", "out"])
 
     # ===== hardening2: engine-cli tests =====
-    # ----- the Windows seed drive and its "during setup" (answer file) mode -----
+    # ----- the Windows seed drive -----
     def test_windows_runs_the_same_steps_in_the_same_order(self):
         self.assertIs(self.build(target="windows"), True)
         self.assertEqual(self.events, ["seed", "reverify", "linux"])
@@ -648,34 +642,20 @@ class BuildSeedUsbTests(TempDirTestCase):
         self.assertEqual(args[0], WIN_LABEL)
         self.assertEqual(args[1], WIN_FILES)
 
-    def test_during_setup_reaches_hardening_files_seed_for_windows(self):
-        self.build(target="windows", during_setup=True)
-        self.assertEqual(self.last_seed_args, ("windows", app.HARDENING_BASELINE))
-        self.assertEqual(self.last_seed_kwargs, {"during_setup": True})
-        args, _ = self.linux_args
-        self.assertEqual(args[1], WIN_FILES_DURING_SETUP)
-        self.assertEqual(args[0], WIN_LABEL)
-        for value in (None, 0, ""):  # falsy values mean "no"
-            with self.subTest(value=value):
-                self.build(target="windows", during_setup=value)
-                self.assertEqual(self.last_seed_kwargs, {"during_setup": False})
-
-    def test_during_setup_is_refused_for_every_other_target_before_anything_happens(self):
-        for target in (app.SEED_UBUNTU, app.SEED_FEDORA, app.SEED_DEBIAN):
-            with self.subTest(target=target):
-                self.events.clear()
-                with self.assertRaisesRegex(ValueError, "only available for the Windows seed drive.*Nothing was changed"):
-                    self.build(target=target, during_setup=True)
-                self.assertEqual(self.events, [])  # not even the content function ran
-                self.assertNothingTouched()
-                self.mocks["get_missing_dependencies"].assert_not_called()
-
-    def test_the_during_setup_check_comes_before_the_device_name_check_and_after_the_target_check(self):
-        with self.assertRaisesRegex(ValueError, "during-setup"):
-            self.build(target="ubuntu", dev="../sdb", during_setup=True)
-        with self.assertRaisesRegex(ValueError, "Unknown seed target"):
-            self.build(target="gentoo", during_setup=True)
+    def test_the_during_setup_option_no_longer_exists(self):
+        import inspect
+        self.assertNotIn("during_setup", inspect.signature(app.build_seed_usb).parameters)
+        with self.assertRaises(TypeError):
+            self.build(target="windows", during_setup=True)
+        with self.assertRaises(TypeError):
+            self.build(target="ubuntu", during_setup=True)
         self.assertEqual(self.events, [])
+        self.assertNothingTouched()
+
+    def test_no_target_has_a_refusal_for_a_removed_option(self):
+        for target in app.SEED_TARGETS:
+            with self.subTest(target=target):
+                self.assertIs(self.build(target=target), True)
 
     def test_a_windows_seed_is_checked_by_the_shared_validators(self):
         self.seed = ("epma-seed", dict(WIN_FILES))
@@ -694,33 +674,26 @@ class BuildSeedUsbTests(TempDirTestCase):
                 self.assertNothingTouched()
 
     def test_file_names_and_crlf_survive_staging_exactly(self):
-        for during_setup, expected in ((False, WIN_FILES), (True, WIN_FILES_DURING_SETUP)):
-            with self.subTest(during_setup=during_setup):
-                self.stage_seen.clear()
-                self.build(target="windows", during_setup=during_setup)
-                staged = {k: v[0] for k, v in self.stage_seen["files"].items()}
-                self.assertEqual(staged, expected)
-                # every line ends with CRLF: no bare LF anywhere
-                self.assertTrue(all(b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
-                                    for data in staged.values()))
-                self.assertTrue(all("/" not in name for name in staged))  # flat
-                self.assertTrue(all(v[1] == 0o600 for v in self.stage_seen["files"].values()))
+        self.build(target="windows")
+        staged = {k: v[0] for k, v in self.stage_seen["files"].items()}
+        self.assertEqual(staged, WIN_FILES)
+        # every line ends with CRLF: no bare LF anywhere
+        self.assertTrue(all(b"\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
+                            for data in staged.values()))
+        self.assertTrue(all("/" not in name for name in staged))  # flat
+        self.assertTrue(all(v[1] == 0o600 for v in self.stage_seen["files"].values()))
 
-    def test_audit_lines_mention_during_setup_only_when_it_is_on(self):
+    def test_audit_lines_of_the_windows_seed_have_the_plain_shape(self):
         self.build(target="windows")
         text = " | ".join(self.audits)
         self.assertNotIn("during_setup", text)
         self.assertIn("DESTRUCTIVE OPERATION COMPLETED on /dev/sdb (ejected=True)", self.audits)
-        self.audits.clear()
-        self.build(target="windows", during_setup=True)
         starts = [a for a in self.audits if a.startswith("DESTRUCTIVE OPERATION START")]
         self.assertEqual(len(starts), 1)
         self.assertIn("the windows hardening seed", starts[0])
-        self.assertIn("during_setup=True", starts[0])
         self.assertIn(f"label={WIN_LABEL}", starts[0])
-        self.assertIn(f"files={len(WIN_FILES_DURING_SETUP)}", starts[0])
+        self.assertIn(f"files={len(WIN_FILES)}", starts[0])
         self.assertRegex(starts[0], r"sha256=[0-9a-f]{64}")
-        self.assertIn("DESTRUCTIVE OPERATION COMPLETED on /dev/sdb (ejected=True, during_setup=True)", self.audits)
 
     def test_the_audit_never_carries_the_file_contents_of_the_windows_files_either(self):
         self.seed = (WIN_LABEL, dict(WIN_FILES, **{"harden.ps1": b"SUPERSECRETMARKER\r\n"}))
@@ -729,10 +702,10 @@ class BuildSeedUsbTests(TempDirTestCase):
 
     def test_windows_on_macos_uses_the_mac_backend(self):
         with mock.patch.object(app, "IS_MAC", True):
-            self.assertIs(self.build(target="windows", dev="disk9", during_setup=True), True)
+            self.assertIs(self.build(target="windows", dev="disk9"), True)
         self.assertEqual(self.events, ["seed", "reverify", "mac"])
         args, _ = self.mac_args
-        self.assertEqual((args[0], args[1]), (WIN_LABEL, WIN_FILES_DURING_SETUP))
+        self.assertEqual((args[0], args[1]), (WIN_LABEL, WIN_FILES))
     # ===== end hardening2: engine-cli tests =====
 
 # ---------------------------------------------------------------------------
@@ -958,7 +931,7 @@ class LinuxSeedBackendTests(TempDirTestCase):
 
     # ===== hardening2: engine-cli tests =====
     def use_windows_files(self):
-        self.files = dict(WIN_FILES_DURING_SETUP)
+        self.files = dict(WIN_FILES)
         with mock.patch.object(app.tempfile, "mkdtemp", self.real_mkdtemp):  # the stage is not the mount
             self.stage = app.stage_seed_files(self.files)
         self.addCleanup(lambda: shutil.rmtree(self.stage, ignore_errors=True))
@@ -1110,7 +1083,7 @@ class MacSeedBackendTests(TempDirTestCase):
 
     # ===== hardening2: engine-cli tests =====
     def test_the_windows_file_set_and_label_on_macos(self):
-        self.files = dict(WIN_FILES_DURING_SETUP)
+        self.files = dict(WIN_FILES)
         self.stage = app.stage_seed_files(self.files)
         self.addCleanup(lambda: shutil.rmtree(self.stage, ignore_errors=True))
         self.mount = self.path("Volumes", WIN_LABEL)
@@ -1150,7 +1123,7 @@ class SeedCopyVerifyTests(TempDirTestCase):
         self.assertEqual(leftovers, [])
 
     def test_copy_then_verify_roundtrip_with_nested_folders(self):
-        files = {"sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"@echo off\r\n", "autounattend.xml": b"<x/>"}
+        files = {"sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"@echo off\r\n", "answer-standin.xml": b"<x/>"}
         stage = app.stage_seed_files(files)
         self.addCleanup(lambda: shutil.rmtree(stage, ignore_errors=True))
         dst = self.path("drive")
@@ -1163,7 +1136,7 @@ class SeedCopyVerifyTests(TempDirTestCase):
 
     # ===== hardening2: engine-cli tests =====
     def test_the_windows_set_passes_the_validator_and_round_trips_with_crlf(self):
-        for files in (WIN_FILES, WIN_FILES_DURING_SETUP):
+        for files in (WIN_FILES,):
             clean = app.validate_seed_files(files)
             self.assertEqual(clean, files)
             self.assertEqual(app.validate_seed_label(WIN_LABEL), WIN_LABEL)
