@@ -85,7 +85,7 @@ class StructureTests(XmlBase):
 
     def test_description_is_short_plain_text(self):
         desc = self.root.find(f".//{Q}Description").text
-        self.assertEqual(desc, app.WINDOWS_SEED_DESCRIPTION)
+        self.assertEqual(desc, app.WINDOWS_SEED_STEP_TEXT)
         self.assertLessEqual(len(desc), 100)
         self.assertNotRegex(desc, r"[<>&\"']")
 

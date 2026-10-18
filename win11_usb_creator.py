@@ -6702,13 +6702,13 @@ def hardening_files_windows(profile):
 #   Microsoft samples) and whether a non-zero exit would stop Setup (not relied on: the step always exits 0).
 WINDOWS_SEED_ANSWER_FILE = "autounattend.xml"
 WINDOWS_SEED_MARKER = "EPMA-SEED.txt"  # root of the seed drive; the answer file acts only where it finds this
-WINDOWS_SEED_SCRIPT = "harden.ps1"  # root of the seed drive; run with -Mode Apply
+WINDOWS_SEED_PS1_FILE = "harden.ps1"  # root of the seed drive; run with -Mode Apply
 WINDOWS_SEED_DRIVE_LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ"  # C: is the installed system; A: and B: are floppy letters
 WINDOWS_SEED_PATH_MAX = 259  # documented limit of the Path element of RunSynchronousCommand
-WINDOWS_SEED_DESCRIPTION = "EPMA USB CREATOR: run harden.ps1 from the seed drive, if one is plugged in"
+WINDOWS_SEED_STEP_TEXT = "EPMA USB CREATOR: run harden.ps1 from the seed drive, if one is plugged in"
 WINDOWS_SEED_COMMAND = (
     "cmd /c (for %d in (" + " ".join(c + ":" for c in WINDOWS_SEED_DRIVE_LETTERS) + ") do if exist %d\\" + WINDOWS_SEED_MARKER
-    + " (powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%d\\" + WINDOWS_SEED_SCRIPT
+    + " (powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%d\\" + WINDOWS_SEED_PS1_FILE
     + "\" -Mode Apply & exit 0)) & exit 0"
 )
 WINDOWS_SEED_NAMESPACE = "urn:schemas-microsoft-com:unattend"
@@ -6737,7 +6737,7 @@ def windows_seed_autounattend(profile):
         '        <RunSynchronousCommand wcm:action="add">',
         "          <Order>1</Order>",
         "          <Path>" + command.replace("&", "&amp;") + "</Path>",
-        "          <Description>" + WINDOWS_SEED_DESCRIPTION + "</Description>",
+        "          <Description>" + WINDOWS_SEED_STEP_TEXT + "</Description>",
         "        </RunSynchronousCommand>",
         "      </RunSynchronous>",
         "    </component>",
@@ -7263,7 +7263,7 @@ def _windows_seed_readme(profile, during_setup):
 
 def _windows_seed_files(profile, during_setup):
     """(label, files) of the Windows seed drive; see hardening_files_seed."""
-    ps1 = windows_hardening_ps1(profile)  # noqa: F821  (defined by the WIN-SCRIPT part)
+    ps1 = windows_hardening_ps1(profile)
     if not isinstance(ps1, bytes) or not ps1.strip():
         raise ValueError("The Windows hardening script is empty")
     files = {name: _windows_seed_launcher(name, mode, confirm, banner)
@@ -7271,7 +7271,7 @@ def _windows_seed_files(profile, during_setup):
     files["harden.ps1"] = ps1
     files["README.txt"] = _windows_seed_readme(profile, during_setup)
     if during_setup:
-        xml = windows_seed_autounattend(profile)  # noqa: F821  (defined by the WIN-XML part)
+        xml = windows_seed_autounattend(profile)
         if not isinstance(xml, bytes) or not xml.strip():
             raise ValueError("The Windows answer file is empty")
         files["autounattend.xml"] = xml
@@ -9448,7 +9448,7 @@ class App(_TkBase):
     def _seed_experimental_note():
         """The warning of the Windows "during setup" choice: the first lines of the engine's own description of
         the answer file (translated line by line), and always the word EXPERIMENTAL."""
-        raw = describe_windows_seed_during_setup()  # noqa: F821  (written by the WIN-XML part of the feature)
+        raw = describe_windows_seed_during_setup()
         lines = raw.splitlines() if isinstance(raw, str) else [str(line) for line in raw]
         stripped = [line.strip() for line in lines if line.strip()]
         text = " ".join([_(text) for text in stripped[:3]])  # the engine owns these lines and their PT_BR entries
