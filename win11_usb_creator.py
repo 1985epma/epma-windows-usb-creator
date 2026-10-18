@@ -147,7 +147,8 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / harden.ps1 (and, optionally, an answer file)
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -563,7 +564,18 @@ PT_BR = {
     "What does it change?": "O que isto altera?",
     "Hide the list": "Ocultar a lista",
     "The settings are applied at the end of Windows setup by a script, and every change is written to {log}. You choose the disk, the account and the edition during setup as usual.": "Os ajustes são aplicados no final da instalação do Windows por um script, e cada alteração é registrada em {log}. Você escolhe o disco, a conta e a edição durante a instalação, como de costume.",
-    "Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, hardened Linux install. Write the installer to its own drive with the Linux card, then plug both drives into the computer you install on. The files never choose or erase a disk on that computer: you still pick the disk and create the account yourself. No image file is needed; writing this drive ERASES it.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para uma instalação automática e reforçada do Linux. Grave o instalador no pendrive dele com o cartão Linux e depois conecte os dois pendrives ao computador onde vai instalar. Os arquivos nunca escolhem nem apagam um disco desse computador: você continua escolhendo o disco e criando a conta. Não é preciso nenhum arquivo de imagem; gravar este pendrive o APAGA.",
+    "Makes a SECOND, small USB drive (not the installer) that carries settings for a hardened Linux install or a hardened Windows 11. For Linux, write the installer to its own drive with the Linux card, then plug both drives into the computer you install on. The files never choose or erase a disk on that computer: you still pick the disk and create the account yourself. No image file is needed; writing this drive ERASES it. The Windows scripts were never run on a real Windows computer: try them on a test machine first.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para uma instalação reforçada do Linux ou do Windows 11. Para o Linux, grave o instalador no pendrive dele com o cartão Linux e depois conecte os dois pendrives ao computador onde vai instalar. Os arquivos nunca escolhem nem apagam um disco desse computador: você continua escolhendo o disco e criando a conta. Não é preciso nenhum arquivo de imagem; gravar este pendrive o APAGA. Os scripts do Windows nunca foram executados em um Windows real: teste-os primeiro em um computador de teste.",
+    "Windows 11 (run after install)": "Windows 11 (executar depois de instalar)",
+    "Windows 11 (during setup, experimental)": "Windows 11 (durante a instalação, experimental)",
+    "Run harden.cmd as administrator on a Windows 11 that is already installed; audit.cmd shows a report first, undo.cmd goes back.": "Execute o harden.cmd como administrador em um Windows 11 já instalado; o audit.cmd mostra primeiro um relatório e o undo.cmd desfaz.",
+    "EXPERIMENTAL, never tested on real Windows.": "EXPERIMENTAL, nunca testado em um Windows real.",
+    "the hardening seed files (experimental: includes an answer file for Windows Setup)": "os arquivos do kit de reforço (experimental: inclui um arquivo de resposta para a Instalação do Windows)",
+    "The files were checked on the drive and it was ejected — you can unplug it now.": "Os arquivos foram conferidos no pendrive e ele foi ejetado — você já pode removê-lo.",
+    "The files were checked on the drive, but it could not be ejected automatically. Eject it from the file manager before unplugging.": "Os arquivos foram conferidos no pendrive, mas ele não pôde ser ejetado automaticamente. Ejete-o pelo gerenciador de arquivos antes de removê-lo.",
+    "Windows 11 setup drive (experimental) created and verified": "Pendrive de instalação do Windows 11 (experimental) criado e verificado",
+    "Windows 11 hardening drive created and verified": "Pendrive de reforço do Windows 11 criado e verificado",
+    "EXPERIMENTAL: plug it in next to the Windows installer USB drive BEFORE Windows Setup starts; Setup then reads the answer file (autounattend.xml) on it. An invalid answer file can stop an installation, and the scripts were never run on real Windows: try it on a test machine first. harden.cmd, audit.cmd and undo.cmd are on the drive as well.": "EXPERIMENTAL: conecte-o junto com o pendrive instalador do Windows ANTES de a Instalação do Windows começar; a Instalação lê então o arquivo de resposta (autounattend.xml) que está nele. Um arquivo de resposta inválido pode interromper uma instalação, e os scripts nunca foram executados em um Windows real: teste primeiro em um computador de teste. O harden.cmd, o audit.cmd e o undo.cmd também estão no pendrive.",
+    "On a Windows 11 that is already installed, open this drive and run audit.cmd (shows a report, changes nothing), harden.cmd (as administrator) or undo.cmd (goes back). The scripts were never run on real Windows: try them on a test machine first.": "Em um Windows 11 já instalado, abra este pendrive e execute o audit.cmd (mostra um relatório, não altera nada), o harden.cmd (como administrador) ou o undo.cmd (desfaz). Os scripts nunca foram executados em um Windows real: teste primeiro em um computador de teste.",
     "Install target:": "Sistema de destino:",
     "Ubuntu (autoinstall)": "Ubuntu (autoinstall)",
     "Fedora / RHEL (kickstart)": "Fedora / RHEL (kickstart)",
@@ -7726,6 +7738,20 @@ class _DownloadWidgets:
 WINDOWS_HARDENING_LOG_SHOWN = "C:\\Windows\\Temp\\epma-hardening.log"  # where the log is after Windows setup
 # ===== end hardening: gui =====
 
+# ===== hardening2: GUI =====
+# The choices of the "Hardening seed" card. Each radio button has a key; this table says what the key means for the
+# engine: (seed target, during_setup). Windows has two choices: run the scripts after Windows is installed (the
+# robust one) or let Windows Setup run them through an answer file (EXPERIMENTAL).
+SEED_CHOICE_WINDOWS_SETUP = "windows-setup"
+SEED_CHOICES = {
+    SEED_UBUNTU: (SEED_UBUNTU, False),
+    SEED_FEDORA: (SEED_FEDORA, False),
+    SEED_DEBIAN: (SEED_DEBIAN, False),
+    SEED_WINDOWS: (SEED_WINDOWS, False),
+    SEED_CHOICE_WINDOWS_SETUP: (SEED_WINDOWS, True),
+}
+# ===== end hardening2: GUI =====
+
 
 class App(_TkBase):
     def __init__(self):
@@ -7931,11 +7957,14 @@ class App(_TkBase):
     # build_seed_usb); this part only asks for them and goes through the same safety flow as every other write.
     @staticmethod
     def seed_target_texts():
-        """(target, translated name) for the three radio buttons of the Hardening seed card."""
+        """(choice key, translated name) for the five radio buttons of the Hardening seed card. The key is a
+        key of SEED_CHOICES (it says which seed target and whether the answer file is included)."""
         return (
             (SEED_UBUNTU, _("Ubuntu (autoinstall)")),
             (SEED_FEDORA, _("Fedora / RHEL (kickstart)")),
             (SEED_DEBIAN, _("Debian (script + preseed)")),
+            (SEED_WINDOWS, _("Windows 11 (run after install)")),
+            (SEED_CHOICE_WINDOWS_SETUP, _("Windows 11 (during setup, experimental)")),
         )
 
     def _build_hardening_option(self, panel):
@@ -7987,27 +8016,49 @@ class App(_TkBase):
         """The "Hardening seed" card: what the second drive is, and which system it is for. No image file."""
         ttk.Label(
             panel, justify="left", wraplength=PANEL_WRAP,
-            text=_("Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, "
-                   "hardened Linux install. Write the installer to its own drive with the Linux card, then plug "
-                   "both drives into the computer you install on. The files never choose or erase a disk on "
-                   "that computer: you still pick the disk and create the account yourself. No image file is "
-                   "needed; writing this drive ERASES it.")).pack(anchor="w", pady=(0, 6))
-        self.seed_target_var = tk.StringVar(self, value=SEED_UBUNTU)
+            text=_("Makes a SECOND, small USB drive (not the installer) that carries settings for a hardened "
+                   "Linux install or a hardened Windows 11. For Linux, write the installer to its own drive with "
+                   "the Linux card, then plug both drives into the computer you install on. The files never "
+                   "choose or erase a disk on that computer: you still pick the disk and create the account "
+                   "yourself. No image file is needed; writing this drive ERASES it. The Windows scripts were "
+                   "never run on a real Windows computer: try them on a test machine first.")
+        ).pack(anchor="w", pady=(0, 6))
+        self.seed_target_var = tk.StringVar(self, value=SEED_UBUNTU)  # the choice key (see SEED_CHOICES)
         self.seed_radios = {}
-        row = ttk.Frame(panel)
-        row.pack(fill="x")
-        ttk.Label(row, text=_("Install target:")).pack(side="left", padx=(0, 10))
-        for target, text in self.seed_target_texts():
-            radio = ttk.Radiobutton(row, text=text, value=target, variable=self.seed_target_var,
-                                    command=self._on_seed_target_changed)
-            radio.pack(side="left", padx=(0, 12))
-            self.seed_radios[target] = radio
+        ttk.Label(panel, text=_("Install target:")).pack(anchor="w")
+        # Five radio buttons do not fit one row of a 780 px window (the texts are long, more so in Portuguese):
+        # two rows, each one sized by its own radios (the three Linux targets, then the two Windows ones).
+        grid = ttk.Frame(panel)
+        grid.pack(fill="x", pady=(2, 0))
+        rows = (ttk.Frame(grid), ttk.Frame(grid))
+        for row in rows:
+            row.pack(anchor="w", pady=(0, 2))
+        for index, (choice, text) in enumerate(self.seed_target_texts()):
+            radio = ttk.Radiobutton(rows[0 if index < 3 else 1], text=text, value=choice,
+                                    variable=self.seed_target_var, command=self._on_seed_target_changed)
+            radio.pack(side="left", padx=(0, 16))
+            self.seed_radios[choice] = radio
+        self.seed_radio_area = grid
         self.seed_note = ttk.Label(panel, justify="left", wraplength=PANEL_WRAP, foreground="#8e8e93")
         self.seed_note.pack(anchor="w", pady=(6, 0))
         self._on_seed_target_changed()
 
-    def seed_target_note(self, target):
-        """One line about how the chosen system finds the seed drive."""
+    @staticmethod
+    def _seed_experimental_note():
+        """The warning of the Windows "during setup" choice: the first lines of the engine's own description of
+        the answer file (translated line by line), and always the word EXPERIMENTAL."""
+        raw = describe_windows_seed_during_setup()  # noqa: F821  (written by the WIN-XML part of the feature)
+        lines = raw.splitlines() if isinstance(raw, str) else [str(line) for line in raw]
+        stripped = [line.strip() for line in lines if line.strip()]
+        text = " ".join([_(text) for text in stripped[:3]])  # the engine owns these lines and their PT_BR entries
+        if "experimental" not in text.lower():
+            text = _("EXPERIMENTAL, never tested on real Windows.") + " " + text
+        return text
+
+    def seed_target_note(self, choice):
+        """A short note about how the chosen system finds the seed drive (or, for Windows, how it is used)."""
+        if choice == SEED_CHOICE_WINDOWS_SETUP:
+            return App._seed_experimental_note()
         return {
             SEED_UBUNTU: _("Ubuntu's installer looks for settings on a drive labelled CIDATA. It still asks for "
                            "the disk and your account."),
@@ -8015,10 +8066,13 @@ class App(_TkBase):
                            "the disk and your account."),
             SEED_DEBIAN: _("Debian does not look for the drive by itself: the README on it explains the boot "
                            "parameter, and the script to run after the install is on it too."),
-        }.get(target, "")
+            SEED_WINDOWS: _("Run harden.cmd as administrator on a Windows 11 that is already installed; "
+                            "audit.cmd shows a report first, undo.cmd goes back."),
+        }.get(choice, "")
 
     def _on_seed_target_changed(self):
         self.seed_note.config(text=self.seed_target_note(self.seed_target_var.get()))
+        self.after_idle(self._fit_window)  # the notes differ in length
 
     def _apply_card_layout(self, key):
         """What changes with the card besides its panel: the seed card needs no image, so the file row, the
@@ -9028,7 +9082,8 @@ class App(_TkBase):
         mode = self.mode_var.get()
         iso = self.iso_path.get()
         seed = mode == MODE_SEED
-        target = self.seed_target_var.get() if seed else None
+        choice = self.seed_target_var.get() if seed else None
+        target, during_setup = SEED_CHOICES.get(choice, (None, False))  # both read ONCE, like the rest
         hardening = self.hardening_selected(mode)
         if self._download_running or self._flex_busy:  # the button is disabled in this case; this covers a stale one
             messagebox.showerror(_("Download in progress"), _("Wait for the download to finish or cancel it first."))
@@ -9060,7 +9115,9 @@ class App(_TkBase):
                 return
         if not seed and not self._image_matches_choice(mode, iso):
             return
-        if seed:
+        if seed and during_setup:
+            what = _("the hardening seed files (experimental: includes an answer file for Windows Setup)")
+        elif seed:
             what = _("the hardening seed files")
         elif hardening != HARDENING_NONE:
             what = _("Windows 11 and add the hardening files")
@@ -9112,14 +9169,14 @@ class App(_TkBase):
                 if seed:  # the same flow as every other write; only the engine call differs (no image)
                     ejected = build_seed_usb(target, dev, self.log_threadsafe, self.priv,
                                              expected_size=expected_size, progress=progress,
-                                             cancel_event=self.create_cancel_event)
+                                             cancel_event=self.create_cancel_event, during_setup=during_setup)
                 else:
                     extra = {"hardening": hardening} if hardening != HARDENING_NONE else {}
                     ejected = build_usb(iso, dev, self.log_threadsafe, self.priv,
                                         expected_size=expected_size, mode=mode, progress=progress,
                                         cancel_event=self.create_cancel_event, **extra)
                 self._post(self._finish_create_progress, True)
-                self._post(self._show_create_success, ejected, mode, hardening)
+                self._post(self._show_create_success, ejected, mode, hardening, target, during_setup)
             except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
                 log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True),
@@ -9173,11 +9230,15 @@ class App(_TkBase):
                 _("Canceled"),
                 _("The operation was canceled.\n\nThe USB drive was NOT modified."))
 
-    def _show_create_success(self, ejected, mode=None, hardening=HARDENING_NONE):
+    def _show_create_success(self, ejected, mode=None, hardening=HARDENING_NONE, target=None, during_setup=False):
         """The write was verified: the inline panel replaces the old "Done" dialog. Without the eject the
         panel is amber and says the drive must be ejected by hand before it is unplugged. `mode` and `hardening`
         say what was written (the seed drive and the Windows hardening files have their own wording)."""
         if self._closing:
+            return
+        if mode == MODE_SEED and target == SEED_WINDOWS:  # hardening2: its own title and wording
+            title, note = self._windows_seed_success_texts(ejected, during_setup)
+            self.show_success(title, note, verified_and_ejected=bool(ejected))
             return
         if mode == MODE_SEED:
             note = (_("The seed files were checked on the drive and it was ejected — you can unplug it now. "
@@ -9195,6 +9256,24 @@ class App(_TkBase):
                             "Windows setup finishes, their log will be at {log}."
                             ).format(log=WINDOWS_HARDENING_LOG_SHOWN)
         self.show_success(_("Bootable USB drive created successfully!"), note, verified_and_ejected=bool(ejected))
+
+    @staticmethod
+    def _windows_seed_success_texts(ejected, during_setup):
+        """(title, text) of the success panel for the Windows seed drive, per choice (hardening2)."""
+        note = (_("The files were checked on the drive and it was ejected — you can unplug it now.") if ejected else
+                _("The files were checked on the drive, but it could not be ejected automatically. Eject it from "
+                  "the file manager before unplugging."))
+        if during_setup:
+            return (_("Windows 11 setup drive (experimental) created and verified"),
+                    note + " " + _("EXPERIMENTAL: plug it in next to the Windows installer USB drive BEFORE Windows "
+                                   "Setup starts; Setup then reads the answer file (autounattend.xml) on it. An "
+                                   "invalid answer file can stop an installation, and the scripts were never run "
+                                   "on real Windows: try it on a test machine first. harden.cmd, audit.cmd and "
+                                   "undo.cmd are on the drive as well."))
+        return (_("Windows 11 hardening drive created and verified"),
+                note + " " + _("On a Windows 11 that is already installed, open this drive and run audit.cmd "
+                               "(shows a report, changes nothing), harden.cmd (as administrator) or undo.cmd (goes "
+                               "back). The scripts were never run on real Windows: try them on a test machine first."))
 
     def _notify(self, kind, title, message):
         """An information dialog from a worker's result; skipped while the window is closing."""
