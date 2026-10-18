@@ -147,7 +147,7 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / harden.ps1 (and, optionally, an answer file)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / audit.cmd / undo.cmd / harden.ps1 to run after install
 SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
@@ -8416,10 +8416,9 @@ def help_sections():
 • It tries not to lock you out of SSH: it only turns off root login or password login when an administrator account with a key exists, and it says so. It does not enable a firewall on a computer that runs Docker, libvirt or LXD unless you pass --yes. Test a second SSH session before you close the first.
 
 ## Windows 11 (a second USB drive)
-• Choose the "Hardening seed" card and one of two choices, select a small USB drive and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
-• "Windows 11 (run after install)" is the safer choice and also works on a Windows 11 that is already installed. Open the drive in File Explorer and double-click audit.cmd first: it only reports what is in effect (lines marked [DIFF] are not). Then double-click harden.cmd, answer y and accept the administrator prompt. A restart may be needed for a few settings.
-• "Windows 11 (during setup, experimental)" adds an answer file for Windows Setup. Plug the drive in before you start the Windows installer and keep it in until after the first restart of the installation. Setup copies the script to the new Windows and it runs at the end of Setup. It was never tested on a real installation, an invalid answer file can stop Windows Setup (then unplug the drive and restart the installation from the beginning), and it covers 64-bit Intel/AMD PCs only.
-• Both modes trust the drive that carries the file EPMA-SEED.txt (or the launchers you click): the files are not authenticated, so keep the drive with you. The log is C:\\Windows\\Temp\\epma-hardening.log.
+• Choose the "Hardening seed" card and "Windows 11 (run after install)", select a small USB drive and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
+• It works on a Windows 11 that is already installed (it does not take part in the installation). Open the drive in File Explorer and double-click audit.cmd first: it only reports what is in effect (lines marked [DIFF] are not). Then double-click harden.cmd, answer y and accept the administrator prompt. A restart may be needed for a few settings.
+• The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. The log is C:\\Windows\\Temp\\epma-hardening.log.
 • Extra, opt-in: in an elevated PowerShell run harden.ps1 with -DisableLegacyNetwork to also turn off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).
 
 ## Undo
