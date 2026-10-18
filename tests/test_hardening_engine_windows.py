@@ -18,7 +18,7 @@ from tests.helpers import Collector, TempDirTestCase, app
 
 OEM = "sources/$OEM$/$$/Setup/Scripts"
 FILES = {
-    "autounattend.xml": b"<?xml version='1.0'?><unattend/>\n",
+    "answer-standin.xml": b"<?xml version='1.0'?><unattend/>\n",
     f"{OEM}/SetupComplete.cmd": b"@echo off\r\npowershell -File %~dp0harden.ps1\r\n",
     f"{OEM}/harden.ps1": "# harden éà ".encode() + bytes(range(256)),
 }
@@ -65,7 +65,7 @@ class HardeningTestCase(TempDirTestCase):
             "sources/install.wim": os.urandom(12000),
         }
         if with_unattend:
-            files["autounattend.xml"] = b"<!-- the ISO's own file -->"
+            files["answer-standin.xml"] = b"<!-- the ISO's own file -->"
         for rel, data in files.items():
             self.write_file(os.path.join(name, rel), data)
         return root, files
@@ -272,7 +272,7 @@ class BuildUsbWithAnOemImageTests(HardeningTestCase):
         priv = RecordingPriv(tree)
         self.addCleanup(priv.cleanup)
         with mock.patch.object(app, "IS_MAC", False), \
-                self.assertRaisesRegex(ValueError, "already contains autounattend.xml"):
+                self.assertRaisesRegex(ValueError, "already contains answer-standin.xml"):
             app.build_usb(self.iso, "sdb", Collector(), priv, hardening=app.HARDENING_BASELINE)
         self.assertEqual(priv.kinds(), ["peek", "peek-cleanup"])  # no prep script: the drive was never touched
         self.assertFalse(any("OPERATION START" in c.args[0] for c in self.audit.call_args_list))
@@ -328,9 +328,9 @@ class WriteHardeningFilesTests(HardeningTestCase):
 
     def test_a_file_of_the_iso_is_replaced(self):
         root = self.path("usb")
-        self.write_file("usb/autounattend.xml", b"old")
+        self.write_file("usb/answer-standin.xml", b"old")
         app.write_hardening_files(root, FILES)
-        self.assertEqual(self.read(root, "autounattend.xml"), FILES["autounattend.xml"])
+        self.assertEqual(self.read(root, "answer-standin.xml"), FILES["answer-standin.xml"])
 
     def test_unsafe_paths_are_refused_even_if_the_validator_missed_them(self):
         root = self.path("usb")
@@ -355,9 +355,9 @@ class WriteHardeningFilesTests(HardeningTestCase):
         root = self.path("usb")
         victim = self.write_file("victim.txt", b"keep")
         os.makedirs(root)
-        os.symlink(victim, os.path.join(root, "autounattend.xml"))
+        os.symlink(victim, os.path.join(root, "answer-standin.xml"))
         with self.assertRaises(RuntimeError):
-            app.write_hardening_files(root, {"autounattend.xml": b"new"})
+            app.write_hardening_files(root, {"answer-standin.xml": b"new"})
         self.assertEqual(self.read(self.tmp, "victim.txt"), b"keep")
 
     def test_a_cancel_stops_between_files(self):
@@ -400,18 +400,18 @@ class VerifyHardeningFilesTests(HardeningTestCase):
         self.assertIn("NOT ejected", str(ctx.exception))
 
     def test_a_missing_file_fails(self):
-        os.remove(os.path.join(self.root, "autounattend.xml"))
-        with self.assertRaisesRegex(RuntimeError, r"Verification FAILED.*autounattend.xml \(missing\)"):
+        os.remove(os.path.join(self.root, "answer-standin.xml"))
+        with self.assertRaisesRegex(RuntimeError, r"Verification FAILED.*answer-standin.xml \(missing\)"):
             self.verify()
 
     def test_a_longer_file_fails(self):
-        with open(os.path.join(self.root, "autounattend.xml"), "ab") as fh:
+        with open(os.path.join(self.root, "answer-standin.xml"), "ab") as fh:
             fh.write(b"x")
         with self.assertRaisesRegex(RuntimeError, "Verification FAILED"):
             self.verify()
 
     def test_a_truncated_file_fails(self):
-        with open(os.path.join(self.root, "autounattend.xml"), "r+b") as fh:
+        with open(os.path.join(self.root, "answer-standin.xml"), "r+b") as fh:
             fh.truncate(3)
         with self.assertRaisesRegex(RuntimeError, "Verification FAILED"):
             self.verify()
@@ -448,7 +448,7 @@ class CopyWindowsPayloadWithExtrasTests(HardeningTestCase):
         dst = self.path("usb")
         os.makedirs(dst)
         with mock.patch.object(app, "audit") as audit, \
-                self.assertRaisesRegex(ValueError, "already contains autounattend.xml"):
+                self.assertRaisesRegex(ValueError, "already contains answer-standin.xml"):
             self.copy(src, dst)
         self.assertEqual(os.listdir(dst), [])  # not even the ISO's own files were copied
         self.assertTrue(any("HARDENING REFUSED" in c.args[0] for c in audit.call_args_list))
@@ -459,7 +459,7 @@ class CopyWindowsPayloadWithExtrasTests(HardeningTestCase):
         dst = self.path("usb")
         os.makedirs(dst)
         with mock.patch.object(app, "check_image_for_hardening_clash"), \
-                self.assertRaisesRegex(RuntimeError, "Verification FAILED.*autounattend.xml"):
+                self.assertRaisesRegex(RuntimeError, "Verification FAILED.*answer-standin.xml"):
             self.copy(src, dst)
 
     def test_a_flipped_byte_in_an_extra_file_is_a_verification_failure(self):
@@ -471,7 +471,7 @@ class CopyWindowsPayloadWithExtrasTests(HardeningTestCase):
 
         def write_then_flip(root, files, cancel_event=None):
             real_write(root, files, cancel_event)
-            path = os.path.join(root, "autounattend.xml")
+            path = os.path.join(root, "answer-standin.xml")
             with open(path, "r+b") as fh:
                 fh.seek(5)
                 byte = fh.read(1)
@@ -479,7 +479,7 @@ class CopyWindowsPayloadWithExtrasTests(HardeningTestCase):
                 fh.write(bytes([byte[0] ^ 0x01]))
 
         with mock.patch.object(app, "write_hardening_files", write_then_flip), \
-                self.assertRaisesRegex(RuntimeError, "Verification FAILED.*autounattend.xml"):
+                self.assertRaisesRegex(RuntimeError, "Verification FAILED.*answer-standin.xml"):
             self.copy(src, dst)
 
     def test_the_iso_files_are_still_checked_when_extras_are_present(self):
@@ -597,7 +597,7 @@ class MacosBuildUsbTests(HardeningTestCase):
         self.assertFalse(ctx.exception.written)
         self.assertTrue(any(c[:2] == ["diskutil", "unmountDisk"] for c in self.calls))
         self.assertFalse(any(c[:2] == ["diskutil", "eject"] for c in self.calls))
-        self.assertFalse(os.path.exists(os.path.join(self.usb, "autounattend.xml")))
+        self.assertFalse(os.path.exists(os.path.join(self.usb, "answer-standin.xml")))
 
     def test_a_write_error_does_not_eject(self):
         with mock.patch.object(app, "write_hardening_files", side_effect=OSError("disk full")), \
@@ -700,8 +700,8 @@ class LinuxBuildUsbTests(HardeningTestCase):
         self.assertEqual(priv.kinds()[:2], ["prep", "remount"])
 
     def test_a_flipped_byte_found_after_the_remount_fails_the_verification(self):
-        priv = RecordingPriv(self.tree, flip="autounattend.xml")
-        with self.assertRaisesRegex(RuntimeError, "Verification FAILED.*autounattend.xml"):
+        priv = RecordingPriv(self.tree, flip="answer-standin.xml")
+        with self.assertRaisesRegex(RuntimeError, "Verification FAILED.*answer-standin.xml"):
             self.build(priv, hardening_files=FILES)
         self.assertTrue(priv.scripts[-1][0].startswith("set -eu\numount"))  # the cleanup still ran
 
@@ -743,7 +743,7 @@ class LinuxBuildUsbTests(HardeningTestCase):
         tree, _ = self.make_iso_tree("iso2", with_unattend=True)
         priv = RecordingPriv(tree)
         with mock.patch.object(app, "run_cmd") as run_cmd, mock.patch.object(app, "write_hardening_files") as write, \
-                self.assertRaisesRegex(ValueError, "already contains autounattend.xml"):
+                self.assertRaisesRegex(ValueError, "already contains answer-standin.xml"):
             self.build(priv, hardening_files=FILES)
         run_cmd.assert_not_called()  # no rsync, no sync: not a byte was copied
         write.assert_not_called()
@@ -770,7 +770,7 @@ class FindHardeningClashesTests(HardeningTestCase):
 
     def test_an_exact_match_is_found(self):
         root, _ = self.make_iso_tree(with_unattend=True)
-        self.assertEqual(app.find_hardening_clashes(root, FILES), ["autounattend.xml"])
+        self.assertEqual(app.find_hardening_clashes(root, FILES), ["answer-standin.xml"])
 
     def test_the_match_ignores_case_in_every_folder_and_in_the_file_name(self):
         root, _ = self.make_iso_tree()
@@ -791,7 +791,7 @@ class FindHardeningClashesTests(HardeningTestCase):
     def test_several_clashes_are_all_reported_sorted(self):
         root, _ = self.make_iso_tree(with_unattend=True)
         self.write_file("iso/sources/$OEM$/$$/Setup/Scripts/harden.ps1", b"x")
-        self.assertEqual(app.find_hardening_clashes(root, FILES), ["autounattend.xml", f"{OEM}/harden.ps1"])
+        self.assertEqual(app.find_hardening_clashes(root, FILES), ["answer-standin.xml", f"{OEM}/harden.ps1"])
 
     def test_a_file_where_a_folder_is_expected_is_no_crash_and_no_clash(self):
         root, _ = self.make_iso_tree()
@@ -808,11 +808,11 @@ class FindHardeningClashesTests(HardeningTestCase):
         with mock.patch.object(app, "audit") as audit, self.assertRaises(ValueError) as ctx:
             app.check_image_for_hardening_clash(root, FILES)
         self.assertEqual(str(ctx.exception),
-                         "This Windows image already contains autounattend.xml. Adding the hardening files "
+                         "This Windows image already contains answer-standin.xml. Adding the hardening files "
                          "would replace them, so nothing was changed. Untick the hardening option or use "
                          "another image.")
         self.assertIn("HARDENING REFUSED", audit.call_args.args[0])
-        self.assertIn("autounattend.xml", audit.call_args.args[0])
+        self.assertIn("answer-standin.xml", audit.call_args.args[0])
 
     def test_a_clean_tree_is_not_audited(self):
         root, _ = self.make_iso_tree()

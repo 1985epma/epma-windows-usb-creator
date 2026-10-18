@@ -5,7 +5,7 @@
 > A versão oficial deste documento é o [README.md em inglês](README.md). Esta
 > tradução é mantida por conveniência e pode ficar desatualizada em relação a ela.
 
-Aplicação multiplataforma (**macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) e o **ChromeOS Flex do Google** direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
+Aplicação multiplataforma (**Windows 11**, **macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) e o **ChromeOS Flex do Google** direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
 
 Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
@@ -59,7 +59,7 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
 - **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos cinco cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
-- **Reforço da instalação (opcional, experimental):** uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL e Debian que fazem uma instalação nova começar com configurações mais seguras; veja [Reforço da instalação](#reforço-da-instalação-opcional).
+- **Reforço da instalação (opcional, experimental):** uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL, Debian e Windows 11 que fazem uma instalação nova começar com configurações mais seguras; veja [Reforço da instalação](#reforço-da-instalação-opcional).
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela: abra **Show details** para lê-lo (ele abre sozinho quando uma gravação falha).
 
 ## Novidades da 1.1.0
@@ -84,6 +84,14 @@ Todas as mudanças estão no [CHANGELOG](CHANGELOG.md); os downloads ficam na p�
 6. Só então o pendrive é desmontado e ejetado com segurança.
 
 ## Requisitos
+
+### Windows 11
+
+Nada a instalar com o **pacote MSI** (veja [Instalação](#windows-11-pacote-msi)): ele leva o Python e o Tkinter junto, e o programa usa o que já vem no Windows — PowerShell (cmdlets de Storage) e DISM, que também divide o `install.wim` quando passa de 4 GB. Para rodar a partir do código-fonte: Python **3.10 ou mais novo** com Tkinter (o instalador do python.org inclui).
+
+O programa precisa rodar como **Administrador**: o atalho instalado pede isso ao Windows (aviso do UAC) e `python win11_usb_creator.py` se relança elevado. Na linha de comando, abra o Windows Terminal ou o PowerShell com *Executar como administrador*. No Windows não há pedido de senha.
+
+O Windows só formata volumes FAT32 de até 32 GB; por isso, num pendrive maior, o cartão *Windows 11* cria uma partição de 30 GiB e deixa o resto sem alocar (os cartões de gravação direta usam o pendrive inteiro).
 
 ### macOS
 
@@ -117,6 +125,17 @@ Você também pode simplesmente abrir a aplicação e usar o botão **"Install m
 No Linux, particionar/formatar/montar um dispositivo de bloco exige privilégios de root, então a aplicação pede sua senha de administrador (via `sudo`, ou `pkexec` se `sudo` não existir).
 
 ## Instalação
+
+### Windows 11 (pacote MSI)
+
+Baixe `epma-usb-creator-<versão>-x64.msi` na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases), confira e instale:
+
+```powershell
+Get-FileHash .\epma-usb-creator-1.2.0-x64.msi -Algorithm SHA256   # compare com o SHA256SUMS.txt
+msiexec /i epma-usb-creator-1.2.0-x64.msi /qb                      # ou dê dois cliques
+```
+
+Ele instala em `C:\Program Files\EPMA USB Creator` com um atalho no menu Iniciar (**EPMA USB Creator**, sempre iniciado como Administrador) e, opcionalmente, a ferramenta de linha de comando `epma-usb-creator-cli.exe` no `PATH`. Atualizações substituem a versão antiga; desinstale em *Configurações → Aplicativos*. O pacote **não é assinado digitalmente**, então o SmartScreen do Windows pode avisar: escolha *Mais informações → Executar assim mesmo* depois de conferir o SHA-256 (e a atestação do GitHub, com `gh attestation verify`). O [installer/README.md](installer/README.md) traz os comandos exatos, a instalação silenciosa e como gerar o MSI você mesmo.
 
 ### Homebrew (macOS — recomendado)
 
@@ -221,11 +240,14 @@ Arquivos opcionais para que uma instalação nova comece com configurações mai
 
 - **Windows 11 (no mesmo pendrive):** marque **"Add hardening settings to the Windows installation (optional)"** no cartão Windows 11. Um script roda no **fim** da instalação do Windows (log: `C:\Windows\Temp\epma-hardening.log`) e desliga SMBv1 e LLMNR e o AutoRun/AutoPlay, liga o firewall, aplica algumas proteções do Microsoft Defender (uma regra de redução de superfície em modo Block e quatro em modo Audit), desativa o recurso PowerShell 2.0 e o cache de credenciais WDigest, liga o log de blocos de script e uma política de auditoria avançada (o log de Segurança sobe para 128 MiB). **"What does it change?"** lista cada ajuste com o seu risco. BitLocker, níveis de NTLM, contas, discos, idioma e chave do produto não são alterados. Os arquivos são conferidos byte a byte junto com o resto do pendrive, e se a imagem já contiver algum deles o programa para **antes** de apagar qualquer coisa.
 - **Linux e outros (um segundo pendrive):** ISOs gravadas direto não aceitam arquivos extras, então o cartão **Hardening seed** apaga um **segundo pendrive pequeno** (GPT + FAT32) e grava os arquivos nele. Mantenha o pendrive do instalador e conecte o do kit ao lado. **Ubuntu** (`autoinstall`, rótulo `CIDATA`; acrescente `autoinstall` na linha de boot, todas as telas continuam interativas), **Fedora / RHEL** (kickstart, rótulo `OEMDRV`, o instalador encontra sozinho) e **Debian** (o instalador **não** encontra o pendrive: monte-o depois de instalar e rode `sudo bash harden-linux.sh`, ou `su -` se não houver sudo).
+- **Windows 11 (um segundo pendrive):** o mesmo cartão tem a opção **Windows 11 (run after install)**, que serve para um Windows 11 **já instalado** (não participa da instalação do Windows): abra o pendrive, dê dois cliques em `audit.cmd` (relatório só de leitura; linhas `[DIFF]` não estão em vigor), depois em `harden.cmd` (pede `y` e o aviso de administrador); `undo.cmd` desfaz (nunca religa o SMBv1 nem o PowerShell 2.0 e não restaura o que já estava assim antes). Os arquivos do pendrive não são autenticados: use só um pendrive de kit que você mesmo fez e mantenha-o com você. Extra opcional: `harden.ps1 -DisableLegacyNetwork` (NetBIOS sobre TCP/IP e WPAD desligados).
 - **O script Linux** (`harden-linux.sh`) é texto puro, aceita `--dry-run`, `--yes`, `--undo` e `--help`, guarda cópia de cada arquivo que altera (`.epma-bak`), mostra cada mudança e grava em `/var/log/epma-hardening.log`. É idempotente e tenta não trancar você para fora: login de root ou por senha no SSH só é desligado quando existe uma conta de administrador com chave, e o firewall não é ligado num computador com Docker, libvirt ou LXD, a não ser que você use `--yes`.
 
 ```bash
 python3 win11_usb_creator.py harden-files --target ubuntu --out ./ubuntu-seed          # só os arquivos, sem pendrive
 python3 win11_usb_creator.py harden-seed --target fedora --disk disk4 --dry-run        # plano de um pendrive de kit
+python3 win11_usb_creator.py harden-seed --target windows --disk disk4                 # kit do Windows 11
+python3 win11_usb_creator.py harden-files --target windows-seed --out ./win-seed        # arquivos do kit Windows, sem pendrive
 python3 win11_usb_creator.py write --iso Win11.iso --disk disk4 --hardened             # Windows + arquivos de reforço
 ```
 
@@ -313,6 +335,7 @@ Cada alteração é verificada automaticamente pelo GitHub Actions (todas as act
 |---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | Lint, testes unitários (Python 3.10–3.15, Linux e macOS), ShellCheck dos scripts embutidos, testes de ponta a ponta em loop devices, sondas de distribuições Linux |
 | [`security.yml`](.github/workflows/security.yml) | Guarda de regressão de segurança, Bandit, Semgrep, CodeQL, busca de segredos |
+| [`windows.yml`](.github/workflows/windows.yml) | Gera o MSI do Windows, instala e desinstala em modo silencioso, roda os testes unitários no Windows e o teste ponta a ponta em disco virtual (VHD) |
 | [`release.yml`](.github/workflows/release.yml) | Publica releases com checksums SHA-256, procedência da build e SBOM; atualiza o tap do Homebrew |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | Avaliação de cadeia de suprimentos do OpenSSF Scorecard |
 
@@ -356,7 +379,7 @@ Certifique-se de que a máquina está em modo **UEFI** (não Legacy/CSM). O pend
 
 ## Limitações
 
-- Não funciona no Windows (o script sai com erro nessa plataforma).
+- **O suporte ao Windows é novo e foi escrito sem uma máquina Windows à mão**: os testes unitários simulam as etapas de PowerShell/DISM/disco bruto, e o teste ponta a ponta em disco virtual (VHD) roda só na CI. Teste primeiro com um pendrive sobressalente. O MSI não é assinado digitalmente. Arquivos `install.esd` acima de 4 GB não podem ser divididos no Windows (o DISM divide só `.wim`); a ISO da página de download da Microsoft traz `install.wim`.
 - Gera apenas mídia **UEFI/GPT** — sem suporte a boot BIOS legado.
 - Não faz bypass dos requisitos do Windows 11 (TPM 2.0 / Secure Boot).
 - Um download cancelado ou interrompido mantém o arquivo parcial e retoma quando o servidor permite; uma falha de integridade o descarta.

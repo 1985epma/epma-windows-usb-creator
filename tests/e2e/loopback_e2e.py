@@ -33,8 +33,11 @@ Scenarios (each with its own loop device, always detached in `finally`):
                 too small and when canceled before the start (device untouched), then GPT + ONE
                 FAT32 partition (not an EFI system partition) with the label from the seed, every
                 file byte for byte (nested folder, '$' in a name), and verify_seed_files must
-                reject a changed and a missing file. Only the USB-only safety re-check is stood in
-                for (a loop device is not a USB drive); everything else is the real code.
+                reject a changed and a missing file. Also the Windows seed ("windows") with the
+                REAL file set from hardening_files_seed: flat .cmd/.ps1/.txt names (the ~90 KB
+                harden.ps1 with CRLF line endings and a UTF-8 BOM) must come back byte for byte, label EPMA-SEED. Only the USB-only safety
+                re-check is stood in for (a loop device is not a USB drive); everything else is the
+                real code.
 
 Environment:
   E2E_REQUIRE=1   a missing prerequisite is a FAILURE instead of a skip (CI sets this).
@@ -353,7 +356,7 @@ def scenario_windows_split(app, workdir, priv, rec):
 
 
 HARDENING_FILES = {
-    "autounattend.xml": b"<?xml version='1.0' encoding='utf-8'?><unattend/>\n",
+    "answer-standin.xml": b"<?xml version='1.0' encoding='utf-8'?><unattend/>\n",
     "sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"@echo off\r\npowershell -File harden.ps1\r\n",
     "sources/$OEM$/$$/Setup/Scripts/harden.ps1": random.Random(41).randbytes(5000),
 }
@@ -466,20 +469,24 @@ def seed_test_files():
 
 
 @contextlib.contextmanager
-def seed_engine_patches(app, loop_name, label, files):
+def seed_engine_patches(app, loop_name, label=None, files=None):
     """Point build_seed_usb at the loop device: the real USB-only listing would (rightly) not list it.
 
     Only the safety re-check is replaced, and only to insist that it is asked about THIS loop device;
-    every other step (validation, scripts, copy, read-back) is the real code. hardening_files_seed is
-    replaced too, so this scenario does not depend on the wording of the real seed files.
+    every other step (validation, scripts, copy, read-back) is the real code. With `files` given,
+    hardening_files_seed is replaced too (the Linux phases use small stand-ins, so they do not depend on the
+    wording of the real seed files). With `files=None` the REAL hardening_files_seed is used (the Windows phase).
     """
     def recheck(dev, expected_size, log, expected_identity=None):
         assert dev == loop_name, f"build_seed_usb re-checked {dev!r}, expected {loop_name!r}"
         log(f"(e2e) safety re-check stands in for the USB listing: {dev}")
 
-    with mock.patch.object(app, "hardening_files_seed", create=True,
-                           side_effect=lambda target, profile: (label, dict(files))), \
-            mock.patch.object(app, "reverify_target_disk", side_effect=recheck):
+    with contextlib.ExitStack() as stack:
+        if files is not None:
+            stack.enter_context(mock.patch.object(
+                app, "hardening_files_seed", create=True,
+                side_effect=lambda target, profile, **_kw: (label, dict(files))))
+        stack.enter_context(mock.patch.object(app, "reverify_target_disk", side_effect=recheck))
         yield
 
 
@@ -562,6 +569,22 @@ def scenario_seed_drive(app, workdir, priv, rec):
         with seed_engine_patches(app, name, "EPMA-SEED", files):
             app.build_seed_usb("debian", name, Recorder().log, priv, expected_size=size)
         check_seed_drive(app, dev, "EPMA-SEED", files)
+
+        # ===== hardening2: engine-cli =====
+        # The Windows seed drive with the REAL file set (hardening_files_seed is not patched): the real harden.ps1
+        # (UTF-8 BOM, CRLF, tens of KB) and launchers go through the real mkfs, mount, copy and read-back.
+        # Nothing in that path may change a byte (no text mode, no newline translation).
+        label, win_files = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE)
+        assert label == "EPMA-SEED", f"unexpected Windows seed label {label!r}"
+        assert set(win_files) == {"harden.cmd", "audit.cmd", "undo.cmd", "harden.ps1", "README.txt"}, \
+            f"unexpected Windows seed files {sorted(win_files)}"
+        assert win_files["harden.ps1"].startswith(b"\xef\xbb\xbf"), "harden.ps1 lost its BOM"
+        assert b"\r\n" in win_files["harden.ps1"] and b"\r\n" in win_files["harden.cmd"], "no CRLF"
+        assert sum(len(d) for d in win_files.values()) > 50_000, "the real files are not the small stand-ins"
+        with seed_engine_patches(app, name):
+            app.build_seed_usb(app.SEED_WINDOWS, name, Recorder().log, priv, expected_size=size)
+        check_seed_drive(app, dev, label, win_files)
+        # ===== end hardening2: engine-cli =====
 # ===== end hardening: engine-seed =====
 
 

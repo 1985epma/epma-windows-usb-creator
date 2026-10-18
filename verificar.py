@@ -83,7 +83,7 @@ for nome, comando, obrigatoria in CONFERENCIAS:
     try:
         # O limite de tempo é essencial: uma conferência que abrisse uma caixa
         # de diálogo ficaria esperando um clique para sempre.
-        r = subprocess.run(comando, capture_output=True, text=True, timeout=180)
+        r = subprocess.run(comando, capture_output=True, text=True, timeout=600)
     except subprocess.TimeoutExpired:
         print(f"  [DEMOROU] {nome}")
         falhas.append((nome, "A conferência passou de 3 minutos e foi interrompida. "

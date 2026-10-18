@@ -14,7 +14,7 @@ from unittest import mock
 from tests.helpers import FAKE_DISKS, TempDirTestCase, app, run_main
 
 WIN_FILES = {
-    "autounattend.xml": b"<unattend/>\n",
+    "answer-standin.xml": b"<unattend/>\n",
     "sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd": b"@echo off\r\n",
     "sources/$OEM$/$$/Setup/Scripts/harden.ps1": b"# harden\r\n",
 }
@@ -25,7 +25,18 @@ SEED_FILES = {
                           "README.txt": b"hello\n"}),
     "debian": ("EPMA-SEED", {"preseed.cfg": b"# preseed\n", "harden-linux.sh": b"#!/bin/bash\n",
                              "README.txt": b"hello\n"}),
+    # ===== hardening2: engine-cli tests =====
+    # the Windows seed drive: flat names with Windows extensions and CRLF line endings
+    "windows": ("EPMA-SEED", {"harden.cmd": b"@echo off\r\n", "audit.cmd": b"@echo off\r\n",
+                              "undo.cmd": b"@echo off\r\n", "harden.ps1": b"\xef\xbb\xbf# harden\r\n",
+                              "README.txt": b"hello\r\n"}),
+    # ===== end hardening2: engine-cli tests =====
 }
+# ===== hardening2: engine-cli tests =====
+def fake_seed_files(target, profile):
+    """Stand-in for hardening_files_seed(target, profile): two parameters, no other option."""
+    return SEED_FILES[target][0], dict(SEED_FILES[target][1])
+# ===== end hardening2: engine-cli tests =====
 
 
 def fake_validate(files):
@@ -48,8 +59,7 @@ class HardeningCliCase(TempDirTestCase):
             "files_windows": mock.patch.object(app, "hardening_files_windows", create=True,
                                                side_effect=lambda profile: dict(WIN_FILES)),
             "files_seed": mock.patch.object(app, "hardening_files_seed", create=True,
-                                            side_effect=lambda target, profile: (
-                                                SEED_FILES[target][0], dict(SEED_FILES[target][1]))),
+                                            side_effect=fake_seed_files),
             "validate": mock.patch.object(app, "validate_seed_files", create=True, side_effect=fake_validate),
             # added by the engine part of the feature (ValueError for a known size under 64 MiB)
             "size_check": mock.patch.object(app, "check_seed_target_size", create=True),
@@ -85,24 +95,42 @@ class ParserTests(unittest.TestCase):
         self.assertTrue(args.dry_run and args.yes and args.json and args.no_eject)
         args = self.parse("harden-files", "--target", "windows", "--out", "somewhere", "--json")
         self.assertEqual((args.target, args.out, args.json), ("windows", "somewhere", True))
+        self.assertFalse(hasattr(args, "during_setup"))
 
     def test_every_target_is_accepted(self):
         for target in app.SEED_TARGETS:
             with self.subTest(target=target):
                 self.assertEqual(self.parse("harden-seed", "--target", target, "--disk", "d").target, target)
+        for target in ("windows", "windows-seed", "ubuntu", "fedora", "debian"):
+            with self.subTest(files_target=target):
                 self.assertEqual(self.parse("harden-files", "--target", target, "--out", "x").target, target)
-        self.assertEqual(self.parse("harden-files", "--target", "windows", "--out", "x").target, "windows")
+        self.assertEqual(app.HARDEN_FILES_TARGETS, ("windows", "windows-seed", "ubuntu", "fedora", "debian"))
+
+    def test_the_during_setup_flag_no_longer_exists(self):
+        # argparse: an unrecognised argument exits with status 2 (usage error)
+        for argv in (["harden-seed", "--target", "windows", "--disk", "d", "--during-setup"],
+                     ["harden-seed", "--target", "ubuntu", "--disk", "d", "--during-setup"],
+                     ["harden-files", "--target", "windows-seed", "--out", "x", "--during-setup"],
+                     ["harden-files", "--target", "windows", "--out", "x", "--during-setup"]):
+            with self.subTest(argv=argv):
+                code, out, err = run_main(argv)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("unrecognized arguments: --during-setup", err)
+                self.assertNotIn("Traceback", err)
+        self.assertFalse(hasattr(app, "DURING_SETUP_EXPERIMENTAL"))
+        self.assertFalse(hasattr(app, "DURING_SETUP_ONLY_WINDOWS"))
 
     def test_bad_arguments_are_usage_errors(self):
         for argv in (["harden-seed"],
                      ["harden-seed", "--target", "ubuntu"],
                      ["harden-seed", "--disk", "disk9"],
-                     ["harden-seed", "--target", "windows", "--disk", "disk9"],  # a seed drive is for Linux
+                     ["harden-seed", "--target", "windows-seed", "--disk", "disk9"],  # that name is for harden-files
                      ["harden-seed", "--target", "arch", "--disk", "disk9"],
                      ["harden-seed", "--target", "ubuntu", "--disk", "disk9", "--hardened"],
                      ["harden-seed", "--target", "ubuntu", "--disk", "disk9", "--no-verify"],
                      ["harden-files"],
                      ["harden-files", "--target", "windows"],
+                     ["harden-files", "--target", "windows-seed"],
                      ["harden-files", "--out", "x"],
                      ["harden-files", "--target", "macos", "--out", "x"],
                      ["harden-files", "--target", "windows", "--out", "x", "--yes"],  # no drive, nothing to confirm
@@ -125,9 +153,12 @@ class ParserTests(unittest.TestCase):
         text = run_main(["harden-seed", "--help"])[1]
         for flag in ("--target", "--disk", "--dry-run", "--yes", "--json", "--no-eject"):
             self.assertIn(flag, text)
+        self.assertNotIn("--during-setup", text)
+        self.assertNotIn("EXPERIMENTAL", text)
         self.assertNotIn("--no-verify", text)  # verification of the seed drive cannot be switched off either
         for flag in ("--target", "--out", "--json"):
             self.assertIn(flag, run_main(["harden-files", "--help"])[1])
+        self.assertNotIn("--during-setup", run_main(["harden-files", "--help"])[1])
 
 
 class WriteHardenedTests(HardeningCliCase):
@@ -340,6 +371,7 @@ class HardenSeedTests(HardeningCliCase):
         self.assertTrue(callable(kwargs["progress"]))
         self.assertIs(kwargs["eject"], True)
         self.assertEqual(kwargs["profile"], app.HARDENING_BASELINE)
+        self.assertNotIn("during_setup", kwargs)
         self.assertTrue(hasattr(kwargs["cancel_event"], "set"))
         self.assertFalse(kwargs["cancel_event"].is_set())
         self.build_usb.assert_not_called()  # an image writer is never involved
@@ -382,6 +414,7 @@ class HardenSeedTests(HardeningCliCase):
                                                  "exit_code")},
                          {"ok": True, "mode": "seed", "target": "ubuntu", "disk": "disk9", "verified": True,
                           "ejected": True, "error": None, "exit_code": 0})
+        self.assertNotIn("during_setup", result)
         self.assertEqual(result["files"], sorted(SEED_FILES["ubuntu"][1]))
         self.assertIn("elapsed_seconds", result)
         self.assertNotIn('"ok"', err)  # stdout carries the data, stderr the messages
@@ -468,6 +501,103 @@ class HardenSeedTests(HardeningCliCase):
         self.assertIn("macOS and Linux only", err)
         self.build_seed_usb.assert_not_called()
 
+    # ===== hardening2: engine-cli tests =====
+    def test_windows_dry_run_lists_the_file_names_and_the_label(self):
+        code, out, err = run_main(self.seed_args("--dry-run", target="windows"))
+        self.assertEqual(code, 0)
+        for text in ("Seed : windows (volume label EPMA-SEED)", "harden.cmd", "audit.cmd", "undo.cmd",
+                     "harden.ps1", "README.txt", "GPT + FAT32", "byte for byte"):
+            self.assertIn(text, out)
+        for text in ("autounattend.xml", "EPMA-SEED.txt", "SetupComplete.cmd", "EXPERIMENTAL"):
+            self.assertNotIn(text, out)
+        self.assertIn("Dry run", err)
+        self.files_seed.assert_called_once_with("windows", app.HARDENING_BASELINE)
+        self.files_windows.assert_not_called()  # the same-USB set is a different thing
+        self.build_seed_usb.assert_not_called()
+        self.authenticate.assert_not_called()
+        self.pin.assert_not_called()
+
+    def test_dry_run_json_has_no_during_setup_key(self):
+        code, out, err = run_main(self.seed_args("--dry-run", "--json", target="windows"))
+        self.assertEqual((code, err), (0, ""))
+        plan = json.loads(out)
+        self.assertNotIn("during_setup", plan)
+        self.assertEqual((plan["mode"], plan["target"], plan["volume_label"]), ("seed", "windows", "EPMA-SEED"))
+        self.assertEqual(plan["files"], sorted(SEED_FILES["windows"][1]))
+        self.assertFalse(any("EXPERIMENTAL" in step for step in plan["steps"]))
+        plan = json.loads(run_main(self.seed_args("--dry-run", "--json", target="debian"))[1])
+        self.assertNotIn("during_setup", plan)
+
+    def test_during_setup_is_an_unrecognised_argument_for_harden_seed(self):
+        for target in ("windows", "ubuntu", "fedora", "debian"):
+            with self.subTest(target=target):
+                code, out, err = run_main(self.seed_args("--during-setup", "--yes", target=target))
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("unrecognized arguments: --during-setup", err)
+        self.get_external_disks.assert_not_called()  # not even the drives were listed
+        self.files_seed.assert_not_called()
+        self.authenticate.assert_not_called()
+        self.pin.assert_not_called()
+        self.build_seed_usb.assert_not_called()
+
+    def test_windows_reaches_the_engine_without_the_removed_option(self):
+        code, out, _err = run_main(self.seed_args("--yes", target="windows"))
+        self.assertEqual((code, out), (0, ""))
+        args, kwargs = self.build_seed_usb.call_args
+        self.assertEqual((args[0], args[1]), ("windows", "disk9"))
+        self.assertNotIn("during_setup", kwargs)
+        self.assertEqual(kwargs["profile"], app.HARDENING_BASELINE)
+        self.assertIs(kwargs["eject"], True)
+        self.build_usb.assert_not_called()
+
+    def test_windows_json_result(self):
+        code, out, _err = run_main(self.seed_args("--yes", "--json", target="windows"))
+        self.assertEqual(code, 0)
+        result = json.loads(out)
+        self.assertEqual({k: result[k] for k in ("ok", "mode", "target", "disk", "verified",
+                                                 "ejected", "error", "exit_code")},
+                         {"ok": True, "mode": "seed", "target": "windows", "disk": "disk9",
+                          "verified": True, "ejected": True, "error": None, "exit_code": 0})
+        self.assertNotIn("during_setup", result)
+        self.assertEqual(result["files"], sorted(SEED_FILES["windows"][1]))
+        self.assertEqual(result["volume_label"], "EPMA-SEED")
+
+    def test_the_confirmation_pinning_and_exit_codes_are_the_same_for_windows(self):
+        code, out, err = run_main(self.seed_args(target="windows"))  # not a terminal, no --yes
+        self.assertEqual((code, out), (app.EXIT_USAGE, ""))
+        self.assertIn("--yes", err)
+        self.assertIn("harden.cmd", err)  # the plan was still shown
+        self.build_seed_usb.assert_not_called()
+        self.interactive()
+        code, _out, _err = run_main(self.seed_args(target="windows"), stdin_text="disk8\n")
+        self.assertEqual(code, app.EXIT_USAGE)
+        order = []
+        self.pin.side_effect = lambda dev, identity: order.append(("pin", dev, identity))
+        self.build_seed_usb.side_effect = lambda *a, **k: order.append("build") or True
+        code, _out, _err = run_main(self.seed_args(target="windows"), stdin_text="disk9\n")
+        self.assertEqual(code, 0)
+        self.assertEqual(order, [("pin", "disk9", (("serial", "ABC123"),)), "build", ("pin", "disk9", None)])
+        self.build_seed_usb.side_effect = lambda *a, **k: False
+        self.assertEqual(run_main(self.seed_args("--yes", target="windows"))[0], app.EXIT_EJECT_FAILED)
+        self.build_seed_usb.side_effect = RuntimeError("Verification FAILED: harden.cmd differs.")
+        self.assertEqual(run_main(self.seed_args("--yes", target="windows"))[0], app.EXIT_VERIFY_FAILED)
+
+    def test_the_audit_log_line_of_a_windows_seed_write(self):
+        with mock.patch.object(app, "audit") as audit:
+            run_main(self.seed_args("--yes", target="windows"))
+        lines = [c.args[0] for c in audit.call_args_list if str(c.args[0]).startswith("CLI write requested")]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("target=windows", lines[0])
+        self.assertNotIn("during_setup", lines[0])
+
+    def test_a_windows_file_set_the_validator_refuses_stops_the_command(self):
+        self.validate.side_effect = ValueError("name harden.cmd. ends with a dot")
+        code, out, err = run_main(self.seed_args("--yes", target="windows"))
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("ends with a dot", err)
+        self.build_seed_usb.assert_not_called()
+    # ===== end hardening2: engine-cli tests =====
+
 
 class HardenFilesTests(HardeningCliCase):
     def out_dir(self, name="seed-files"):
@@ -486,7 +616,9 @@ class HardenFilesTests(HardeningCliCase):
         return [n for n in os.listdir(self.tmp) if n.startswith(".epma-harden-")]
 
     def test_writes_every_target_into_a_new_folder(self):
-        cases = {"windows": WIN_FILES, **{t: SEED_FILES[t][1] for t in app.SEED_TARGETS}}
+        # "windows" is the same-USB set; "windows-seed" is the seed drive's set (its own files)
+        cases = {"windows": WIN_FILES, "windows-seed": SEED_FILES["windows"][1],
+                 **{t: SEED_FILES[t][1] for t in ("ubuntu", "fedora", "debian")}}
         for target, files in cases.items():
             with self.subTest(target=target):
                 out = self.out_dir(f"out-{target}")
@@ -668,7 +800,112 @@ class HardenFilesTests(HardeningCliCase):
         with mock.patch.dict(os.environ, {"HOME": self.tmp}):
             code, _stdout, _err = run_main(["harden-files", "--target", "windows", "--out", "~/from-home"])
         self.assertEqual(code, 0)
-        self.assertTrue(os.path.isfile(self.path("from-home", "autounattend.xml")))
+        self.assertTrue(os.path.isfile(self.path("from-home", "answer-standin.xml")))
+
+    # ===== hardening2: engine-cli tests =====
+    def test_windows_seed_writes_the_seed_drive_files(self):
+        files = SEED_FILES["windows"][1]
+        out = self.out_dir("out-ws")
+        code, stdout, err = run_main(["harden-files", "--target", "windows-seed", "--out", out])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.split("\n")[:-1], sorted(files))
+        self.assertIn("No drive was touched", err)
+        self.assertNotIn("EXPERIMENTAL", err)
+        self.assertEqual(sorted(os.listdir(out)), sorted(files))  # flat, with the Windows names
+        for rel, data in files.items():
+            with open(os.path.join(out, rel), "rb") as fh:
+                self.assertEqual(fh.read(), data)  # CRLF and BOM untouched
+            self.assertEqual(stat.S_IMODE(os.stat(os.path.join(out, rel)).st_mode), 0o600)
+        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o700)
+        self.assertEqual(self.leftovers(), [])
+        for removed in ("autounattend.xml", "EPMA-SEED.txt", "SetupComplete.cmd"):
+            self.assertNotIn(removed, os.listdir(out))
+
+    def test_windows_seed_asks_the_content_function_for_the_windows_seed(self):
+        run_main(["harden-files", "--target", "windows-seed", "--out", self.out_dir("a")])
+        self.files_seed.assert_called_with("windows", app.HARDENING_BASELINE)
+        self.files_windows.assert_not_called()
+
+    def test_windows_still_means_the_same_usb_set(self):
+        out = self.out_dir()
+        code, stdout, _err = run_main(["harden-files", "--target", "windows", "--out", out])
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.split("\n")[:-1], sorted(WIN_FILES))
+        self.files_windows.assert_called_once_with(app.HARDENING_BASELINE)
+        self.files_seed.assert_not_called()
+        self.assertTrue(os.path.isfile(os.path.join(out, "sources", "$OEM$", "$$", "Setup", "Scripts", "harden.ps1")))
+
+    def test_windows_points_to_windows_seed_for_the_seed_drive_files_on_stderr_only(self):
+        for flag in ([], ["--json"]):
+            with self.subTest(flag=flag):
+                code, stdout, err = run_main(["harden-files", "--target", "windows", "--out",
+                                              self.out_dir("same-usb" + str(len(flag))), *flag])
+                self.assertEqual(code, 0)
+                self.assertIn("--target windows-seed", err)
+                self.assertIn("SAME USB", err)
+                self.assertNotIn("windows-seed", stdout)  # the data on stdout (names or JSON) is unchanged
+                if flag:
+                    self.assertEqual(sorted(f["path"] for f in json.loads(stdout)["files"]), sorted(WIN_FILES))
+        for target in ("windows-seed", "ubuntu", "fedora", "debian"):  # the note is for the same-USB set only
+            with self.subTest(target=target):
+                err = run_main(["harden-files", "--target", target, "--out", self.out_dir("o-" + target)])[2]
+                self.assertNotIn("SAME USB", err)
+
+    def test_during_setup_is_an_unrecognised_argument_for_harden_files(self):
+        for target in ("windows", "windows-seed", "ubuntu", "fedora", "debian"):
+            with self.subTest(target=target):
+                out = self.out_dir("out-" + target)
+                code, stdout, err = run_main(["harden-files", "--target", target, "--during-setup", "--out", out])
+                self.assertEqual((code, stdout), (2, ""))
+                self.assertIn("unrecognized arguments: --during-setup", err)
+                self.assertFalse(os.path.exists(out))
+        self.files_seed.assert_not_called()
+        self.files_windows.assert_not_called()
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_folder_that_is_not_empty_is_still_refused_for_windows_seed(self):
+        out = self.out_dir()
+        self.write_file("seed-files/notes.txt", b"mine")
+        before = self.tree(out)
+        code, stdout, err = run_main(["harden-files", "--target", "windows-seed", "--out", out])
+        self.assertEqual((code, stdout), (app.EXIT_ERROR, ""))
+        self.assertIn("not empty", err)
+        self.assertEqual(self.tree(out), before)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_a_symbolic_link_is_still_refused_for_windows_seed(self):
+        real = self.path("real-empty")
+        os.mkdir(real)
+        link = self.path("link")
+        os.symlink(real, link)
+        code, _stdout, err = run_main(["harden-files", "--target", "windows-seed", "--out", link])
+        self.assertEqual(code, app.EXIT_ERROR)
+        self.assertIn("symbolic link", err)
+        self.assertEqual(os.listdir(real), [])
+
+    def test_windows_seed_files_are_checked_by_the_shared_validator(self):
+        run_main(["harden-files", "--target", "windows-seed", "--out", self.out_dir()])
+        self.validate.assert_called_once_with(SEED_FILES["windows"][1])
+        self.validate.side_effect = ValueError("name is reserved")
+        out = self.out_dir("refused")
+        code, stdout, err = run_main(["harden-files", "--target", "windows-seed", "--out", out])
+        self.assertEqual((code, stdout), (app.EXIT_ERROR, ""))
+        self.assertIn("name is reserved", err)
+        self.assertFalse(os.path.exists(out))
+
+    def test_json_shape_has_no_during_setup_and_keeps_its_keys(self):
+        keys = ["target", "out", "volume_label", "files"]
+        out = self.out_dir("j1")
+        data = json.loads(run_main(["harden-files", "--target", "windows-seed", "--out", out, "--json"])[1])
+        self.assertEqual(sorted(data), sorted(keys))
+        self.assertEqual((data["target"], data["volume_label"]), ("windows-seed", "EPMA-SEED"))
+        files = SEED_FILES["windows"][1]
+        self.assertEqual(data["files"], [{"path": n, "bytes": len(files[n])} for n in sorted(files)])
+        for target in ("windows", "debian"):
+            data = json.loads(run_main(["harden-files", "--target", target, "--out", self.out_dir("j" + target),
+                                        "--json"])[1])
+            self.assertEqual(sorted(data), sorted(keys))
+    # ===== end hardening2: engine-cli tests =====
 
 
 class SeedSizeAndConflictTests(HardeningCliCase):
@@ -714,7 +951,7 @@ class SeedSizeAndConflictTests(HardeningCliCase):
 
     def test_an_iso_that_already_holds_the_hardening_files_exits_2_with_the_message(self):
         iso = self.make_iso("Win11.iso", hybrid=False)
-        text = "This ISO already contains the hardening files (autounattend.xml). Nothing was changed."
+        text = "This ISO already contains the hardening files (answer-standin.xml). Nothing was changed."
         self.build_usb.side_effect = ValueError(text)
         code, out, err = run_main(self.write_args(iso, "--yes", "--hardened", "--mode", "windows", "--json"))
         self.assertEqual(code, app.EXIT_USAGE)
@@ -741,8 +978,10 @@ class EpilogTests(unittest.TestCase):
 class HelpAndDocsTests(unittest.TestCase):
     def test_the_command_line_help_section_documents_the_new_commands(self):
         text = dict(app.help_sections())["Command line"]
-        for needle in ("• harden-seed ", "• harden-files ", "--hardened"):
+        for needle in ("• harden-seed ", "• harden-files ", "--hardened", "windows-seed"):
             self.assertIn(needle, text)
+        self.assertNotIn("--during-setup", text)
+        self.assertNotIn("autounattend", text)
         self.assertNotRegex(text, r"(?i)\b(CIS|STIG|NIST|certified|compliant|compliance)\b")
 
     def test_the_help_flags_exist_in_the_parser(self):

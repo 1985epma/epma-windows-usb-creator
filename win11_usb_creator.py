@@ -17,7 +17,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 EPMA USB CREATOR: creates verified bootable USB drives from Windows 11, Linux and
-other ISOs, and Google's ChromeOS Flex, on macOS and any Linux distro (GUI and
+other ISOs, and Google's ChromeOS Flex, on Windows 11, macOS and any Linux distro (GUI and
 command line). Windows 11 gets a UEFI GPT + FAT32 drive; Linux, other hybrid ISOs
 and ChromeOS Flex are written byte for byte. Every write is read back and verified.
 
@@ -32,6 +32,10 @@ for you via apt/dnf/yum/pacman/zypper/apk):
 wimlib-imagex is required for Windows 11 because install.wim/install.esd
 usually exceeds 4 GB, the FAT32 file size limit — the script splits the
 file automatically when that happens.
+
+Windows 11 requirements: none beyond Python with Tkinter (or the MSI package, which
+bundles both). Disks are handled with the PowerShell Storage cmdlets and DISM, which
+ship with Windows; the program must run as Administrator (the MSI shortcut asks for it).
 
 Writing a drive needs root on Linux (and on macOS for the byte-for-byte
 modes), so the app asks for your sudo password (or uses pkexec if sudo isn't
@@ -81,6 +85,12 @@ if platform.system() == "Darwin":
         "Tkinter is not available for this Python installation.\n"
         "Install it with: brew install python-tk@<version matching your python>"
     )
+elif platform.system() == "Windows":
+    TK_MISSING_MESSAGE = (
+        "Tkinter is not available for this Python installation.\n"
+        "Reinstall Python from python.org with \"tcl/tk and IDLE\" selected, "
+        "or use the EPMA USB Creator MSI package, which bundles it."
+    )
 else:
     TK_MISSING_MESSAGE = (
         "Tkinter is not available for this Python installation.\n"
@@ -101,6 +111,7 @@ __version__ = "1.1.0"
 
 IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
+IS_WINDOWS = platform.system() == "Windows"
 
 APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as the Linux window class
 # The one-sentence description of the product: README, the Help > About text and the command
@@ -147,7 +158,8 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / audit.cmd / undo.cmd / harden.ps1 to run after install
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -237,6 +249,7 @@ RAW_CANCELED_MARKER = "WRITE_CANCELED"  # printed by the root write scripts when
 DIRECT_IO_ALIGNMENT = 4096     # oflag=direct on Linux only when the image size is a multiple of this
 PRIVATE_FILE_MODE = 0o600      # owner-only read/write for files we create
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)  # never follow a symlink planted at a temp/part file path
+O_BINARY = getattr(os, "O_BINARY", 0)      # Windows only: never translate line endings in a file we open by descriptor
 SLEEP_INHIBIT_SECONDS = 12 * 3600  # the Linux sleep inhibitor is bounded, so it can never leak for good
 SLEEP_INHIBIT_CHECK_SECONDS = 0.3  # how long to wait to see that the inhibitor really started
 # A write error that retrying cannot fix (and that must not be mistaken for a network problem).
@@ -248,6 +261,7 @@ DOWNLOAD_FATAL_ERRNOS = tuple(getattr(errno, n) for n in ("ENOSPC", "EDQUOT", "E
 # disk name with spaces, quotes or shell metacharacters.
 MAC_DEVICE_RE = re.compile(r"^disk[0-9]+$")
 LINUX_DEVICE_RE = re.compile(r"^[a-zA-Z0-9_+-]{1,32}$")
+WINDOWS_DEVICE_RE = re.compile(r"^PhysicalDrive[0-9]{1,4}$")
 
 # Mount points that must never live on a disk we are about to erase.
 CRITICAL_MOUNTPOINTS = ("/", "/boot", "/boot/efi", "/home", "/usr", "/var", "/etc")
@@ -385,12 +399,12 @@ PT_BR = {
     # ----- confirmations and creation -----
     "Windows 11": "Windows 11",
     "the selected Linux image": "a imagem Linux selecionada",
-    "This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.":
-        "Isto vai APAGAR PERMANENTEMENTE todos os dados de /dev/{id} e gravar {what} nele.",
+    "This will PERMANENTLY ERASE all data on {path} and write {what} to it.":
+        "Isto vai APAGAR PERMANENTEMENTE todos os dados de {path} e gravar {what} nele.",
     "Confirm erasing this drive": "Confirmar o apagamento desta unidade",
     "Final confirmation": "Confirmação final",
     "Continue?": "Continuar?",
-    "Drive: /dev/{id}": "Unidade: /dev/{id}",
+    "Drive: {path}": "Unidade: {path}",
     "Model: {model}": "Modelo: {model}",
     "Size: {size}": "Tamanho: {size}",
     "Contents: could not be read": "Conteúdo: não foi possível ler",
@@ -417,8 +431,8 @@ PT_BR = {
     "To confirm, type the drive identifier exactly as shown ({expected}):":
         "Para confirmar, digite o identificador da unidade exatamente como aparece ({expected}):",
     "Erase this drive": "Apagar esta unidade",
-    "Administrator access is required to write /dev/{id}.":
-        "É necessário acesso de administrador para gravar em /dev/{id}.",
+    "Administrator access is required to write {path}.":
+        "É necessário acesso de administrador para gravar em {path}.",
     "Canceled: administrator password was not provided. The drive was not modified.":
         "Cancelado: a senha de administrador não foi informada. A unidade não foi modificada.",
     "It was verified against the ISO and ejected — you can unplug it now.":
@@ -445,6 +459,16 @@ PT_BR = {
     # ----- progress -----
     "Preparing the drive...": "Preparando a unidade...",
     "Writing the image...": "Gravando a imagem...",
+    "Checking the split install image...": "Conferindo a imagem de instalação dividida...",
+    "Administrator required": "Administrador necessário",
+    "EPMA USB Creator must run as Administrator to erase and write a USB drive.\n\n"
+    "Close it and open it again with right-click > Run as administrator (the Start menu "
+    "shortcut of the installed program does this by itself). Nothing was changed.":
+        "O EPMA USB Creator precisa rodar como Administrador para apagar e gravar um pendrive.\n\n"
+        "Feche-o e abra de novo com o botão direito > Executar como administrador (o atalho do menu "
+        "Iniciar do programa instalado já faz isso sozinho). Nada foi alterado.",
+    "Canceled: the program is not running as Administrator. The drive was not modified.":
+        "Cancelado: o programa não está rodando como Administrador. A unidade não foi modificada.",
     "Verifying the written image...": "Verificando a imagem gravada...",
     "Verifying the copied files...": "Verificando os arquivos copiados...",
     "Verifying the install image...": "Verificando a imagem de instalação...",
@@ -563,7 +587,15 @@ PT_BR = {
     "What does it change?": "O que isto altera?",
     "Hide the list": "Ocultar a lista",
     "The settings are applied at the end of Windows setup by a script, and every change is written to {log}. You choose the disk, the account and the edition during setup as usual.": "Os ajustes são aplicados no final da instalação do Windows por um script, e cada alteração é registrada em {log}. Você escolhe o disco, a conta e a edição durante a instalação, como de costume.",
-    "Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, hardened Linux install. Write the installer to its own drive with the Linux card, then plug both drives into the computer you install on. The files never choose or erase a disk on that computer: you still pick the disk and create the account yourself. No image file is needed; writing this drive ERASES it.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para uma instalação automática e reforçada do Linux. Grave o instalador no pendrive dele com o cartão Linux e depois conecte os dois pendrives ao computador onde vai instalar. Os arquivos nunca escolhem nem apagam um disco desse computador: você continua escolhendo o disco e criando a conta. Não é preciso nenhum arquivo de imagem; gravar este pendrive o APAGA.",
+    "Makes a SECOND, small USB drive (not the installer) with settings for a hardened Linux or Windows 11 install. Write the installer on its own drive (Linux or Windows card) and plug both in. It never chooses or erases a disk on that PC. No image is needed; writing this drive ERASES it.": "Cria um SEGUNDO pendrive, pequeno (não é o instalador), com ajustes para instalar o Linux ou o Windows 11 de forma reforçada. Grave o instalador em outro pendrive (cartão Linux ou Windows) e conecte os dois. Ele nunca escolhe nem apaga um disco desse PC. Não precisa de imagem; gravar este pendrive o APAGA.",
+    "Second USB drive": "Segundo pendrive",
+    "Hardening scripts": "Scripts de reforço",
+    "Windows 11 (run after install)": "Windows 11 (executar depois de instalar)",
+    "Run harden.cmd as administrator on a Windows 11 that is already installed; audit.cmd shows a report first, undo.cmd goes back.": "Execute o harden.cmd como administrador em um Windows 11 já instalado; o audit.cmd mostra primeiro um relatório e o undo.cmd desfaz.",
+    "The files were checked on the drive and it was ejected — you can unplug it now.": "Os arquivos foram conferidos no pendrive e ele foi ejetado — você já pode removê-lo.",
+    "The files were checked on the drive, but it could not be ejected automatically. Eject it from the file manager before unplugging.": "Os arquivos foram conferidos no pendrive, mas ele não pôde ser ejetado automaticamente. Ejete-o pelo gerenciador de arquivos antes de removê-lo.",
+    "Windows 11 hardening drive created and verified": "Pendrive de reforço do Windows 11 criado e verificado",
+    "On a Windows 11 that is already installed, open this drive and run audit.cmd (shows a report, changes nothing), harden.cmd (as administrator) or undo.cmd (goes back). The scripts were never run on real Windows: try them on a test machine first.": "Em um Windows 11 já instalado, abra este pendrive e execute o audit.cmd (mostra um relatório, não altera nada), o harden.cmd (como administrador) ou o undo.cmd (desfaz). Os scripts nunca foram executados em um Windows real: teste primeiro em um computador de teste.",
     "Install target:": "Sistema de destino:",
     "Ubuntu (autoinstall)": "Ubuntu (autoinstall)",
     "Fedora / RHEL (kickstart)": "Fedora / RHEL (kickstart)",
@@ -600,6 +632,11 @@ PT_BR = {
     "Turn off Remote Assistance invitations -- risk: Old-style Remote Assistance invitations stop working; Quick Assist and Remote Desktop are not changed.": "Desativar os convites de Assistência Remota -- risco: Os convites no estilo antigo da Assistência Remota deixam de funcionar; o Assistência Rápida e a Área de Trabalho Remota não são alterados.",
     "Advanced audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation; Security log size raised to 128 MiB -- risk: The Security event log fills much faster (process creation and sign-ins are frequent events), so its maximum size is raised to 128 MiB (never lowered). Retention is still limited: on a busy PC the oldest events can be overwritten within days, so export the log if you need to keep it.": "Política de auditoria avançada: logons, bloqueios de conta, alterações de contas e grupos, alterações da política de auditoria, criação de processos; tamanho do log de Segurança aumentado para 128 MiB -- risco: O log de eventos de Segurança enche muito mais rápido (criação de processos e logons são eventos frequentes); por isso o tamanho máximo dele sobe para 128 MiB (nunca é reduzido). A retenção continua limitada: num PC muito usado, os eventos mais antigos podem ser sobrescritos em poucos dias; exporte o log se precisar guardá-lo.",
     "Keep User Account Control switched on -- risk: Only acts when UAC was switched off; takes effect after the next restart.": "Manter o Controle de Conta de Usuário ativado -- risco: Só age quando o UAC estava desativado; vale após a próxima reinicialização.",
+    # ===== hardening2: windows script (new describe lines) =====
+    "Defender attack surface rules in Audit mode (log only), more: abuse of exploited vulnerable signed drivers, process creation from PsExec and WMI commands, untrusted processes that run from USB drives -- risk: Audit mode only writes events and blocks nothing; running programs from a USB stick or with remote-management tools adds events. Review the Defender event log before switching any rule to Block. The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect.": "Regras de redução da superfície de ataque do Defender em modo Auditoria (somente registro), mais: abuso de drivers assinados vulneráveis já explorados, criação de processos por comandos PsExec e WMI, processos não confiáveis executados de pendrives USB -- risco: O modo Auditoria só grava eventos e não bloqueia nada; executar programas de um pendrive ou com ferramentas de administração remota gera eventos. Revise o log de eventos do Defender antes de mudar qualquer regra para Bloquear. O script roda uma única vez no fim da instalação e não tenta de novo; o log mostra [WARN] para uma regra que não esteja em vigor.",
+    "Opt-in (-DisableLegacyNetwork, never applied by default): turn off NetBIOS over TCP/IP on all network adapters -- risk: Looking up or browsing machines by their NetBIOS name stops working on the adapters that exist now (very old file shares, printers or NAS boxes reached by a short name). It takes effect when the adapter reconnects or after a restart; adapters added later keep their default.": "Opcional (-DisableLegacyNetwork, nunca aplicado por padrão): desativar o NetBIOS sobre TCP/IP em todos os adaptadores de rede -- risco: Localizar ou navegar por máquinas pelo nome NetBIOS deixa de funcionar nos adaptadores que existem agora (compartilhamentos, impressoras ou NAS muito antigos acessados por um nome curto). Vale quando o adaptador se reconecta ou após uma reinicialização; adaptadores adicionados depois mantêm o padrão deles.",
+    "Opt-in (-DisableLegacyNetwork, never applied by default): turn off WPAD proxy auto-discovery for WinHTTP -- risk: A network that hands out its proxy only through WPAD (some offices and schools) no longer gives it to Windows services and apps that use WinHTTP, so they can lose internet access until a proxy is set by hand. The WinHTTP auto-proxy service itself is left running.": "Opcional (-DisableLegacyNetwork, nunca aplicado por padrão): desativar a descoberta automática de proxy WPAD para o WinHTTP -- risco: Uma rede que só informa o proxy pelo WPAD (alguns escritórios e escolas) deixa de entregá-lo aos serviços e aplicativos do Windows que usam o WinHTTP, que podem ficar sem internet até que um proxy seja configurado manualmente. O próprio serviço de proxy automático do WinHTTP continua em execução.",
+    # ===== end hardening2: windows script =====
     # ===== end hardening: windows content =====
 }
 
@@ -679,6 +716,9 @@ def audit_log_path():
     override = os.environ.get(ENV_AUDIT_LOG)
     if override:
         return os.path.expanduser(override)
+    if IS_WINDOWS:  # %LOCALAPPDATA% is private to the user (the folder's ACL is inherited from the profile)
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        return os.path.join(base, "epma-win11-usb-creator", "audit.log")
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
     return os.path.join(base, "epma-win11-usb-creator", "audit.log")
 
@@ -747,15 +787,20 @@ def validate_device_name(dev):
     """
     if not isinstance(dev, str) or not dev:
         raise ValueError("No disk was selected.")
-    pattern = MAC_DEVICE_RE if IS_MAC else LINUX_DEVICE_RE
+    pattern = MAC_DEVICE_RE if IS_MAC else WINDOWS_DEVICE_RE if IS_WINDOWS else LINUX_DEVICE_RE
     # fullmatch, not match: "$" also matches just before a trailing newline, so "sdb\n" would pass.
     if not pattern.fullmatch(dev):
         audit(f"REJECTED invalid device identifier: {dev!r}", logging.WARNING)
         raise ValueError(
             f"Refusing to operate on {dev!r}: it is not a valid disk identifier. "
-            "Expected something like 'disk4' (macOS) or 'sdb' (Linux)."
+            "Expected something like 'disk4' (macOS), 'sdb' (Linux) or 'PhysicalDrive3' (Windows)."
         )
     return dev
+
+
+def dev_path(dev):
+    """How a disk identifier is shown to the user: /dev/disk4, /dev/sdb or \\\\.\\PhysicalDrive3."""
+    return "\\\\.\\" + str(dev) if IS_WINDOWS else "/dev/" + str(dev)
 
 
 def has_mbr_signature(head):
@@ -978,7 +1023,7 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
             # A stale ".part" (or a symlink planted at that name) is removed, never written through.
             if os.path.lexists(tmp):
                 os.remove(tmp)
-            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | O_NOFOLLOW | O_BINARY, PRIVATE_FILE_MODE)
             created = True
             with os.fdopen(fd, "wb") as out, archive.open(info) as src:
                 while True:
@@ -1186,11 +1231,13 @@ def verify_raw_write(iso_path, device_path, log, priv, progress, cancel_event=No
 
 
 def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=None,
-                           extra_files=None):
+                           extra_files=None, split_hashes=None):
     """Compare what is on the drive with the ISO. Raises on any mismatch.
 
     Every file is compared by checksum (rsync dry run), and the install image is
     either compared directly or checked with `wimlib-imagex verify` when it was split.
+    On Windows (no rsync) the same check is made in Python, and a install image split by DISM is checked against
+    `split_hashes` ({part name: SHA-256}, taken when the parts were written) instead of `wimlib-imagex verify`.
     `extra_files` ({relative path: bytes}, the hardening files) are compared byte for byte too. They never
     replace a file of the ISO (an image that already holds one is refused before anything is copied), so
     the rsync comparison has no exemption: a hardening file that overwrote an ISO file shows up as a difference.
@@ -1205,8 +1252,11 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
         if re.match(r"^(>f|cd|\*deleting)", line):
             bad.append(line.strip())
 
-    run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
-            cancel_event=cancel_event)
+    if IS_WINDOWS:
+        bad.extend(compare_trees(src_root, dst_root, rel_big, cancel_event))
+    else:
+        run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
+                cancel_event=cancel_event)
     if bad:
         audit(f"VERIFICATION FAILED: {len(bad)} file(s) differ", logging.ERROR)
         raise RuntimeError(
@@ -1218,7 +1268,13 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
     if progress:
         progress(0, 0, "Verifying the install image...")
     swm = os.path.join(sources, os.path.splitext(name)[0] + ".swm")
-    if os.path.exists(swm):
+    if split_hashes:
+        now = hash_split_parts(sources, os.path.splitext(name)[0], cancel_event)
+        if now != split_hashes:
+            raise RuntimeError(
+                "Verification FAILED: the split install image on the drive differs from what was written.\n\n"
+                "The drive was NOT ejected and should not be used.")
+    elif os.path.exists(swm):
         try:
             run_cmd(["wimlib-imagex", "verify", swm, f"--ref={sources}/{os.path.splitext(name)[0]}*.swm"], log,
                     cancel_event=cancel_event)
@@ -1306,8 +1362,12 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
 
     rel_big = os.path.relpath(big_file, src_root)
     log("Copying files from the ISO to the USB drive (this can take several minutes)...")
-    run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log,
-            cancel_event=cancel_event)
+    if IS_WINDOWS:  # no rsync on Windows: the same copy in plain Python (flushed file by file)
+        copy_tree_with_progress(src_root, dst_root, rel_big,
+                                lambda n: report(min(n, rest_total), "Copying files..."), cancel_event, log)
+    else:
+        run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log,
+                cancel_event=cancel_event)
     report(rest_total, "Copying files...")
     check_canceled(cancel_event)
 
@@ -1315,19 +1375,33 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     target_sources = os.path.join(dst_root, os.path.dirname(rel_big))
     os.makedirs(target_sources, exist_ok=True)
 
+    split_hashes = None
     if size > FAT32_MAX_FILE_SIZE:
-        log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with wimlib-imagex...")
-        if not shutil.which("wimlib-imagex"):
+        use_dism = IS_WINDOWS and big_file.lower().endswith(".wim")  # Windows splits a .wim itself, with DISM
+        tool = "DISM" if use_dism else "wimlib-imagex"
+        log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with {tool}...")
+        if not use_dism and not shutil.which("wimlib-imagex"):
             raise RuntimeError(wimlib_hint)
         out_swm = os.path.join(target_sources, os.path.splitext(os.path.basename(big_file))[0] + ".swm")
 
         def split_log(line):
             log(line)
-            m = re.search(r"(\d{1,3})%", line)
+            m = re.search(r"(\d{1,3})(?:\.\d+)?%", line)
             if m:
                 report(rest_total + size * min(int(m.group(1)), 100) // 100, "Splitting the install image...")
 
-        run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log, cancel_event=cancel_event)
+        if use_dism:
+            run_cmd([windows_dism_exe(), "/Split-Image", f"/ImageFile:{big_file}", f"/SWMFile:{out_swm}",
+                     "/FileSize:3800"], split_log, cancel_event=cancel_event)
+            # The parts are not byte copies of the source, so the read-back cannot compare them with it: it
+            # compares them with what was written (checked after the drive is detached and attached again).
+            report(total, "Checking the split install image...")
+            split_hashes = hash_split_parts(target_sources, os.path.splitext(os.path.basename(big_file))[0],
+                                            cancel_event)
+            if not split_hashes:
+                raise RuntimeError("DISM finished but no .swm part was found on the drive.")
+        else:
+            run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log, cancel_event=cancel_event)
     else:
         log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
         copy_file_with_progress(
@@ -1346,13 +1420,14 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     report(total, "Flushing data to the drive...")
     check_canceled(cancel_event)
     log("Syncing writes to disk...")
-    run_cmd(["sync"], log, check=False)
+    sync_filesystems(log)
     # Remount so the check reads from the device itself and not from the system cache.
     if reopen:
         dst_root = reopen()
     try:
         verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=cancel_event,
-                               **({"extra_files": extra_files} if extra_files else {}))
+                               **({"extra_files": extra_files} if extra_files else {}),
+                               **({"split_hashes": split_hashes} if split_hashes else {}))
     except OperationCanceled as e:
         e.written = True  # everything was copied; only the final check was interrupted
         raise
@@ -1453,22 +1528,28 @@ def sha256_file(path, cancel_event=None, progress=None, chunk=SHA256_CHUNK):
     return digest.hexdigest()
 
 
+# A windowed program (the MSI's GUI) must not flash a console for every command it runs, and it has no standard
+# input to hand on: on Windows each child gets no window and an empty stdin. Elsewhere nothing changes.
+SUBPROCESS_QUIET = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0), "stdin": subprocess.DEVNULL}
+                    if IS_WINDOWS else {})
+
+
 def _stop_process(proc, group=False):
     """Ask a child (or, with group=True, its whole process group) to stop; kill it if it does not."""
-    def send(sig):
-        if group:
-            os.killpg(os.getpgid(proc.pid), sig)
-        elif sig == signal.SIGTERM:
-            proc.terminate()
-        else:
+    def send(hard):
+        if group and not IS_WINDOWS:  # Windows has no process groups to signal: the child is stopped alone
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL if hard else signal.SIGTERM)
+        elif hard:
             proc.kill()
+        else:
+            proc.terminate()
 
     try:
-        send(signal.SIGTERM)
+        send(False)
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            send(signal.SIGKILL)
+            send(True)
     except (OSError, ProcessLookupError):
         pass
 
@@ -1483,7 +1564,7 @@ def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
     log(f"$ {' '.join(args)}")
     # errors="replace": a file name that is not valid UTF-8 (rsync -v lists them) must not abort the copy.
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            errors="replace", bufsize=1)
+                            errors="replace", bufsize=1, **SUBPROCESS_QUIET)
     state = {"timed_out": False, "canceled": False}
     finished = threading.Event()
 
@@ -1525,6 +1606,13 @@ def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
     return proc.returncode
 
 
+def sync_filesystems(log):
+    """`sync` on macOS and Linux. Windows has no such command: every file written there is flushed with
+    os.fsync, and the volume is flushed again when it is detached before the read-back."""
+    if not IS_WINDOWS:
+        run_cmd(["sync"], log, check=False)
+
+
 @contextlib.contextmanager
 def cancel_flag(cancel_event):
     """Yield the path of a private flag file that appears when `cancel_event` is set.
@@ -1559,9 +1647,41 @@ def cancel_flag(cancel_event):
         _silent_rmdir(flag_dir)
 
 
+ES_CONTINUOUS = 0x80000000      # SetThreadExecutionState flags (Windows)
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextlib.contextmanager
+def windows_keep_awake(log=None):
+    """Keep Windows awake with SetThreadExecutionState while the block runs. Best effort.
+
+    The setting belongs to the calling thread, so the block must run in the thread that enters it (the
+    worker thread that writes the drive does). It is dropped when the block ends or the thread dies.
+    """
+    kernel32 = None
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetThreadExecutionState.restype = ctypes.c_uint
+        if kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) and log:
+            log("Sleep is blocked while the drive is being written.")
+    except (AttributeError, OSError, ImportError):
+        kernel32 = None
+    try:
+        yield
+    finally:
+        if kernel32 is not None:
+            with contextlib.suppress(Exception):
+                kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+
 @contextlib.contextmanager
 def prevent_sleep(log=None):
     """Keep the computer awake while a write runs. Best effort: failures are ignored."""
+    if IS_WINDOWS:
+        with windows_keep_awake(log):
+            yield
+        return
     proc = None
     stopper = None
     try:
@@ -1606,6 +1726,12 @@ def prevent_sleep(log=None):
 def platform_display_name():
     if IS_MAC:
         return "macOS"
+    if IS_WINDOWS:
+        try:  # Windows 11 still reports itself as "10" in platform.release(); the build number tells them apart
+            build = int(platform.version().split(".")[2])
+        except (IndexError, ValueError):
+            build = 0
+        return "Windows 11" if build >= 22000 else "Windows " + platform.release()
     if IS_LINUX:
         try:
             info = platform.freedesktop_os_release()
@@ -1690,11 +1816,18 @@ def ask_password(parent, title, prompt):
 
 
 def normalize_typed_identifier(text):
-    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed.
+    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed
+    (on Windows: '3', 'disk 3' and '\\\\.\\PhysicalDrive3' all become 'PhysicalDrive3').
 
     The window's confirmation dialog and the command line (--disk, the typed confirmation) both use it.
     """
     text = (text or "").strip()
+    if IS_WINDOWS:
+        # Windows people say "disk 3" (Disk Management, diskpart): accept it, "3" and the device path.
+        if text.startswith("\\\\.\\"):
+            text = text[4:]
+        m = re.fullmatch(r"(?:disk\s*)?([0-9]{1,4})", text, re.IGNORECASE)
+        return f"PhysicalDrive{int(m.group(1))}" if m else text
     return text[len("/dev/"):] if text.startswith("/dev/") else text
 
 
@@ -2088,7 +2221,7 @@ def build_disk_label(dev_path, model, size, volumes):
 
 def _disk_entry(dev_id, size, model, volumes, identity):
     """The record the drive list holds for one disk: id, size, label (built here), model, volumes, identity."""
-    return {"id": dev_id, "size": size, "label": build_disk_label(f"/dev/{dev_id}", model, size, volumes),
+    return {"id": dev_id, "size": size, "label": build_disk_label(dev_path(dev_id), model, size, volumes),
             "model": model, "volumes": volumes, "identity": identity}
 
 
@@ -2136,7 +2269,7 @@ def describe_disk_for_confirmation(disk, translate=False):
     `translate=True` is for the GUI dialog only; the default keeps the English text.
     """
     _ = _text_for(translate)
-    lines = [_("Drive: /dev/{id}").format(id=disk.get("id"))]
+    lines = [_("Drive: {path}").format(path=dev_path(disk.get("id")))]
     if disk.get("model"):
         lines.append(_("Model: {model}").format(model=disk["model"]))
     lines.append(_("Size: {size}").format(size=human_size(disk.get("size") or 0)))
@@ -2889,6 +3022,745 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
     return ejected
 
 
+# ============================================================
+# Windows backend
+#
+# Everything here uses what ships with Windows 11: the PowerShell Storage cmdlets (Get-Disk, Clear-Disk,
+# New-Partition, Format-Volume, Mount-DiskImage, ...) and DISM. There is no sudo: the program itself must run
+# as Administrator (the MSI's shortcut and executable ask for it; `python win11_usb_creator.py` relaunches
+# itself elevated). Values never become PowerShell code: every script is a fixed text with a typed param()
+# block, written to a private temporary file and started with `-File`, so the values arrive as data.
+# ============================================================
+POWERSHELL_TIMEOUT = 900        # seconds a Storage cmdlet script may run (formatting a big drive can be slow)
+WINDOWS_FAT32_MAX_PARTITION = 30 * 1024 ** 3  # Windows refuses to format FAT32 volumes over 32 GB: use at most 30 GiB
+WINDOWS_RAW_BLOCK = 4 * 1024 * 1024    # bytes written or read per step on a raw drive (a multiple of 4096)
+WINDOWS_RAW_ALIGN = 4096               # every raw offset and length is a multiple of this (covers 512 and 4K sectors)
+WINDOWS_RAW_HEAD = 1024 * 1024         # the start of a raw image (partition tables) is written LAST, see below
+WINDOWS_MOUNT_RETRIES = 30             # seconds to wait for a volume's drive letter to appear
+WINDOWS_PS_PREAMBLE = (
+    "$ErrorActionPreference = 'Stop'\n"
+    "$ProgressPreference = 'SilentlyContinue'\n"
+    "try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }\n"
+)
+EJECTED_MARKER = "EJECTED"
+NOT_EJECTED_MARKER = "NOT_EJECTED"
+
+
+def windows_system32(name):
+    """Full path of a tool in System32. Absolute on purpose: this program runs as Administrator and must not
+    pick a look-alike from the current folder or from PATH."""
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    return os.path.join(root, "System32", name)
+
+
+def windows_powershell_exe():
+    return windows_system32(os.path.join("WindowsPowerShell", "v1.0", "powershell.exe"))
+
+
+def windows_dism_exe():
+    return windows_system32("dism.exe")
+
+
+def windows_is_admin():
+    """True when the process runs elevated (Administrator). Always False off Windows."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_relaunch_elevated():
+    """Start this program again with the UAC prompt ("runas"). True if Windows accepted the request."""
+    try:
+        import ctypes
+        if getattr(sys, "frozen", False):
+            exe, params = sys.executable, subprocess.list2cmdline(sys.argv[1:])
+        else:
+            exe = sys.executable
+            params = subprocess.list2cmdline([os.path.abspath(sys.argv[0])] + sys.argv[1:])
+        shell_execute = ctypes.windll.shell32.ShellExecuteW
+        shell_execute.restype = ctypes.c_void_p
+        return (shell_execute(None, "runas", exe, params, None, 1) or 0) > 32
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_enable_dpi_awareness():
+    """Ask Windows not to bitmap-scale the window (blurry text on high-DPI screens). Cosmetic; failures are ignored."""
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError, ImportError):  # noqa: S110 - cosmetic only
+        pass
+
+
+class WindowsPrivilege:
+    """Privilege helper for Windows, duck-typed to what the engine and the window use.
+
+    There is nothing to ask for: the process is already elevated or it is not. `authenticate()` says which and
+    never prompts; the window and the command line explain how to run elevated when it is not.
+    """
+
+    cached_password = None
+
+    @staticmethod
+    def needs_password():
+        return False
+
+    @staticmethod
+    def is_admin():
+        return windows_is_admin()
+
+    def authenticate(self, reason=None, max_attempts=3):
+        return windows_is_admin()
+
+    def clear_cached_password(self):
+        pass
+
+    def run_script(self, script, log, args=None, **_kw):
+        raise RuntimeError("Privileged shell scripts are not used on Windows.")
+
+
+def windows_run_ps(script, log, args=(), timeout=POWERSHELL_TIMEOUT, cancel_event=None, check=True):
+    """Run a fixed PowerShell `script` (it starts with a typed param() block) and stream its output to `log`.
+
+    The values in `args` are handed over as command-line arguments (`-File` mode), never pasted into the text.
+    Returns run_cmd's exit code.
+    """
+    args = [str(a) for a in args]
+    for a in args:
+        if a.startswith("-"):
+            raise ValueError("Refusing an argument that PowerShell would read as a parameter name.")
+    folder = tempfile.mkdtemp(prefix="epmaps_")
+    path = os.path.join(folder, "script.ps1")
+    try:
+        with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:  # BOM: PowerShell 5.1 reads UTF-8 only with it
+            fh.write(WINDOWS_PS_PREAMBLE + script)
+        cmd = [windows_powershell_exe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-File", path] + args
+        return run_cmd(cmd, log, check=check, timeout=timeout, cancel_event=cancel_event)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def windows_ps_output(script, args=(), timeout=QUERY_TIMEOUT):
+    """Run a fixed PowerShell `script` and return its standard output as text. Raises RuntimeError on failure."""
+    args = [str(a) for a in args]
+    folder = tempfile.mkdtemp(prefix="epmaps_")
+    path = os.path.join(folder, "script.ps1")
+    try:
+        with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:
+            fh.write(WINDOWS_PS_PREAMBLE + script)
+        cmd = [windows_powershell_exe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-File", path] + args
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, **SUBPROCESS_QUIET)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RuntimeError(f"Could not run PowerShell ({type(e).__name__}).") from None
+        if proc.returncode != 0:
+            detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise RuntimeError("PowerShell could not read the drives" + (f": {detail[0]}" if detail else "") +
+                               ". Run the program as Administrator.")
+        return proc.stdout.decode("utf-8-sig", "replace")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+# Lists the disks as JSON. Fixed text, no parameters. The system/boot disk is flagged here and dropped in Python.
+WINDOWS_LIST_SCRIPT = r"""
+$sysLetter = ([string]$env:SystemDrive).TrimEnd(':')
+$out = @()
+foreach ($d in @(Get-Disk)) {
+  $holdsSystem = [bool]($d.IsBoot -or $d.IsSystem)
+  $vols = @()
+  foreach ($p in @(Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue)) {
+    $letter = ''
+    if ($p.DriveLetter) { $letter = [string]$p.DriveLetter }
+    if ($letter -ne '' -and $letter -eq $sysLetter) { $holdsSystem = $true }
+    $v = $null
+    if ($letter -ne '') { try { $v = Get-Volume -DriveLetter $letter -ErrorAction Stop } catch { $v = $null } }
+    $label = ''; $fs = ''; $free = -1
+    if ($v) { $label = [string]$v.FileSystemLabel; $fs = [string]$v.FileSystem; $free = [int64]$v.SizeRemaining }
+    $vols += [pscustomobject]@{ Letter = $letter; Label = $label; FileSystem = $fs; Size = [int64]$p.Size; Free = $free }
+  }
+  $out += [pscustomobject]@{
+    Number = [int]$d.Number; Model = [string]$d.FriendlyName; Serial = ([string]$d.SerialNumber).Trim()
+    UniqueId = [string]$d.UniqueId; BusType = [string]$d.BusType; Size = [int64]$d.Size
+    SectorSize = [int]$d.LogicalSectorSize; HoldsSystem = $holdsSystem; Volumes = @($vols)
+  }
+}
+ConvertTo-Json -InputObject @($out) -Depth 4 -Compress
+"""
+
+
+def windows_parse_disks(text):
+    """Turn the JSON of WINDOWS_LIST_SCRIPT into the drive list (pure: no I/O, unit-testable).
+
+    Only USB drives that do not hold the running Windows are offered; an unreadable record is hidden (fail closed).
+    """
+    data = json.loads(text.strip() or "[]")
+    if isinstance(data, dict):
+        data = [data]
+    disks = []
+    for rec in data:
+        try:
+            number = int(rec["Number"])
+            size = _as_int(rec.get("Size")) or 0
+            name = f"PhysicalDrive{number}"
+            if not WINDOWS_DEVICE_RE.fullmatch(name):
+                continue
+            if str(rec.get("BusType") or "").upper() != "USB":
+                continue  # only USB drives are offered (no internal disks, SD slots, virtual disks)
+            if rec.get("HoldsSystem") is not False:
+                audit(f"Hiding {name}: it holds the running Windows (or this could not be told)")
+                continue
+            if size <= 0:
+                audit(f"Hiding {name}: its size is zero or unreadable", logging.WARNING)
+                continue  # an empty card reader reports no media
+            model = str(rec.get("Model") or "").strip()
+            volumes = []
+            for vol in rec.get("Volumes") or []:
+                letter = str(vol.get("Letter") or "")
+                free = _as_int(vol.get("Free"))
+                vsize = _as_int(vol.get("Size")) or 0
+                volumes.append({
+                    "name": str(vol.get("Label") or "") or (letter + ":" if letter else ""),
+                    "filesystem": str(vol.get("FileSystem") or ""),
+                    "size": vsize,
+                    "used": (vsize - free) if (free is not None and free >= 0 and vsize >= free) else None,
+                    "mountpoint": (letter + ":\\") if letter else None,
+                })
+            identity = make_identity(serial=rec.get("Serial"), uniqueid=rec.get("UniqueId"), model=model)
+            disks.append(_disk_entry(name, size, model, volumes, identity))
+        except (KeyError, TypeError, ValueError) as e:
+            audit(f"Hiding a drive whose record could not be read ({type(e).__name__})", logging.WARNING)
+    return disks
+
+
+def windows_get_external_disks():
+    """List only USB drives that do not hold the running Windows."""
+    return windows_parse_disks(windows_ps_output(WINDOWS_LIST_SCRIPT, timeout=QUERY_TIMEOUT * 2))
+
+
+def windows_disk_number(dev):
+    """The disk number in 'PhysicalDrive3' (validated)."""
+    validate_device_name(dev)
+    return int(dev[len("PhysicalDrive"):])
+
+
+# Wipes the disk, then GPT + ONE FAT32 partition (capped: Windows will not format a bigger FAT32 volume) with a drive
+# letter. "$Number" the disk, "$Label" the volume label, "$MaxBytes" the cap. The disk must be an external USB drive
+# that is not the boot disk: checked again here, right before the wipe. Prints "EPMA_VOLUME <letter> <partition>".
+WINDOWS_PREPARE_SCRIPT = r"""
+param([int]$Number, [string]$Label, [long]$MaxBytes)
+$disk = Get-Disk -Number $Number
+if ($disk.BusType -ne 'USB') { throw "Disk $Number is not a USB drive." }
+if ($disk.IsBoot -or $disk.IsSystem) { throw "Disk $Number holds the running Windows." }
+$svc = Get-Service -Name ShellHWDetection -ErrorAction SilentlyContinue
+$stopped = $false
+if ($svc -and $svc.Status -eq 'Running') { Stop-Service -Name ShellHWDetection -Force -ErrorAction SilentlyContinue; $stopped = $true }
+try {
+  if ($disk.IsOffline) { Set-Disk -Number $Number -IsOffline $false }
+  if ($disk.IsReadOnly) { Set-Disk -Number $Number -IsReadOnly $false }
+  if ($disk.PartitionStyle -ne 'RAW') { Clear-Disk -Number $Number -RemoveData -RemoveOEM -Confirm:$false }
+  Initialize-Disk -Number $Number -PartitionStyle GPT
+  if ($MaxBytes -gt 0 -and $disk.Size -gt ($MaxBytes + 4MB)) {
+    $part = New-Partition -DiskNumber $Number -Size $MaxBytes -AssignDriveLetter
+  } else {
+    $part = New-Partition -DiskNumber $Number -UseMaximumSize -AssignDriveLetter
+  }
+  $null = Format-Volume -Partition $part -FileSystem FAT32 -NewFileSystemLabel $Label -Confirm:$false -Force
+  $part = Get-Partition -DiskNumber $Number -PartitionNumber $part.PartitionNumber
+  Write-Output ('EPMA_VOLUME ' + $part.DriveLetter + ' ' + $part.PartitionNumber)
+} finally {
+  if ($stopped) { Start-Service -Name ShellHWDetection -ErrorAction SilentlyContinue }
+}
+"""
+
+# Wipes the disk and leaves it uninitialised (RAW) for a byte-for-byte write. Prints "EPMA_RAW_READY".
+WINDOWS_PREPARE_RAW_SCRIPT = r"""
+param([int]$Number)
+$disk = Get-Disk -Number $Number
+if ($disk.BusType -ne 'USB') { throw "Disk $Number is not a USB drive." }
+if ($disk.IsBoot -or $disk.IsSystem) { throw "Disk $Number holds the running Windows." }
+if ($disk.IsOffline) { Set-Disk -Number $Number -IsOffline $false }
+if ($disk.IsReadOnly) { Set-Disk -Number $Number -IsReadOnly $false }
+if ($disk.PartitionStyle -ne 'RAW') { Clear-Disk -Number $Number -RemoveData -RemoveOEM -Confirm:$false }
+Write-Output 'EPMA_RAW_READY'
+"""
+
+# Detaches the volumes of the disk from their drive letters (that flushes and dismounts them), so the cache is
+# dropped and the next read comes from the device. Prints "EPMA_VOLUME <letter> <partition>" for the first
+# volume that is attached again (when "$Reattach" is 1) and EJECTED / NOT_EJECTED when "$Reattach" is 0.
+WINDOWS_DETACH_SCRIPT = r"""
+param([int]$Number, [int]$Reattach)
+$ok = $true
+try { Update-Disk -Number $Number -ErrorAction SilentlyContinue } catch { }
+$parts = @(Get-Partition -DiskNumber $Number -ErrorAction SilentlyContinue)
+foreach ($p in $parts) {
+  if ($p.DriveLetter) {
+    $l = [string]$p.DriveLetter
+    try { Write-VolumeCache -DriveLetter $l -ErrorAction SilentlyContinue } catch { }
+    try { Remove-PartitionAccessPath -DiskNumber $Number -PartitionNumber $p.PartitionNumber -AccessPath ($l + ':\') -ErrorAction Stop }
+    catch { $ok = $false }
+  }
+}
+if ($Reattach -eq 1) {
+  Start-Sleep -Milliseconds 500
+  $first = $parts | Where-Object { $_.Type -ne 'Reserved' } | Select-Object -First 1
+  Add-PartitionAccessPath -DiskNumber $Number -PartitionNumber $first.PartitionNumber -AssignDriveLetter
+  $first = Get-Partition -DiskNumber $Number -PartitionNumber $first.PartitionNumber
+  Write-Output ('EPMA_VOLUME ' + $first.DriveLetter + ' ' + $first.PartitionNumber)
+} elseif ($ok) { Write-Output 'EJECTED' } else { Write-Output 'NOT_EJECTED' }
+"""
+
+# Mounts an ISO read-only and prints its drive letter ("EPMA_ISO <letter> <was-already-mounted 0|1>").
+WINDOWS_ISO_MOUNT_SCRIPT = r"""
+param([string]$Iso)
+$before = Get-DiskImage -ImagePath $Iso
+$was = 0
+if ($before.Attached) { $was = 1 } else { $null = Mount-DiskImage -ImagePath $Iso -StorageType ISO -Access ReadOnly }
+$letter = ''
+for ($i = 0; $i -lt 30 -and $letter -eq ''; $i++) {
+  $vol = Get-DiskImage -ImagePath $Iso | Get-Volume -ErrorAction SilentlyContinue
+  if ($vol -and $vol.DriveLetter) { $letter = [string]$vol.DriveLetter } else { Start-Sleep -Seconds 1 }
+}
+if ($letter -eq '') { throw 'The ISO was mounted but Windows gave it no drive letter.' }
+Write-Output ('EPMA_ISO ' + $letter + ' ' + $was)
+"""
+
+WINDOWS_ISO_DISMOUNT_SCRIPT = r"""
+param([string]$Iso)
+$null = Dismount-DiskImage -ImagePath $Iso -ErrorAction SilentlyContinue
+"""
+
+
+def _marker_values(lines, marker):
+    """The words after `marker` on the first output line that starts with it, or None."""
+    for line in lines:
+        words = line.split()
+        if words and words[0] == marker:
+            return words[1:]
+    return None
+
+
+def windows_run_collect(script, log, args=(), **kw):
+    """windows_run_ps(), also returning every output line (for the EPMA_* marker lines)."""
+    seen = []
+
+    def watch(line):
+        seen.append(line.strip())
+        log(line)
+
+    windows_run_ps(script, watch, args=args, **kw)
+    return seen
+
+
+def windows_wait_for_root(letter, log):
+    """The root path of drive `letter`, once Windows lets us list it."""
+    root = f"{letter}:\\"
+    for _i in range(WINDOWS_MOUNT_RETRIES):
+        if os.path.isdir(root):
+            return root
+        time.sleep(1)
+    raise RuntimeError(f"Windows did not make the drive {letter}: available after formatting it.")
+
+
+def windows_prepare_fat32(number, label, log, cancel_event=None):
+    """Erase the disk and make GPT + one FAT32 volume. Returns (root path, partition number)."""
+    lines = windows_run_collect(WINDOWS_PREPARE_SCRIPT, log, args=[number, label, WINDOWS_FAT32_MAX_PARTITION],
+                                cancel_event=cancel_event)
+    vals = _marker_values(lines, "EPMA_VOLUME")
+    if not vals or len(vals) < 2 or not re.fullmatch(r"[A-Za-z]", vals[0]) or not vals[1].isdigit():
+        raise RuntimeError("Windows formatted the drive but did not report its drive letter.")
+    return windows_wait_for_root(vals[0].upper(), log), int(vals[1])
+
+
+def windows_reopen_volume(number, log):
+    """Detach the volume and attach it again, so the read-back comes from the device. Returns the new root path."""
+    lines = windows_run_collect(WINDOWS_DETACH_SCRIPT, log, args=[number, 1])
+    vals = _marker_values(lines, "EPMA_VOLUME")
+    if not vals or not re.fullmatch(r"[A-Za-z]", vals[0]):
+        raise RuntimeError("Could not mount the drive again to read it back.")
+    return windows_wait_for_root(vals[0].upper(), log)
+
+
+def windows_eject(number, log):
+    """Flush and detach every volume of the disk; after that the drive can be unplugged. True on success."""
+    log("Ejecting the USB drive...")
+    try:
+        lines = windows_run_collect(WINDOWS_DETACH_SCRIPT, log, args=[number, 0], check=True, timeout=120)
+    except Exception as e:
+        log(f"Warning: could not run the eject step: {e}")
+        return False
+    return EJECTED_MARKER in lines
+
+
+@contextlib.contextmanager
+def windows_mounted_iso(iso_path, log):
+    """Mount the ISO read-only; yield its root (for example 'F:\\'); dismount it afterwards (only if we mounted it)."""
+    lines = windows_run_collect(WINDOWS_ISO_MOUNT_SCRIPT, log, args=[iso_path], timeout=300)
+    vals = _marker_values(lines, "EPMA_ISO")
+    if not vals or not re.fullmatch(r"[A-Za-z]", vals[0]):
+        raise RuntimeError("Could not mount the ISO.")
+    already = vals[1:2] == ["1"]
+    try:
+        yield f"{vals[0].upper()}:\\"
+    finally:
+        if not already:
+            with contextlib.suppress(Exception):
+                windows_run_ps(WINDOWS_ISO_DISMOUNT_SCRIPT, log, args=[iso_path], timeout=120, check=False)
+
+
+# ---- Copy and compare a file tree in plain Python (Windows has no rsync) ----
+def _rel_key(rel):
+    return rel.replace("\\", "/").lower()
+
+
+def copy_tree_with_progress(src_root, dst_root, skip_rel, on_bytes, cancel_event=None, log=None):
+    """Copy every file under `src_root` to `dst_root`, except the relative path `skip_rel`; report bytes copied.
+
+    Each file is flushed to the drive (os.fsync) before the next one starts. Cancelable between chunks.
+    """
+    skip = _rel_key(skip_rel) if skip_rel else None
+    done = 0
+    for root, dirs, files in os.walk(src_root):
+        dirs.sort()
+        rel_dir = os.path.relpath(root, src_root)
+        out_dir = dst_root if rel_dir == "." else os.path.join(dst_root, rel_dir)
+        os.makedirs(out_dir, exist_ok=True)
+        for name in sorted(files):
+            src = os.path.join(root, name)
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if skip and _rel_key(rel) == skip:
+                continue
+            check_canceled(cancel_event)
+            if log:
+                log(rel.replace("\\", "/"))
+            with open(src, "rb") as fin, open(os.path.join(out_dir, name), "wb") as fout:
+                while True:
+                    check_canceled(cancel_event)
+                    chunk = fin.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    done += len(chunk)
+                    on_bytes(done)
+                fout.flush()
+                os.fsync(fout.fileno())
+    return done
+
+
+def _files_equal(a, b, cancel_event=None):
+    """True when the two files hold the same bytes (read in chunks; cancelable)."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            check_canceled(cancel_event, written=True)
+            ca, cb = fa.read(VERIFY_CHUNK), fb.read(VERIFY_CHUNK)
+            if ca != cb:
+                return False
+            if not ca:
+                return True
+
+
+def compare_trees(src_root, dst_root, skip_rel, cancel_event=None):
+    """Names of the files under `src_root` (except `skip_rel`) that are missing from `dst_root` or differ there."""
+    skip = _rel_key(skip_rel) if skip_rel else None
+    bad = []
+    for root, dirs, files in os.walk(src_root):
+        dirs.sort()
+        rel_dir = os.path.relpath(root, src_root)
+        for name in sorted(files):
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if skip and _rel_key(rel) == skip:
+                continue
+            other = os.path.join(dst_root, rel)
+            try:
+                if not os.path.isfile(other):
+                    bad.append(f"{rel} (missing)")
+                elif not _files_equal(os.path.join(root, name), other, cancel_event):
+                    bad.append(f"{rel} (differs)")
+            except OSError as e:
+                bad.append(f"{rel} (unreadable: {e.strerror or type(e).__name__})")
+    return bad
+
+
+def hash_split_parts(sources_dir, stem, cancel_event=None):
+    """{file name: SHA-256} of the split install image parts (<stem>.swm, <stem>2.swm, ...) in `sources_dir`."""
+    parts = {}
+    for name in sorted(os.listdir(sources_dir)):
+        low = name.lower()
+        if low.startswith(stem.lower()) and low.endswith(".swm"):
+            parts[name] = sha256_file(os.path.join(sources_dir, name), cancel_event)
+    return parts
+
+
+# ---- Byte-for-byte writes to \\.\PhysicalDriveN (Linux and other hybrid ISOs, ChromeOS Flex) ----
+class DriveIOError(OSError):
+    """The drive itself refused or failed an open, read or write (as opposed to the image file)."""
+
+
+class WindowsRawDisk:
+    """Unbuffered, sector-aligned access to a physical drive through the Win32 API (ctypes; Windows only).
+
+    Reads and writes go straight to the device (FILE_FLAG_NO_BUFFERING), writes are write-through, so what a
+    read returns is what the drive holds - not what the system cache remembers. Offsets and lengths must be
+    multiples of WINDOWS_RAW_ALIGN; the buffer is a page-aligned mmap.
+    """
+
+    GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
+    FILE_SHARE_READ, FILE_SHARE_WRITE = 1, 2
+    OPEN_EXISTING = 3
+    FILE_FLAG_WRITE_THROUGH, FILE_FLAG_NO_BUFFERING = 0x80000000, 0x20000000
+
+    def __init__(self, path, write=False, block=WINDOWS_RAW_BLOCK):
+        import ctypes
+        import mmap
+        from ctypes import wintypes
+        self._ct = ctypes
+        self._k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k = self._k
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        k.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong, ctypes.POINTER(ctypes.c_longlong),
+                                       wintypes.DWORD]
+        for fn in (k.ReadFile, k.WriteFile):
+            fn.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                           wintypes.LPVOID]
+        k.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        access = self.GENERIC_READ | (self.GENERIC_WRITE if write else 0)
+        flags = self.FILE_FLAG_NO_BUFFERING | (self.FILE_FLAG_WRITE_THROUGH if write else 0)
+        handle = k.CreateFileW(path, access, self.FILE_SHARE_READ | self.FILE_SHARE_WRITE, None,
+                               self.OPEN_EXISTING, flags, None)
+        if handle in (None, ctypes.c_void_p(-1).value):
+            raise DriveIOError(ctypes.get_last_error(), "Could not open " + path)
+        self._handle = handle
+        self._mm = mmap.mmap(-1, block)
+        self._cbuf = (ctypes.c_char * block).from_buffer(self._mm)
+        self._addr = ctypes.addressof(self._cbuf)
+        self.block = block
+
+    def _seek(self, offset):
+        if not self._k.SetFilePointerEx(self._handle, offset, None, 0):
+            raise DriveIOError(self._ct.get_last_error(), "Could not move to offset %d" % offset)
+
+    def read_at(self, offset, length):
+        """`length` bytes (a multiple of WINDOWS_RAW_ALIGN, at most one block) read from `offset`."""
+        from ctypes import wintypes
+        self._seek(offset)
+        got = wintypes.DWORD(0)
+        if not self._k.ReadFile(self._handle, self._addr, length, self._ct.byref(got), None):
+            raise DriveIOError(self._ct.get_last_error(), "Could not read the drive at offset %d" % offset)
+        return self._mm[:got.value]
+
+    def write_at(self, offset, data):
+        """Write `data` (a multiple of WINDOWS_RAW_ALIGN long, at most one block) at `offset`."""
+        from ctypes import wintypes
+        self._seek(offset)
+        self._mm[:len(data)] = data
+        put = wintypes.DWORD(0)
+        if not self._k.WriteFile(self._handle, self._addr, len(data), self._ct.byref(put), None) \
+                or put.value != len(data):
+            raise DriveIOError(self._ct.get_last_error(), "Could not write to the drive at offset %d" % offset)
+
+    def flush(self):
+        self._k.FlushFileBuffers(self._handle)
+
+    def close(self):
+        if self._handle is not None:
+            self._k.CloseHandle(self._handle)
+            self._handle = None
+            self._cbuf = None
+            self._mm.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def open_windows_raw_disk(number, write=False):
+    """Open \\\\.\\PhysicalDrive<number>. A separate function so tests can stand a file in for the drive."""
+    return WindowsRawDisk(f"\\\\.\\PhysicalDrive{int(number)}", write=write)
+
+
+def _align_up(n, align=WINDOWS_RAW_ALIGN):
+    return (n + align - 1) // align * align
+
+
+def windows_raw_write(iso_path, disk, log, progress=None, cancel_event=None, block=WINDOWS_RAW_BLOCK):
+    """Write the image to `disk` (an object with write_at/flush) byte for byte. Returns the image size.
+
+    The first WINDOWS_RAW_HEAD bytes - where the partition tables live - are written LAST. Until then the drive has
+    no partitions, so Windows cannot mount (and thereby lock) the volumes of the half-written image and refuse the
+    rest of the writes. A cancel before the end therefore leaves a drive with no partition table at all.
+    The last block is padded with zeros up to the sector size.
+    """
+    total = os.path.getsize(iso_path)
+    head = min(WINDOWS_RAW_HEAD, total)
+    state = {"last": 0.0}
+
+    def report(done):
+        now = time.time()
+        if progress and (now - state["last"] >= PROGRESS_UI_INTERVAL or done >= total):
+            state["last"] = now
+            progress(min(done, total), total, "Writing the image...")
+
+    with open(iso_path, "rb") as src:
+        head_data = src.read(head)
+        offset = head
+        src.seek(head)
+        while offset < total:
+            check_canceled(cancel_event, drive_touched=True)
+            data = src.read(min(block, total - offset))
+            if not data:
+                raise RuntimeError("The image ended earlier than its size said. Nothing more was written.")
+            padded = data + b"\0" * (_align_up(len(data)) - len(data))
+            disk.write_at(offset, padded)
+            offset += len(data)
+            report(offset)
+        check_canceled(cancel_event, drive_touched=True)
+        disk.write_at(0, head_data + b"\0" * (_align_up(len(head_data)) - len(head_data)))
+        disk.flush()
+    report(total)
+    return total
+
+
+def windows_raw_verify(iso_path, disk, log, progress=None, cancel_event=None, block=WINDOWS_RAW_BLOCK):
+    """Read the drive back and compare it with the image. Raises on any difference (same wording as elsewhere)."""
+    total = os.path.getsize(iso_path)
+    log("Verifying the written image: reading the drive back and comparing it with the ISO...")
+    state = {"last": 0.0}
+    with open(iso_path, "rb") as src:
+        offset = 0
+        while offset < total:
+            check_canceled(cancel_event, written=True)
+            want = src.read(min(block, total - offset))
+            got = disk.read_at(offset, _align_up(len(want)))[:len(want)]
+            if got != want:
+                first = next((i for i, (x, y) in enumerate(zip(got, want, strict=False)) if x != y),
+                             min(len(got), len(want)))
+                audit(f"VERIFICATION FAILED at byte {offset + first}", logging.ERROR)
+                raise RuntimeError(
+                    f"Verification FAILED: the data on the drive differs from the ISO (first difference "
+                    f"near byte {offset + first}).\n\nThe drive was NOT ejected and should not be used. "
+                    "Try again, and if it fails again, the USB drive or its port may be faulty.")
+            offset += len(want)
+            now = time.time()
+            if progress and (now - state["last"] >= VERIFY_PROGRESS_INTERVAL or offset >= total):
+                state["last"] = now
+                progress(min(offset, total), total, "Verifying the written image...")
+    audit("Verification passed (raw write matches the ISO)")
+    log("Verification passed: the drive content is identical to the ISO.")
+
+
+def windows_write_raw(iso_path, dev, log, progress=None, cancel_event=None, eject=True):
+    """Write the ISO byte-for-byte to the whole disk (Linux, other hybrid ISOs, ChromeOS Flex)."""
+    validate_hybrid_iso(iso_path)
+    check_canceled(cancel_event, drive_touched=False)
+    number = windows_disk_number(dev)
+    total = os.path.getsize(iso_path)
+    log(f"Erasing {dev_path(dev)} (administrator privileges required)...")
+    windows_run_collect(WINDOWS_PREPARE_RAW_SCRIPT, log, args=[number], cancel_event=cancel_event)
+    check_canceled(cancel_event, drive_touched=False)  # clearing the partition table is not a write of the image
+    log(f"Writing the ISO to {dev_path(dev)}. This can take several minutes.")
+    try:
+        with open_windows_raw_disk(number, write=True) as disk:
+            windows_raw_write(iso_path, disk, log, progress, cancel_event)
+    except DriveIOError as e:
+        raise RuntimeError(
+            f"Windows refused the write to {dev_path(dev)} ({e.strerror or type(e).__name__}). Close any program "
+            "that is using the drive (File Explorer windows, antivirus scans), unplug it and plug it in again, "
+            "then try again.") from None
+    except OperationCanceled:
+        log("Canceled. The drive holds a partial image and is unusable until written again.")
+        raise
+    if progress:
+        progress(total, total, "Written")
+    with open_windows_raw_disk(number, write=False) as disk:
+        windows_raw_verify(iso_path, disk, log, progress, cancel_event)
+    log("Note: Windows cannot read Linux or ChromeOS partitions (ext4 and others), so it may offer to format the "
+        "drive - click Cancel, never Format. That is normal; the content was just verified byte-for-byte.")
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The USB drive is ready to boot.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def windows_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=None, eject=True,
+                      hardening_files=None):
+    """Windows 11 mode: GPT + FAT32, the ISO's files copied (install.wim split with DISM when over 4 GB) and read back."""
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    number = windows_disk_number(dev)
+    with windows_mounted_iso(iso_path, log) as iso_root:  # read-only and harmless: any problem shows up BEFORE the erase
+        check_canceled(cancel_event, drive_touched=False)
+        log(f"Erasing and formatting {dev_path(dev)} as GPT + FAT32 ('{VOL_NAME}')...")
+        target, _part = windows_prepare_fat32(number, VOL_NAME, log, cancel_event)
+        log(f"USB drive ready at: {target}")
+        state = {"target": target}
+        try:
+            check_canceled(cancel_event)
+
+            def reopen():
+                log("Detaching and attaching the drive again to read it back from the device...")
+                state["target"] = windows_reopen_volume(number, log)
+                return state["target"]
+
+            copy_windows_payload(
+                iso_root, target, log, progress,
+                "install.esd is over 4 GB and Windows cannot split it. Use the ISO from Microsoft's download page "
+                "(it holds install.wim), or install wimlib and run this program again.",
+                reopen=reopen, cancel_event=cancel_event,
+                **({"extra_files": hardening_files} if hardening_files else {}))
+        except OperationCanceled as e:
+            if e.written:
+                log("Canceled during verification. The files were copied completely but NOT verified.")
+            else:
+                log("Canceled. The drive is left incomplete and unusable.")
+            windows_eject(number, log)
+            raise
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The USB drive is ready to install Windows 11.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def windows_build_seed_usb(label, files, stage_dir, dev, log, progress=None, cancel_event=None, eject=True):
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    number = windows_disk_number(dev)
+    log(f"Erasing and formatting {dev_path(dev)} as GPT + FAT32 ('{label}')...")
+    try:
+        target, _part = windows_prepare_fat32(number, label, log, cancel_event)
+        log(f"USB drive ready at: {target}")
+        check_canceled(cancel_event)
+        copy_seed_files(stage_dir, target, files, log, progress, cancel_event)
+        log("Detaching and attaching the drive again to read it back from the device...")
+        target = windows_reopen_volume(number, log)
+        verify_seed_files(files, target, log, progress, cancel_event)
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. The files were copied completely but NOT verified.")
+        else:
+            log("Canceled. The drive is left incomplete and unusable.")
+        windows_eject(number, log)
+        raise
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The seed drive is ready: plug it in next to the installer USB drive.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
 # ===== hardening: engine-windows =====
 # Extra files for a Windows drive (a SetupComplete script and its PowerShell script, see
 # hardening_files_windows). They are checked first, written after the ISO's own files, read back
@@ -3040,6 +3912,10 @@ def refuse_hardening_clash(iso_path, files, log, priv):
     if not files:
         return
     log("Checking that the image does not already contain the hardening files...")
+    if IS_WINDOWS:
+        with windows_mounted_iso(iso_path, log) as iso_root:
+            check_image_for_hardening_clash(iso_root, files)
+        return
     mount_dir = tempfile.mkdtemp(prefix="win11peek_")
     attempted = False
     try:
@@ -3070,7 +3946,11 @@ def refuse_hardening_clash(iso_path, files, log, priv):
 # Platform dispatch
 # ============================================================
 def get_external_disks():
-    return macos_get_external_disks() if IS_MAC else linux_get_external_disks()
+    if IS_MAC:
+        return macos_get_external_disks()
+    if IS_WINDOWS:
+        return windows_get_external_disks()
+    return linux_get_external_disks()
 
 
 def reverify_target_disk(dev, expected_size, log, expected_identity=None):
@@ -3087,7 +3967,7 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if dev not in current:
         audit(f"ABORTED: {dev} is no longer an eligible external disk", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} is no longer listed as an external drive.\n\n"
+            f"Aborted for safety: {dev_path(dev)} is no longer listed as an external drive.\n\n"
             "It may have been unplugged, or the name may now refer to a different disk. "
             "Click 'Refresh USB drives list' and select the drive again."
         )
@@ -3095,7 +3975,7 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if expected_size and actual_size != expected_size:
         audit(f"ABORTED: {dev} size changed {expected_size} -> {actual_size}", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} now reports a different size "
+            f"Aborted for safety: {dev_path(dev)} now reports a different size "
             f"({human_size(actual_size)} instead of {human_size(expected_size)}).\n\n"
             "This means the name now points to a different device. Refresh the list "
             "and select the drive again."
@@ -3104,12 +3984,12 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if changed:
         audit(f"ABORTED: {dev} identity changed ({changed})", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} no longer looks like the drive you confirmed "
+            f"Aborted for safety: {dev_path(dev)} no longer looks like the drive you confirmed "
             f"({changed}).\n\n"
             "This means the name now points to a different device. Refresh the list "
             "and select the drive again."
         )
-    log(f"Safety re-check passed: /dev/{dev} is still the same external drive "
+    log(f"Safety re-check passed: {dev_path(dev)} is still the same external drive "
         f"({human_size(actual_size)}).")
 
 
@@ -3130,6 +4010,8 @@ def hash_iso_for_audit(iso_path, log, progress, cancel_event):
 def missing_dependencies_hint(missing):
     """One sentence telling the user how to get the missing tools on this system."""
     button = "or use the 'Install missing dependencies' button"
+    if IS_WINDOWS:
+        return "They are part of Windows 11; this installation looks incomplete (run 'sfc /scannow' as Administrator)."
     if IS_MAC:
         if "wimlib-imagex" in missing:
             return f"Install wimlib with: brew install wimlib ({button})."
@@ -3183,11 +4065,11 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
         check_canceled(cancel_event, drive_touched=False)
     except OperationCanceled:
         # Hashing and the safety re-check change nothing: the drive is exactly as it was.
-        audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+        audit(f"OPERATION CANCELED by the user before the drive was touched ({dev_path(dev)}); nothing was changed",
               logging.WARNING)
         raise OperationCanceled("Canceled by the user before the drive was touched.",
                                 drive_touched=False) from None
-    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image "
+    audit(f"DESTRUCTIVE OPERATION START: erasing {dev_path(dev)} and writing {mode} image "
           f"(iso sha256={iso_sha}, size={os.path.getsize(iso_path)})" + hardening_audit_text(hardening, hardening_files))
     extra = {"hardening_files": hardening_files} if hardening_files else {}
     try:
@@ -3195,35 +4077,39 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
             if mode in RAW_MODES:
                 if IS_MAC:
                     ejected = macos_write_raw(iso_path, dev, log, priv, progress, cancel_event, eject)
+                elif IS_WINDOWS:
+                    ejected = windows_write_raw(iso_path, dev, log, progress, cancel_event, eject)
                 else:
                     ejected = linux_write_raw(iso_path, dev, log, priv, progress, cancel_event, eject)
             elif IS_MAC:
                 ejected = macos_build_usb(iso_path, dev, log, progress=progress, cancel_event=cancel_event,
                                          eject=eject, **extra)
+            elif IS_WINDOWS:
+                ejected = windows_build_usb(iso_path, dev, log, priv, progress, cancel_event, eject, **extra)
             else:
                 ejected = linux_build_usb(iso_path, dev, log, priv, progress, cancel_event, eject, **extra)
     except OperationCanceled as e:
         if not e.drive_touched:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} before the drive was touched; "
                   "nothing was changed", logging.WARNING)
         elif e.written:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} during verification; "
                   "the image was written but NOT verified", logging.WARNING)
         else:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)}; the drive was left unusable",
                   logging.WARNING)
         raise
     except Exception as e:
-        audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
+        audit(f"DESTRUCTIVE OPERATION FAILED on {dev_path(dev)}: {type(e).__name__}", logging.ERROR)
         raise
-    audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+    audit(f"DESTRUCTIVE OPERATION COMPLETED on {dev_path(dev)} (ejected={bool(ejected)})")
     return bool(ejected)
 
 
 def needs_admin(mode):
-    """Whether writing a drive in `mode` needs administrator rights: always on Linux, and on macOS
+    """Whether writing a drive in `mode` needs administrator rights: always on Linux and Windows, and on macOS
     only for the byte-for-byte modes (diskutil and hdiutil need no root, writing /dev/rdiskN does)."""
-    return IS_LINUX or mode in RAW_MODES
+    return IS_LINUX or IS_WINDOWS or mode in RAW_MODES
 
 
 def image_exceeds_drive(image_size, drive_size):
@@ -5035,7 +5921,17 @@ def chromeos_drive_too_small(mode, drive_size):
     return mode == MODE_CHROMEOS and bool(drive_size) and drive_size < CHROMEOS_MIN_USB_BYTES
 
 
+def windows_missing_tools(mode):
+    """The Windows tools this mode needs and this machine lacks (they ship with Windows, so normally none)."""
+    needed = {"powershell.exe": windows_powershell_exe()}
+    if mode == MODE_WINDOWS:
+        needed["dism.exe"] = windows_dism_exe()
+    return [name for name, path in needed.items() if not os.path.isfile(path)]
+
+
 def get_missing_dependencies(mode=MODE_WINDOWS):
+    if IS_WINDOWS:
+        return windows_missing_tools(mode)
     if mode == MODE_SEED:  # the seed drive needs no ISO tools: no rsync, no wimlib (see LINUX_SEED_TOOLS)
         return [] if IS_MAC else [t for t in LINUX_SEED_TOOLS if not shutil.which(t)]
     if mode in RAW_MODES:
@@ -5055,6 +5951,15 @@ WINDOWS_HARDENING_LOG = "%windir%\\Temp\\epma-hardening.log"  # where SetupCompl
 WINDOWS_HARDENING_SCRIPTS_DIR = "sources/$OEM$/$$/Setup/Scripts"  # `$$` is copied to %windir% by Windows Setup
 WINDOWS_HARDENING_CMD = WINDOWS_HARDENING_SCRIPTS_DIR + "/SetupComplete.cmd"
 WINDOWS_HARDENING_PS1 = WINDOWS_HARDENING_SCRIPTS_DIR + "/harden.ps1"
+# hardening2 (WIN-SCRIPT): harden.ps1 has three modes and keeps the first-seen value of every setting it changes in a
+# state file, so that -Mode Undo can put it back. The folder is created on the first change and limited to
+# Administrators and SYSTEM by the script itself (Get-Acl / Set-Acl, inside try/catch: a failure only logs [WARN]).
+WINDOWS_HARDENING_MODES = ("Apply", "Audit", "Undo")  # -Mode values; Apply is the default (what Setup runs)
+WINDOWS_HARDENING_STATE_DIR = "EPMA"
+WINDOWS_HARDENING_STATE_FILE = "hardening-state.json"
+WINDOWS_HARDENING_STATE = "%ProgramData%\\" + WINDOWS_HARDENING_STATE_DIR + "\\" + WINDOWS_HARDENING_STATE_FILE
+# Settings that only an explicit -DisableLegacyNetwork applies (never SetupComplete.cmd, never by default).
+WINDOWS_HARDENING_OPTIN = ("netbios", "wpad")
 
 # One row per setting: (id, short text, risk note). The id is also the marker in harden.ps1 ("# setting: <id>");
 # the script header and describe_hardening_windows() are generated from these rows, and a test checks that every
@@ -5081,6 +5986,9 @@ WINDOWS_HARDENING_SETTINGS = (
     ("asr_audit", "Defender attack surface rules in Audit mode (log only): email executable content, Office child processes, obfuscated scripts, script-launched downloads",
      "Audit mode only writes events and blocks nothing. Review the Defender event log before switching any rule to Block. "
      "The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect."),
+    ("asr_audit_extra", "Defender attack surface rules in Audit mode (log only), more: abuse of exploited vulnerable signed drivers, process creation from PsExec and WMI commands, untrusted processes that run from USB drives",
+     "Audit mode only writes events and blocks nothing; running programs from a USB stick or with remote-management tools adds events. Review the Defender event log before switching any rule to Block. "
+     "The script runs once at the end of Setup and does not retry; the log says [WARN] for a rule that is not in effect."),
     ("wdigest", "Do not keep plain-text WDigest credentials in memory",
      "Only legacy digest authentication against very old web servers is affected."),
     ("ps_logging", "PowerShell script block logging",
@@ -5095,6 +6003,12 @@ WINDOWS_HARDENING_SETTINGS = (
      "so export the log if you need to keep it."),
     ("uac", "Keep User Account Control switched on",
      "Only acts when UAC was switched off; takes effect after the next restart."),
+    ("netbios", "Opt-in (-DisableLegacyNetwork, never applied by default): turn off NetBIOS over TCP/IP on all network adapters",
+     "Looking up or browsing machines by their NetBIOS name stops working on the adapters that exist now (very old file shares, printers or NAS boxes reached by a short name). "
+     "It takes effect when the adapter reconnects or after a restart; adapters added later keep their default."),
+    ("wpad", "Opt-in (-DisableLegacyNetwork, never applied by default): turn off WPAD proxy auto-discovery for WinHTTP",
+     "A network that hands out its proxy only through WPAD (some offices and schools) no longer gives it to Windows services and apps that use WinHTTP, so they can lose internet access until a proxy is set by hand. "
+     "The WinHTTP auto-proxy service itself is left running."),
 )
 
 # Deliberately NOT done, with the reason (shown in the script header and available to the README / help text).
@@ -5105,6 +6019,8 @@ WINDOWS_HARDENING_NOT_CHANGED = (
      "Stricter levels can break access to older file shares, printers and NAS devices without any warning."),
     ("accounts_disks", "Accounts, passwords, disks, language, licence and product key",
      "Windows Setup stays fully interactive; the hardening script never touches them."),
+    ("device_guard", "Memory Integrity (HVCI), Credential Guard and Exploit Protection are only reported, never turned on",
+     "They depend on the hardware, drivers and apps of each PC and can stop a PC from starting or a program from running; Audit mode shows their state so the owner can decide."),
 )
 
 
@@ -5125,74 +6041,347 @@ def describe_hardening_windows(profile):
     return [f"{text} -- risk: {risk}" for _sid, text, risk in WINDOWS_HARDENING_SETTINGS]
 
 
-def _windows_setupcomplete_cmd():
+def describe_hardening_windows_applied(profile):
+    """The lines of describe_hardening_windows() for what the scripts apply BY DEFAULT: the opt-in settings
+    (`-DisableLegacyNetwork`, never used by SetupComplete.cmd or the launchers) are left out."""
+    if not _windows_hardening_check(profile):
+        return []
+    return [f"{text} -- risk: {risk}" for sid, text, risk in WINDOWS_HARDENING_SETTINGS
+            if sid not in WINDOWS_HARDENING_OPTIN]
+
+
+def _windows_setupcomplete_cmd(profile=HARDENING_BASELINE, ps1=None):
+    """SetupComplete.cmd (ASCII, CRLF). The SHA-256 of harden.ps1 (windows_hardening_ps1(profile), or the bytes given
+    as `ps1`) is embedded and checked with certutil before the script runs, so a harden.ps1 that does not match this
+    file is never run. That is all the check does: whoever can change both files (or the drive that holds them) is
+    not stopped by it."""
+    if ps1 is None:
+        ps1 = windows_hardening_ps1(profile)
+    if not isinstance(ps1, bytes) or not ps1.strip():
+        raise ValueError("The Windows hardening script is empty")
+    digest = hashlib.sha256(ps1).hexdigest()
     # SetupComplete.cmd runs once as SYSTEM at the very end of Setup (before the first sign-in), from
     # %windir%\Setup\Scripts. It must never make Setup fail, so every path ends in `exit /b 0`. No parenthesised
-    # blocks on purpose: %errorlevel% inside one is expanded too early.
+    # blocks on purpose (%errorlevel% inside one is expanded too early); the only parentheses are the `for /f` command.
+    # `certutil -hashfile` prints a header line, the hash (older Windows versions put a space between the bytes) and a
+    # status line: line 2 is read, the spaces are dropped and the comparison ignores case.
     lines = (
         "@echo off",
-        "rem EPMA USB CREATOR - optional hardened setup. Runs harden.ps1 once, logs, never fails the setup.",
+        "rem EPMA USB CREATOR - optional hardened setup. Checks harden.ps1, runs it once, logs, never fails the setup.",
         'set "EPMA_LOG=' + WINDOWS_HARDENING_LOG + '"',
+        'set "EPMA_WANT=' + digest + '"',
+        'set "EPMA_GOT="',
         'echo [%date% %time%] SetupComplete.cmd: starting >> "%EPMA_LOG%"',
         'if not exist "%~dp0harden.ps1" goto missing',
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1',
+        "for /f \"skip=1 delims=\" %%H in ('%SystemRoot%\\System32\\certutil.exe -hashfile \"%~dp0harden.ps1\" SHA256 2^>nul') "
+        'do if not defined EPMA_GOT set "EPMA_GOT=%%H"',
+        'if not defined EPMA_GOT goto nohash',
+        'set "EPMA_GOT=%EPMA_GOT: =%"',
+        'if /i not "%EPMA_GOT%"=="%EPMA_WANT%" goto mismatch',
+        'echo [%date% %time%] SetupComplete.cmd: harden.ps1 SHA-256 matches >> "%EPMA_LOG%"',
+        '%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1',
         'echo [%date% %time%] SetupComplete.cmd: harden.ps1 exit code %errorlevel% (ignored) >> "%EPMA_LOG%"',
         "goto done",
         ":missing",
         'echo [SKIP] harden.ps1 not found next to SetupComplete.cmd >> "%EPMA_LOG%"',
+        "goto done",
+        ":nohash",
+        'echo [SKIP] could not compute the SHA-256 of harden.ps1 (certutil failed): harden.ps1 was NOT run >> "%EPMA_LOG%"',
+        "goto done",
+        ":mismatch",
+        'echo [SKIP] harden.ps1 does not match the SHA-256 recorded in SetupComplete.cmd: harden.ps1 was NOT run >> "%EPMA_LOG%"',
+        'echo [SKIP] expected %EPMA_WANT% but found %EPMA_GOT% >> "%EPMA_LOG%"',
         ":done",
         "exit /b 0",
     )
     return ("\r\n".join(lines) + "\r\n").encode("ascii")
 
 
-# PowerShell code for each setting. A block runs inside its own try/catch, logs exactly one line
-# ([OK], [SKIP] or [FAIL]), and can run again without changing anything. `@WHAT@` is replaced by the setting's
-# text from WINDOWS_HARDENING_SETTINGS. Only PowerShell 5.1 syntax; no network access, no downloads.
+# ===== hardening2: windows script (harden.ps1 with -Mode Apply|Audit|Undo) =====
+# The script has three modes (-Mode Apply|Audit|Undo). Every setting has ONE code block per mode, kept in three
+# dicts with the same keys: _WINDOWS_PS_CODE (Apply), _WINDOWS_PS_AUDIT (Audit, read-only) and _WINDOWS_PS_UNDO
+# (Undo, puts back what Apply recorded). Each block runs inside its own try/catch and logs one line (or, for a
+# few multi-part settings, one line per part): Apply and Undo use [OK]/[SKIP]/[WARN]/[FAIL] (Undo: [OK]/[SKIP]/
+# [WARN]), Audit uses [OK] in effect / [DIFF] not in effect / [N/A]. `@WHAT@` is replaced by the setting's text
+# from WINDOWS_HARDENING_SETTINGS. Only PowerShell 5.1 syntax; no network access, no downloads.
+#
+# NOTHING in this file was ever executed: pwsh is not available where it was written, so the PowerShell is
+# checked structurally by the tests and nothing else. Test it on a throw-away Windows 11 first (Audit mode is
+# a safe way to start: it changes nothing).
+
+# Pairs (what Apply calls to record + change, what Undo calls to put it back). A test checks that every
+# setting whose Apply block uses the first name has the second name in its Undo block.
+WINDOWS_HARDENING_STATE_PAIRS = (
+    ("Set-RegDword", "Restore-RegValue"),
+    ("Set-AsrRule", "Restore-AsrRule"),
+    ("Set-AuditSubcategory", "Restore-AuditSubcategory"),
+    ("Save-FirewallState", "Restore-FirewallState"),
+    ("Save-DefenderValue", "Restore-DefenderValue"),
+    ("Save-FeatureState", "Restore-FeatureState"),
+    ("Save-EventLogState", "Restore-EventLogState"),
+)
+
+# Attack surface reduction rules by GUID (Microsoft documentation names in the comments). Only rules whose GUID
+# is certain are listed; the three of the second group are only ever set to Audit mode.
+WINDOWS_ASR_LSASS = "9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2"  # block credential stealing from LSASS (Block mode)
+WINDOWS_ASR_AUDIT_RULES = (
+    "be9ba2d9-53ea-4cdc-84e5-9b1eeee46550",  # block executable content from email client and webmail
+    "d4f940ab-401b-4efc-aadc-ad5f3c50688a",  # block all Office applications from creating child processes
+    "5beb7efe-fd9a-4556-801d-275e5ffc04cc",  # block execution of potentially obfuscated scripts
+    "d3e037e1-3eb8-44c8-a917-57927947596d",  # block JavaScript or VBScript from launching downloaded executable content
+)
+WINDOWS_ASR_AUDIT_EXTRA_RULES = (
+    "56a863a9-875e-4185-98a7-b882c64b5ce5",  # block abuse of exploited vulnerable signed drivers
+    "d1e49aac-8f56-4280-b9ba-993a6d77406c",  # block process creations originating from PSExec and WMI commands
+    "b2b3f03d-6a65-4f7b-a9c7-1c7ef74a9ba4",  # block untrusted and unsigned processes that run from USB
+)
+
+# Advanced audit policy subcategories, addressed by GUID because their names are translated on non-English
+# Windows. The GUIDs are not checked against a live system here: if auditpol rejects one, a FAIL line names it.
+# List the valid ones with: auditpol /list /subcategory:* /v
+# (guid, name, success wanted, failure wanted): Logon, Account Lockout, User Account Management, Security Group
+# Management, Audit Policy Change (success and failure); Process Creation (success only, no command-line capture).
+WINDOWS_AUDIT_SUBCATEGORIES = (
+    ("{0CCE9215-69AE-11D9-BED3-505054503030}", "Logon", True, True),
+    ("{0CCE9217-69AE-11D9-BED3-505054503030}", "Account Lockout", True, True),
+    ("{0CCE9235-69AE-11D9-BED3-505054503030}", "User Account Management", True, True),
+    ("{0CCE9237-69AE-11D9-BED3-505054503030}", "Security Group Management", True, True),
+    ("{0CCE922F-69AE-11D9-BED3-505054503030}", "Audit Policy Change", True, True),
+    ("{0CCE922B-69AE-11D9-BED3-505054503030}", "Process Creation", True, False),
+)
+
+# The ONLY registry values the script writes or puts back: (key, value name, lowest, highest DWORD accepted when
+# Undo puts an earlier value back). The state file is a source of VALUES only: Undo looks every setting up in this
+# table (rendered into the script as $script:KnownReg) and ignores any path or name written in the file.
+# The per-adapter NetBIOS values are the one family that is matched by pattern instead (WINDOWS_NETBT_KEY_REGEX,
+# value name NetbiosOptions, 0 to 2). A test checks that every Set-RegDword / Restore-RegValue call is in here.
+WINDOWS_REG_VALUES = (
+    (r"HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters", "SMB1", 0, 1),
+    (r"HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", -1, 255),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0, 1),
+    (r"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging", "EnableScriptBlockLogging", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowToGetHelp", 0, 1),
+    (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowFullControl", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System", "EnableLUA", 0, 1),
+    (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp", "DisableWpad", 0, 1),
+)
+WINDOWS_NETBT_KEY_REGEX = (r"^HKLM:\\SYSTEM\\CurrentControlSet\\Services\\NetBT\\Parameters\\Interfaces"
+                           r"\\Tcpip_\{[0-9A-Fa-f-]{36}\}$")
+WINDOWS_OPTIONAL_FEATURES = ("SMB1Protocol", "MicrosoftWindowsPowerShellV2Root", "MicrosoftWindowsPowerShellV2")
+WINDOWS_DEFENDER_PREFERENCES = ("PUAProtection", "MAPSReporting")
+
+
+def _ps_known_tables():
+    """The built-in tables that Undo trusts instead of the state file, as text for the script helpers."""
+    reg = "@{\n" + "\n".join(f"    '{p}|{n}' = @({lo}, {hi})" for p, n, lo, hi in WINDOWS_REG_VALUES) + "\n}"
+    asr = ",\n".join(f"    '{g}'" for g in (WINDOWS_ASR_LSASS, *WINDOWS_ASR_AUDIT_RULES, *WINDOWS_ASR_AUDIT_EXTRA_RULES))
+    audit = ",\n".join(f"    '{g}'" for g, _n, _s, _f in WINDOWS_AUDIT_SUBCATEGORIES)
+    return {
+        "@KNOWN_REG@": reg,
+        "@KNOWN_ASR@": "@(\n" + asr + "\n)",
+        "@KNOWN_AUDIT@": "@(\n" + audit + "\n)",
+        "@KNOWN_FEATURES@": "@(" + ", ".join(f"'{f}'" for f in WINDOWS_OPTIONAL_FEATURES) + ")",
+        "@KNOWN_MP@": "@(" + ", ".join(f"'{f}'" for f in WINDOWS_DEFENDER_PREFERENCES) + ")",
+        "@NETBT_REGEX@": WINDOWS_NETBT_KEY_REGEX,
+    }
+
+
+def _ps_bool(value):
+    return "$true" if value else "$false"
+
+
+def _ps_reg_code(rows, optin=False, absent_ok=False):
+    """(apply, audit, undo) PowerShell for a setting that is only DWORD registry values.
+
+    rows = ((path, name, wanted int), ...). optin=True: Apply does nothing without -DisableLegacyNetwork and Audit
+    does not count a missing setting. absent_ok=True: a value that does not exist counts as in effect in Audit
+    (the Windows default already is the wanted state).
+    """
+    apply_l = ["try {"]
+    names = []
+    for i, (path, name, value) in enumerate(rows, 1):
+        apply_l.append(f"    $c{i} = Set-RegDword -Path '{path}' -Name '{name}' -Value {value}")
+        names.append(f"$c{i}")
+    apply_l.append(f"    Write-Result 'OK' '@WHAT@' (Get-ChangeText ({' -or '.join(names)}))")
+    apply_l += ["} catch {", "    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message", "}"]
+    audit_l = ["try {", "    $good = @()", "    $bad = @()"]
+    for path, name, value in rows:
+        audit_l.append(f"    $cur = Get-RegDword -Path '{path}' -Name '{name}'")
+        if absent_ok:
+            audit_l.append(f"    if ($null -eq $cur) {{ $good += '{name} is not set (the Windows default is already {value})' }}")
+            audit_l.append(f"    elseif ([int]$cur -eq {value}) {{ $good += '{name} is {value}' }}")
+        else:
+            audit_l.append(f"    if (($null -ne $cur) -and ([int]$cur -eq {value})) {{ $good += '{name} is {value}' }}")
+        audit_l.append(f"    else {{ $bad += '{name} is ' + (Format-Value $cur) + ', wanted {value}' }}")
+    flag = " -OptIn $true" if optin else ""
+    audit_l += [
+        "    if ($bad.Count -eq 0) {",
+        "        Write-Audit 'OK' '@WHAT@' ($good -join '; ')",
+        "    } else {",
+        f"        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; '){flag}",
+        "    }",
+        "} catch {",
+        "    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)",
+        "}",
+    ]
+    undo_l = ["try {", "    $r = @()"]
+    for path, name, _value in rows:
+        undo_l.append(f"    $r += Restore-RegValue -Path '{path}' -Name '{name}'")
+    undo_l += [
+        "    Write-UndoSummary '@WHAT@' $r",
+        "} catch {",
+        "    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message",
+        "}",
+    ]
+    if optin:
+        apply_l = (["try {",
+                    "    if (-not $DisableLegacyNetwork) {",
+                    "        Write-Result 'SKIP' '@WHAT@' 'opt-in, not requested (run with -DisableLegacyNetwork)'",
+                    "    } else {"]
+                   + ["    " + ln for ln in apply_l[1:-3]]
+                   + ["    }", "} catch {", "    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message", "}"])
+    return "\n".join(apply_l) + "\n", "\n".join(audit_l) + "\n", "\n".join(undo_l) + "\n"
+
+
+def _ps_asr_audit_code(rules):
+    """(apply, audit, undo) for a group of attack surface rules that are only ever set to Audit mode."""
+    ids = ",\n".join(f"            '{r}'" for r in rules)
+    ids_u = ",\n".join(f"        '{r}'" for r in rules)
+    apply_code = f"""try {{
+    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {{
+        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
+    }} else {{
+        $rules = @(
+{ids}
+        )
+        $applied = 0
+        $missing = 0
+        foreach ($id in $rules) {{
+            $r = Set-AsrRule -Id $id -Action 'AuditMode'
+            if ($r -eq 'changed') {{ $applied++ }}
+            # In effect when the rule is in Audit mode, or already stricter (Block 1 or Warn 6).
+            $now = Get-AsrAction $id
+            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) {{ $missing++ }}
+        }}
+        if ($missing -gt 0) {{
+            Write-Result 'WARN' '@WHAT@ not in effect' ('' + $missing + ' of ' + $rules.Count + ' rules are not active; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
+        }} else {{
+            Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
+        }}
+    }}
+}} catch {{
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}}
+"""
+    audit_code = f"""try {{
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {{
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    }} else {{
+        $rules = @(
+{ids}
+        )
+        $off = @()
+        foreach ($id in $rules) {{
+            $now = Get-AsrAction $id
+            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) {{ $off += $id + ' (' + (Get-AsrActionName $now) + ')' }}
+        }}
+        if ($off.Count -eq 0) {{
+            Write-Audit 'OK' '@WHAT@' ('all ' + $rules.Count + ' rules are in Audit mode or stricter')
+        }} else {{
+            Write-Audit 'DIFF' '@WHAT@' ('' + $off.Count + ' of ' + $rules.Count + ' rules not active: ' + ($off -join ', '))
+        }}
+    }}
+}} catch {{
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}}
+"""
+    undo_code = f"""try {{
+    $r = @()
+    foreach ($id in @(
+{ids_u}
+    )) {{
+        $r += Restore-AsrRule $id
+    }}
+    Write-UndoSummary '@WHAT@' $r
+}} catch {{
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}}
+"""
+    return apply_code, audit_code, undo_code
+
+
+def _ps_audit_items(indent):
+    pad = " " * indent
+    rows = [f"{pad}@('{g}', '{n}', {_ps_bool(s)}, {_ps_bool(f)})" for g, n, s, f in WINDOWS_AUDIT_SUBCATEGORIES]
+    return ",\n".join(rows)
+
+
+_REG_LLMNR = _ps_reg_code(((r"HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient", "EnableMulticast", 0),))
+_REG_AUTORUN = _ps_reg_code(((r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoDriveTypeAutoRun", 255),
+                             (r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer", "NoAutorun", 1)))
+_REG_WDIGEST = _ps_reg_code(((r"HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest", "UseLogonCredential", 0),),
+                            absent_ok=True)
+_REG_PSLOG = _ps_reg_code(((r"HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging",
+                            "EnableScriptBlockLogging", 1),))
+_REG_REMOTE = _ps_reg_code(((r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowToGetHelp", 0),
+                            (r"HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance", "fAllowFullControl", 0)))
+# Only the WinHTTP DisableWpad value. The "WinHTTP Web Proxy Auto-Discovery" service (WinHttpAutoProxySvc) is left
+# alone on purpose: stopping or disabling it breaks proxy handling for apps that need it. The per-user Internet
+# Explorer "detect settings" switch lives under HKCU and belongs to each user, so a machine-wide script skips it.
+_REG_WPAD = _ps_reg_code(((r"HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Internet Settings\WinHttp", "DisableWpad", 1),),
+                         optin=True)
+_ASR_EXTRA = _ps_asr_audit_code(WINDOWS_ASR_AUDIT_EXTRA_RULES)
+_ASR_BASE = _ps_asr_audit_code(WINDOWS_ASR_AUDIT_RULES)
+
 _WINDOWS_PS_CODE = {
     "smb1": r"""
 try {
     $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1' -Value 0
     $note = 'server side already off'
     if ($c1) { $note = 'server side turned off' }
+    $restart = $false
     $state = Get-FeatureState 'SMB1Protocol'
     if ($null -eq $state) {
         $note = $note + '; optional feature not present'
     } elseif ($state -eq 'Enabled') {
+        Save-FeatureState 'SMB1Protocol' $state
         Disable-WindowsOptionalFeature -Online -FeatureName 'SMB1Protocol' -NoRestart | Out-Null
-        $note = $note + '; optional feature disabled'
+        # Read the state again: with -NoRestart it often reads DisablePending until the next restart.
+        $after = Get-FeatureState 'SMB1Protocol' -Fresh
+        if (@('DisablePending', 'EnablePending') -contains $after) {
+            $restart = $true
+            $note = $note + '; optional feature disabled but a restart is needed to finish it'
+        } elseif (($after -eq 'Disabled') -or ($after -eq 'DisabledWithPayloadRemoved')) {
+            $note = $note + '; optional feature disabled'
+        } else {
+            throw ('the optional feature SMB1Protocol is still ' + (Format-Value $after) + ' after it was turned off')
+        }
+    } elseif (@('DisablePending', 'EnablePending') -contains $state) {
+        $restart = $true
+        $note = $note + '; optional feature has a change pending, a restart is needed'
     } else {
         $note = $note + '; optional feature already off'
     }
-    Write-Result 'OK' '@WHAT@' $note
+    if ($restart) {
+        Write-Result 'WARN' '@WHAT@ needs a restart' $note
+    } else {
+        Write-Result 'OK' '@WHAT@' $note
+    }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
-    "llmnr": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient' -Name 'EnableMulticast' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "autorun": r"""
-try {
-    $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
-    $c1 = Set-RegDword -Path $key -Name 'NoDriveTypeAutoRun' -Value 255
-    $c2 = Set-RegDword -Path $key -Name 'NoAutorun' -Value 1
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+    "llmnr": _REG_LLMNR[0],
+    "autorun": _REG_AUTORUN[0],
     "firewall": r"""
 try {
     $profiles = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
     $todo = @($profiles | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
     $changedNote = 'already set'
     if ($todo.Count -gt 0) {
+        Save-FirewallState
         Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled True -DefaultInboundAction Block
         $changedNote = 'changed on ' + $todo.Count + ' profile(s)'
     }
@@ -5216,10 +6405,12 @@ try {
         $pref = Get-MpPreference
         $changed = @()
         if ([int]$pref.PUAProtection -ne 1) {
+            Save-DefenderValue 'PUAProtection' ([int]$pref.PUAProtection)
             Set-MpPreference -PUAProtection Enabled
             $changed += 'PUA protection'
         }
         if ([int]$pref.MAPSReporting -ne 2) {
+            Save-DefenderValue 'MAPSReporting' ([int]$pref.MAPSReporting)
             Set-MpPreference -MAPSReporting Advanced
             $changed += 'cloud protection'
         }
@@ -5245,7 +6436,7 @@ try {
     if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
         Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
     } else {
-        $ruleId = '9e6c4e1f-7d60-472f-ba1a-a39ef669e4b2'
+        $ruleId = '@LSASS@'
         $r = Set-AsrRule -Id $ruleId -Action 'Enabled'
         $now = Get-AsrAction $ruleId
         if ($now -eq 1) {
@@ -5257,70 +6448,62 @@ try {
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
-""",
-    "asr_audit": r"""
-try {
-    if (-not (Get-Command Add-MpPreference -ErrorAction SilentlyContinue)) {
-        Write-Result 'SKIP' '@WHAT@' 'Defender cmdlets not available'
-    } else {
-        $rules = @(
-            'be9ba2d9-53ea-4cdc-84e5-9b1eeee46550',
-            'd4f940ab-401b-4efc-aadc-ad5f3c50688a',
-            '5beb7efe-fd9a-4556-801d-275e5ffc04cc',
-            'd3e037e1-3eb8-44c8-a917-57927947596d'
-        )
-        $applied = 0
-        $missing = 0
-        foreach ($id in $rules) {
-            $r = Set-AsrRule -Id $id -Action 'AuditMode'
-            if ($r -eq 'changed') { $applied++ }
-            # In effect when the rule is in Audit mode, or already stricter (Block 1 or Warn 6).
-            $now = Get-AsrAction $id
-            if (($now -ne 2) -and ($now -ne 1) -and ($now -ne 6)) { $missing++ }
-        }
-        if ($missing -gt 0) {
-            Write-Result 'WARN' '@WHAT@ not in effect' ('' + $missing + ' of ' + $rules.Count + ' rules are not active; likely reason: Tamper Protection, another antivirus is active, or Defender is not ready yet')
-        } else {
-            Write-Result 'OK' '@WHAT@' ('' + $applied + ' of ' + $rules.Count + ' rules changed, the others were already set')
-        }
-    }
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "wdigest": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name 'UseLogonCredential' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
-    "ps_logging": r"""
-try {
-    $c1 = Set-RegDword -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging' -Name 'EnableScriptBlockLogging' -Value 1
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText $c1)
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[0],
+    "asr_audit_extra": _ASR_EXTRA[0],
+    "wdigest": _REG_WDIGEST[0],
+    "ps_logging": _REG_PSLOG[0],
     "ps2": r"""
 try {
     $found = $false
-    $disabled = $false
+    $disabled = @()
+    $restart = @()
+    $failed = @()
+    $fresh = $false
     foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
-        $state = Get-FeatureState $name
-        if ($null -ne $state) {
-            $found = $true
-            if ($state -eq 'Enabled') {
-                Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
-                $disabled = $true
+        # One feature at a time, each in its own try/catch: turning the Root feature off can already turn the child
+        # feature off, so the state is read again before the second one, and an error is judged by the state it left.
+        try {
+            $state = Get-FeatureState $name -Fresh:$fresh
+            if ($null -ne $state) {
+                $found = $true
+                if ($state -eq 'Enabled') {
+                    Save-FeatureState $name $state
+                    Disable-WindowsOptionalFeature -Online -FeatureName $name -NoRestart | Out-Null
+                    $fresh = $true
+                    $after = Get-FeatureState $name -Fresh
+                    if (@('DisablePending', 'EnablePending') -contains $after) {
+                        $restart += $name
+                    } elseif (($after -eq 'Disabled') -or ($after -eq 'DisabledWithPayloadRemoved')) {
+                        $disabled += $name
+                    } else {
+                        throw ('the feature is still ' + (Format-Value $after) + ' after it was turned off')
+                    }
+                } elseif (@('DisablePending', 'EnablePending') -contains $state) {
+                    $restart += $name
+                }
+            }
+        } catch {
+            $why = $_.Exception.Message
+            $fresh = $true
+            $again = $null
+            try { $again = Get-FeatureState $name -Fresh } catch { $again = $null }
+            if (($again -eq 'Disabled') -or ($again -eq 'DisabledWithPayloadRemoved')) {
+                $disabled += $name
+            } elseif ($again -eq 'DisablePending') {
+                $restart += $name
+            } else {
+                $failed += ($name + ': ' + $why)
             }
         }
     }
-    if (-not $found) {
+    if ($failed.Count -gt 0) {
+        Write-Result 'FAIL' '@WHAT@' ($failed -join ' | ')
+    } elseif ($restart.Count -gt 0) {
+        Write-Result 'WARN' '@WHAT@ needs a restart' ('change pending for ' + ($restart -join ', ') + '; restart Windows to finish turning the feature off')
+    } elseif (-not $found) {
         Write-Result 'SKIP' '@WHAT@' 'feature not present on this Windows build'
-    } elseif ($disabled) {
+    } elseif ($disabled.Count -gt 0) {
         Write-Result 'OK' '@WHAT@' 'feature disabled'
     } else {
         Write-Result 'OK' '@WHAT@' 'already off'
@@ -5329,41 +6512,31 @@ try {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
-    "remote_assist": r"""
-try {
-    $key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Remote Assistance'
-    $c1 = Set-RegDword -Path $key -Name 'fAllowToGetHelp' -Value 0
-    $c2 = Set-RegDword -Path $key -Name 'fAllowFullControl' -Value 0
-    Write-Result 'OK' '@WHAT@' (Get-ChangeText ($c1 -or $c2))
-} catch {
-    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
-}
-""",
+    "remote_assist": _REG_REMOTE[0],
     "audit": r"""
 try {
-    # ADVANCED audit subcategories (not the nine basic categories), addressed by GUID because their names are
-    # translated on non-English Windows. The GUIDs are not checked against a live system here: if auditpol
-    # rejects one, a FAIL line names it. List the valid ones with: auditpol /list /subcategory:* /v
-    # Logon, Account Lockout, User Account Management, Security Group Management, Audit Policy Change
-    # (success and failure); Process Creation (success only, no command-line capture).
     $items = @(
-        @('{0CCE9215-69AE-11D9-BED3-505054503030}', 'Logon', '/success:enable', '/failure:enable'),
-        @('{0CCE9217-69AE-11D9-BED3-505054503030}', 'Account Lockout', '/success:enable', '/failure:enable'),
-        @('{0CCE9235-69AE-11D9-BED3-505054503030}', 'User Account Management', '/success:enable', '/failure:enable'),
-        @('{0CCE9237-69AE-11D9-BED3-505054503030}', 'Security Group Management', '/success:enable', '/failure:enable'),
-        @('{0CCE922F-69AE-11D9-BED3-505054503030}', 'Audit Policy Change', '/success:enable', '/failure:enable'),
-        @('{0CCE922B-69AE-11D9-BED3-505054503030}', 'Process Creation', '/success:enable', '')
+@AUDIT_ITEMS@
     )
     $bad = 0
+    $changed = 0
+    $backedUp = $false
     foreach ($item in $items) {
-        if ($item[3] -eq '') {
-            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] | Out-String
-        } else {
-            $out = & auditpol.exe /set ('/subcategory:' + $item[0]) $item[2] $item[3] | Out-String
-        }
-        if ($LASTEXITCODE -ne 0) {
-            $bad++
-            Write-Result 'FAIL' ('Audit subcategory ' + $item[1] + ' ' + $item[0]) ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim() + ' List valid GUIDs with: auditpol /list /subcategory:* /v')
+        $cur = Get-AuditSetting $item[0]
+        # Already enough (or stricter) is left alone; an unreadable setting is set again.
+        $satisfied = $cur.known -and ($cur.success -or (-not $item[2])) -and ($cur.failure -or (-not $item[3]))
+        if (-not $satisfied) {
+            try {
+                if (-not $backedUp) {
+                    Save-AuditBackup
+                    $backedUp = $true
+                }
+                Set-AuditSubcategory $item[0] $item[2] $item[3]
+                $changed++
+            } catch {
+                $bad++
+                Write-Result 'FAIL' ('Audit subcategory ' + $item[1] + ' ' + $item[0]) ($_.Exception.Message + ' List valid GUIDs with: auditpol /list /subcategory:* /v')
+            }
         }
     }
     # The Security log wraps quickly with these events, so raise its maximum size to 128 MiB. Only ever raised.
@@ -5375,6 +6548,7 @@ try {
         if ($oldBytes -ge $wantBytes) {
             $sizeNote = 'Security log size left at ' + [math]::Round($oldBytes / 1MB) + ' MiB (already 128 MiB or more)'
         } else {
+            Save-EventLogState $oldBytes
             & wevtutil.exe sl Security ('/ms:' + $wantBytes) | Out-Null
             $newBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
             if ($newBytes -ge $wantBytes) {
@@ -5391,16 +6565,16 @@ try {
     if (($bad -gt 0) -or (-not $sizeOk)) {
         Write-Result 'WARN' '@WHAT@ not fully in effect' ('' + $bad + ' of ' + $items.Count + ' subcategories rejected; ' + $sizeNote)
     } else {
-        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories set; ' + $sizeNote)
+        Write-Result 'OK' '@WHAT@' ('' + $items.Count + ' subcategories in effect (' + $changed + ' changed); ' + $sizeNote)
     }
 } catch {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
-""",
+""".replace("@AUDIT_ITEMS@", _ps_audit_items(8)),
     "uac": r"""
 try {
     $key = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'
-    $cur = (Get-ItemProperty -LiteralPath $key -Name 'EnableLUA' -ErrorAction SilentlyContinue).EnableLUA
+    $cur = Get-RegDword -Path $key -Name 'EnableLUA'
     if (($null -ne $cur) -and ([int]$cur -eq 0)) {
         Set-RegDword -Path $key -Name 'EnableLUA' -Value 1 | Out-Null
         Write-Result 'OK' '@WHAT@' 'was off, turned on (effective after the next restart)'
@@ -5411,6 +6585,308 @@ try {
     Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
 }
 """,
+    "netbios": r"""
+try {
+    if (-not $DisableLegacyNetwork) {
+        Write-Result 'SKIP' '@WHAT@' 'opt-in, not requested (run with -DisableLegacyNetwork)'
+    } else {
+        $base = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
+        $names = @()
+        if (Test-Path -LiteralPath $base) {
+            $names = @(Get-ChildItem -LiteralPath $base | Where-Object { $_.PSChildName -like 'Tcpip_*' } | ForEach-Object { [string]$_.PSChildName })
+        }
+        if ($names.Count -eq 0) {
+            Write-Result 'SKIP' '@WHAT@' 'no network interfaces found in the NetBT settings'
+        } else {
+            # NetbiosOptions: 0 = use the DHCP setting, 1 = on, 2 = off. Interfaces added later keep their default.
+            $changed = 0
+            foreach ($n in $names) {
+                if (Set-RegDword -Path ($base + '\' + $n) -Name 'NetbiosOptions' -Value 2) { $changed++ }
+            }
+            Write-Result 'OK' '@WHAT@' ('' + $changed + ' of ' + $names.Count + ' interfaces changed, the others were already set; effective after the adapters reconnect or after a restart')
+        }
+    }
+} catch {
+    Write-Result 'FAIL' '@WHAT@' $_.Exception.Message
+}
+""",
+    "wpad": _REG_WPAD[0],
+}
+
+_WINDOWS_PS_AUDIT = {
+    "smb1": r"""
+try {
+    $cur = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1'
+    $state = Get-FeatureState 'SMB1Protocol'
+    $bad = @()
+    if (($null -eq $cur) -or ([int]$cur -ne 0)) { $bad += 'SMB1 server value is ' + (Format-Value $cur) + ', wanted 0' }
+    if ($state -eq 'Enabled') { $bad += 'optional feature SMB1Protocol is Enabled' }
+    elseif (@('DisablePending', 'EnablePending') -contains $state) { $bad += 'optional feature SMB1Protocol is ' + $state + ', a restart is needed' }
+    if ($bad.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'SMB1 server value is 0 and the optional feature is off or not present'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "llmnr": _REG_LLMNR[1],
+    "autorun": _REG_AUTORUN[1],
+    "firewall": r"""
+try {
+    $after = @(Get-NetFirewallProfile -Profile Domain,Private,Public)
+    $off = @($after | Where-Object { ($_.Enabled -ne 'True') -or ($_.DefaultInboundAction -ne 'Block') })
+    if ($off.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'all three profiles are on with inbound blocked'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ('off or open on ' + $off.Count + ' of ' + $after.Count + ' profile(s): ' + (($off | ForEach-Object { [string]$_.Name }) -join ', '))
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "defender_cloud": r"""
+try {
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $pref = Get-MpPreference
+        $bad = @()
+        if ([int]$pref.PUAProtection -ne 1) { $bad += 'PUA protection is ' + [int]$pref.PUAProtection + ', wanted 1' }
+        if ([int]$pref.MAPSReporting -ne 2) { $bad += 'cloud protection (MAPS) is ' + [int]$pref.MAPSReporting + ', wanted 2' }
+        if ($bad.Count -eq 0) {
+            Write-Audit 'OK' '@WHAT@' 'PUA protection and cloud protection are on'
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "asr_lsass": r"""
+try {
+    if (-not (Get-Command Get-MpPreference -ErrorAction SilentlyContinue)) {
+        Write-Audit 'NA' '@WHAT@' 'Defender cmdlets not available'
+    } else {
+        $now = Get-AsrAction '@LSASS@'
+        if ($now -eq 1) {
+            Write-Audit 'OK' '@WHAT@' 'the rule is in Block mode'
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ('the rule action is: ' + (Get-AsrActionName $now))
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[1],
+    "asr_audit_extra": _ASR_EXTRA[1],
+    "wdigest": _REG_WDIGEST[1],
+    "ps_logging": _REG_PSLOG[1],
+    "ps2": r"""
+try {
+    $found = $false
+    $on = @()
+    foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
+        $state = Get-FeatureState $name
+        if ($null -ne $state) {
+            $found = $true
+            if ($state -eq 'Enabled') { $on += $name }
+            elseif (@('DisablePending', 'EnablePending') -contains $state) { $on += ($name + ' (' + $state + ', a restart is needed)') }
+        }
+    }
+    if (-not $found) {
+        Write-Audit 'NA' '@WHAT@' 'feature not present on this Windows build'
+    } elseif ($on.Count -eq 0) {
+        Write-Audit 'OK' '@WHAT@' 'the feature is off'
+    } else {
+        Write-Audit 'DIFF' '@WHAT@' ('still enabled: ' + ($on -join ', '))
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "remote_assist": _REG_REMOTE[1],
+    "audit": r"""
+try {
+    $items = @(
+@AUDIT_ITEMS@
+    )
+    $bad = @()
+    $unknown = 0
+    foreach ($item in $items) {
+        $cur = Get-AuditSetting $item[0]
+        if (-not $cur.known) {
+            $unknown++
+        } else {
+            $satisfied = ($cur.success -or (-not $item[2])) -and ($cur.failure -or (-not $item[3]))
+            if (-not $satisfied) { $bad += $item[1] + ' is: ' + $cur.raw }
+        }
+    }
+    $oldBytes = [int64](Get-WinEvent -ListLog Security).MaximumSizeInBytes
+    if ($oldBytes -lt 134217728) { $bad += 'Security log size is ' + [math]::Round($oldBytes / 1MB) + ' MiB, wanted 128 MiB or more' }
+    if ($bad.Count -gt 0) {
+        Write-Audit 'DIFF' '@WHAT@' ($bad -join '; ')
+    } elseif ($unknown -gt 0) {
+        Write-Audit 'NA' '@WHAT@' ('the auditpol output of ' + $unknown + ' subcategories could not be read (a non-English Windows prints other words)')
+    } else {
+        Write-Audit 'OK' '@WHAT@' ('all ' + $items.Count + ' subcategories are set; Security log is ' + [math]::Round($oldBytes / 1MB) + ' MiB')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""".replace("@AUDIT_ITEMS@", _ps_audit_items(8)),
+    "uac": r"""
+try {
+    $cur = Get-RegDword -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA'
+    if (($null -ne $cur) -and ([int]$cur -eq 0)) {
+        Write-Audit 'DIFF' '@WHAT@' 'EnableLUA is 0, so User Account Control is off'
+    } else {
+        Write-Audit 'OK' '@WHAT@' ('EnableLUA is ' + (Format-Value $cur) + ' (not 0)')
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "netbios": r"""
+try {
+    $base = 'HKLM:\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces'
+    $names = @()
+    if (Test-Path -LiteralPath $base) {
+        $names = @(Get-ChildItem -LiteralPath $base | Where-Object { $_.PSChildName -like 'Tcpip_*' } | ForEach-Object { [string]$_.PSChildName })
+    }
+    if ($names.Count -eq 0) {
+        Write-Audit 'NA' '@WHAT@' 'no network interfaces found in the NetBT settings'
+    } else {
+        $on = @()
+        foreach ($n in $names) {
+            $cur = Get-RegDword -Path ($base + '\' + $n) -Name 'NetbiosOptions'
+            if (($null -eq $cur) -or ([int]$cur -ne 2)) { $on += $n }
+        }
+        if ($on.Count -eq 0) {
+            Write-Audit 'OK' '@WHAT@' ('NetBIOS over TCP/IP is off on all ' + $names.Count + ' interfaces')
+        } else {
+            Write-Audit 'DIFF' '@WHAT@' ('' + $on.Count + ' of ' + $names.Count + ' interfaces still use NetBIOS over TCP/IP') -OptIn $true
+        }
+    }
+} catch {
+    Write-Audit 'NA' '@WHAT@' ('could not be checked: ' + $_.Exception.Message)
+}
+""",
+    "wpad": _REG_WPAD[1],
+}
+
+_WINDOWS_PS_UNDO = {
+    "smb1": r"""
+try {
+    $r = @()
+    $r += Restore-RegValue -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB1'
+    Write-UndoSummary '@WHAT@' $r
+    # An optional feature that was turned off is NOT turned on again here: that would bring SMBv1 back.
+    $note = Restore-FeatureState 'SMB1Protocol'
+    if ($null -ne $note) { Write-Result 'WARN' '@WHAT@ (optional feature not turned on again)' $note }
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "llmnr": _REG_LLMNR[2],
+    "autorun": _REG_AUTORUN[2],
+    "firewall": r"""
+try {
+    $r = @()
+    $r += Restore-FirewallState
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "defender_cloud": r"""
+try {
+    $r = @()
+    $r += Restore-DefenderValue 'PUAProtection'
+    $r += Restore-DefenderValue 'MAPSReporting'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' ($_.Exception.Message + ' (Tamper Protection or another antivirus can block this)')
+}
+""",
+    "asr_lsass": r"""
+try {
+    $r = @()
+    $r += Restore-AsrRule '@LSASS@'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""".replace("@LSASS@", WINDOWS_ASR_LSASS),
+    "asr_audit": _ASR_BASE[2],
+    "asr_audit_extra": _ASR_EXTRA[2],
+    "wdigest": _REG_WDIGEST[2],
+    "ps_logging": _REG_PSLOG[2],
+    "ps2": r"""
+try {
+    $notes = @()
+    foreach ($name in @('MicrosoftWindowsPowerShellV2Root', 'MicrosoftWindowsPowerShellV2')) {
+        $n = Restore-FeatureState $name
+        if ($null -ne $n) { $notes += $n }
+    }
+    if ($notes.Count -eq 0) {
+        Write-Result 'SKIP' '@WHAT@' 'nothing recorded, this script did not change it'
+    } else {
+        Write-Result 'WARN' '@WHAT@ (optional feature not turned on again)' ($notes -join ' | ')
+    }
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "remote_assist": _REG_REMOTE[2],
+    "audit": r"""
+try {
+    $r = @()
+    foreach ($guid in @(
+@AUDIT_GUIDS@
+    )) {
+        # Restore-AuditSubcategory never throws: it logs [WARN] could not be restored, keeps the record and returns 'not restored'.
+        $r += Restore-AuditSubcategory $guid
+    }
+    $sizeNote = Restore-EventLogState
+    if ($null -ne $sizeNote) { $r += $sizeNote }
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""".replace("@AUDIT_GUIDS@", ",\n".join(f"        '{g}'" for g, _n, _s, _f in WINDOWS_AUDIT_SUBCATEGORIES)),
+    "uac": r"""
+try {
+    $r = @()
+    $r += Restore-RegValue -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name 'EnableLUA'
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "netbios": r"""
+try {
+    $r = @()
+    foreach ($k in @($script:State.Keys)) {
+        # The key names come from the state file, so each one must match the NetBT interface pattern; the value name is
+        # a constant. Nothing else in the file decides what is touched (records that do not match are reported).
+        if ($k -match '^reg\|(.+)\|NetbiosOptions$') {
+            $ifaceKey = $Matches[1]
+            if ($ifaceKey -match $script:NetbtPattern) {
+                $r += Restore-RegValue -Path $ifaceKey -Name 'NetbiosOptions'
+            }
+        }
+    }
+    if ($r.Count -eq 0) { $r += 'no record' }
+    Write-UndoSummary '@WHAT@' $r
+} catch {
+    Write-Result 'WARN' '@WHAT@ not put back' $_.Exception.Message
+}
+""",
+    "wpad": _REG_WPAD[2],
 }
 
 _WINDOWS_PS_HELPERS = r"""
@@ -5419,17 +6895,95 @@ $script:CountOk = 0
 $script:CountSkip = 0
 $script:CountWarn = 0
 $script:CountFail = 0
+$script:CountDiff = 0
+$script:CountNa = 0
+$script:LogToFile = $true
+$script:State = @{}
+$script:StateError = ''
+$script:StateDir = Join-Path $env:ProgramData '@STATE_DIR@'
+$script:StatePath = Join-Path $script:StateDir '@STATE_FILE@'
+$script:AuditBackupPath = Join-Path $script:StateDir 'audit-policy-before.csv'
+$script:StateFolderChecked = $false
+# Rights that let a principal change a folder or a file: write data or add files, append data or add folders, write
+# extended attributes, delete child items, write attributes, delete, change the access list, take ownership, and the
+# generic all and write rights.
+$script:WriteMask = 0x500D0156
+$script:GuidPattern = '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
 
-# One log line per setting: [OK], [SKIP], [WARN] or [FAIL], what it was, and why. [OK] means the value was read
-# back and is in effect; [WARN] means the command did not fail but the value is not in effect. SetupComplete.cmd
-# appends the output of this script to the log file, so nothing here opens the log itself.
+# What Undo may touch. The state file is a source of VALUES only: which registry value, attack surface rule, audit
+# subcategory, firewall profile, Defender preference or optional feature is put back comes from these tables, which
+# are constants of this script. A path or name written in the file is never used as a target.
+$script:KnownReg = @KNOWN_REG@
+$script:KnownAsr = @KNOWN_ASR@
+$script:KnownAudit = @KNOWN_AUDIT@
+$script:KnownFeatures = @KNOWN_FEATURES@
+$script:KnownMp = @KNOWN_MP@
+$script:NetbtPattern = '@NETBT_REGEX@'
+
+# Every line goes to the console; the log file gets it as well, unless Setup is running this script (see below).
+function Write-Log {
+    param([string]$Line)
+    Write-Host $Line
+    if ($script:LogToFile) {
+        try {
+            Add-Content -LiteralPath $LogPath -Value $Line -Encoding UTF8
+        } catch {
+            $script:LogToFile = $false
+            Write-Host ('[WARN] cannot write the log file ' + $LogPath + ': ' + $_.Exception.Message)
+        }
+    }
+}
+
+# Apply and Undo: one log line per setting: [OK], [SKIP], [WARN] or [FAIL], what it was, and why. [OK] means the
+# value was read back and is in effect; [WARN] means the command did not fail but the value is not in effect.
 function Write-Result {
     param([string]$Status, [string]$What, [string]$Why)
     if ($Status -eq 'OK') { $script:CountOk++ }
     elseif ($Status -eq 'SKIP') { $script:CountSkip++ }
     elseif ($Status -eq 'WARN') { $script:CountWarn++ }
     else { $script:CountFail++ }
-    Write-Host ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
+    Write-Log ('[' + $Status + '] ' + $What + ' (' + $Why + ')')
+}
+
+# Audit: [OK] in effect, [DIFF] not in effect, [N/A] cannot be told. With -OptIn a missing opt-in setting is
+# reported as [N/A] (it was never requested) and is not counted as a difference.
+function Write-Audit {
+    param([string]$Verdict, [string]$What, [string]$Detail, [bool]$OptIn = $false)
+    if (($Verdict -eq 'DIFF') -and $OptIn -and (-not $DisableLegacyNetwork)) {
+        $Verdict = 'NA'
+        $Detail = $Detail + '; opt-in setting, not requested (use -DisableLegacyNetwork), not counted'
+    }
+    if ($Verdict -eq 'OK') {
+        $script:CountOk++
+        Write-Log ('[OK] ' + $What + ' -- in effect (' + $Detail + ')')
+    } elseif ($Verdict -eq 'DIFF') {
+        $script:CountDiff++
+        Write-Log ('[DIFF] ' + $What + ' -- not in effect (' + $Detail + ')')
+    } else {
+        $script:CountNa++
+        Write-Log ('[N/A] ' + $What + ' -- ' + $Detail)
+    }
+}
+
+function Write-Info {
+    param([string]$Text)
+    Write-Log ('[INFO] ' + $Text)
+}
+
+# Undo: one line for a setting from the results of the Restore-* calls ('no record' = nothing was recorded; 'not
+# restored' = a record exists but putting it back failed: the Restore-* function already logged [WARN] and kept the
+# record, so the setting is never reported as "nothing recorded").
+function Write-UndoSummary {
+    param([string]$What, [string[]]$Results)
+    $done = @($Results | Where-Object { ($_ -ne 'no record') -and ($_ -ne 'not restored') })
+    $kept = @($Results | Where-Object { $_ -eq 'not restored' })
+    if ($done.Count -gt 0) {
+        $text = 'put back: ' + ($done -join ', ')
+        if ($kept.Count -gt 0) { $text = $text + '; ' + $kept.Count + ' part(s) not put back, see the warnings above' }
+        Write-Result 'OK' $What $text
+    } elseif ($kept.Count -eq 0) {
+        Write-Result 'SKIP' $What 'nothing recorded, this script did not change it'
+    }
 }
 
 function Get-ChangeText {
@@ -5438,26 +6992,300 @@ function Get-ChangeText {
     return 'already set'
 }
 
-# Writes one DWORD only when it differs. Returns $true when it changed something.
+function Format-Value {
+    param($Value)
+    if ($null -eq $Value) { return 'not set' }
+    return [string]$Value
+}
+
+# Current value of a registry value or $null when the key or the value does not exist.
+function Get-RegDword {
+    param([string]$Path, [string]$Name)
+    if (-not (Test-Path -LiteralPath $Path)) { return $null }
+    $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+    if ($null -eq $item) { return $null }
+    return $item.$Name
+}
+
+# ---- State for -Mode Undo --------------------------------------------------------------------------------------
+# Before Apply changes a setting, the previous value is written to the state file (a JSON file under ProgramData).
+# A value that is already in the file is never overwritten: it is the first value this script ever saw, which is
+# what Undo puts back. Audit mode never reads, creates or writes any of this.
+#
+# The file is only as trustworthy as its folder. The folder is created in ONE step with its protected access list
+# (only SYSTEM and Administrators), so there is no moment when another user could own it. A folder that already
+# exists is used only after three checks: it is not a junction or symbolic link, its owner is SYSTEM or
+# Administrators, and nobody else can write to it. Otherwise Apply and Undo refuse, and Apply changes nothing,
+# because without a record there would be no way back. The same folder holds the audit-policy backup.
+# On top of that, Undo uses the file for VALUES only (see the tables above) and checks every value.
+function Test-TrustedPath {
+    param([string]$Path, [bool]$IsFolder)
+    # Returns an empty string when the item can be relied on, otherwise the reason it cannot.
+    $item = Get-Item -LiteralPath $Path -Force
+    if (([int]$item.Attributes -band [int][System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        return 'it is a junction or symbolic link'
+    }
+    if ($IsFolder -ne [bool]$item.PSIsContainer) { return 'it is not the kind of item expected' }
+    $trusted = @('S-1-5-18', 'S-1-5-32-544')
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier])
+    if (($null -eq $owner) -or ($trusted -notcontains $owner.Value)) {
+        return ('its owner is ' + $acl.Owner + ', not SYSTEM or Administrators')
+    }
+    $sddl = $acl.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)
+    if ([string]::IsNullOrEmpty($sddl)) { return 'it has no access list, so everyone could change it' }
+    foreach ($rule in @($acl.GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($rule.AccessControlType -ne 'Allow') { continue }
+        $sid = [string]$rule.IdentityReference.Value
+        if ($trusted -contains $sid) { continue }
+        if (([int]$rule.FileSystemRights -band $script:WriteMask) -ne 0) {
+            return ('the account ' + $sid + ' is allowed to change it')
+        }
+    }
+    return ''
+}
+
+function Assert-TrustedFile {
+    param([string]$Path)
+    $why = Test-TrustedPath $Path $false
+    if ($why -ne '') { throw ('the file ' + $Path + ' cannot be trusted: ' + $why) }
+}
+
+function New-StateSecurity {
+    $security = New-Object System.Security.AccessControl.DirectorySecurity
+    $security.SetAccessRuleProtection($true, $false)
+    foreach ($sidText in @('S-1-5-18', 'S-1-5-32-544')) {
+        $sid = New-Object System.Security.Principal.SecurityIdentifier($sidText)
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($sid, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $security.AddAccessRule($rule)
+    }
+    return $security
+}
+
+# Throws (with the reason and what to do) when the state folder cannot be trusted. Never fails open.
+function Assert-StateFolder {
+    $why = Test-TrustedPath $script:StateDir $true
+    if ($why -ne '') {
+        throw ('the state folder ' + $script:StateDir + ' cannot be trusted: ' + $why + '. As administrator, check who made it, then delete it or rename it and run this script again.')
+    }
+    $script:StateFolderChecked = $true
+}
+
+# Apply: creates the folder with its protected access list in one call, or checks the one that exists. Throws on any
+# problem; the callers treat that as fatal.
+function Initialize-StateFolder {
+    if ($script:StateFolderChecked) { return }
+    $present = Get-Item -LiteralPath $script:StateDir -Force -ErrorAction SilentlyContinue
+    if ($null -eq $present) {
+        [void][System.IO.Directory]::CreateDirectory($script:StateDir, (New-StateSecurity))
+    }
+    Assert-StateFolder
+}
+
+# Reads the state file into $script:State (a hashtable of hashtables). $false when the file exists but is unreadable
+# or cannot be trusted.
+function Import-State {
+    $script:State = @{}
+    if ($null -eq (Get-Item -LiteralPath $script:StatePath -Force -ErrorAction SilentlyContinue)) { return $true }
+    try {
+        Assert-TrustedFile $script:StatePath
+        if ((Get-Item -LiteralPath $script:StatePath -Force).Length -gt 1048576) { throw 'the file is larger than 1 MiB' }
+        $raw = Get-Content -LiteralPath $script:StatePath -Raw -Encoding UTF8
+        $doc = $raw | ConvertFrom-Json
+        if (($null -eq $doc) -or ($doc.version -ne 1) -or ($null -eq $doc.entries)) { throw 'the file is not a version 1 state file' }
+        foreach ($p in $doc.entries.PSObject.Properties) {
+            if ($p.Value -isnot [System.Management.Automation.PSCustomObject]) { throw ('the record ' + $p.Name + ' is not an object') }
+            $h = @{}
+            foreach ($q in $p.Value.PSObject.Properties) { $h[$q.Name] = $q.Value }
+            $script:State[$p.Name] = $h
+        }
+        return $true
+    } catch {
+        $script:State = @{}
+        $script:StateError = $_.Exception.Message
+        return $false
+    }
+}
+
+# Undo: a record whose key is not one of the settings this script manages is reported and left alone.
+function Test-StateEntries {
+    foreach ($k in @($script:State.Keys)) {
+        $ok = $false
+        if ($k -match '^reg\|(.+)\|([^|]+)$') {
+            $ok = ($null -ne (Get-KnownRegRange $Matches[1] $Matches[2]))
+        } elseif ($k -match '^asr\|(.+)$') {
+            $id = $Matches[1]
+            $ok = (($id -match $script:GuidPattern) -and ($script:KnownAsr -contains $id))
+        } elseif ($k -match '^audit\|(.+)$') {
+            $ok = ($script:KnownAudit -contains $Matches[1])
+        } elseif ($k -match '^fw\|(.+)$') {
+            $ok = (@('Domain', 'Private', 'Public') -contains $Matches[1])
+        } elseif ($k -match '^mp\|(.+)$') {
+            $ok = ($script:KnownMp -contains $Matches[1])
+        } elseif ($k -match '^feature\|(.+)$') {
+            $ok = ($script:KnownFeatures -contains $Matches[1])
+        } elseif ($k -eq 'eventlog|Security') {
+            $ok = $true
+        }
+        if (-not $ok) {
+            Write-Result 'WARN' 'Unrecognised record in the state file' ('ignored, not a setting this script manages: ' + $k)
+        }
+    }
+}
+
+# Checked readers for a value taken from the state file. Each throws when the value is not what Apply could have written.
+function ConvertTo-SafeInt {
+    param($Value, [int64]$Min, [int64]$Max, [string]$What)
+    if (($Value -isnot [int]) -and ($Value -isnot [long])) { throw ('the recorded ' + $What + ' is not a whole number') }
+    $n = [int64]$Value
+    if (($n -lt $Min) -or ($n -gt $Max)) { throw ('the recorded ' + $What + ' ' + $n + ' is outside the range ' + $Min + ' to ' + $Max) }
+    return $n
+}
+
+function Get-RecordBool {
+    param($Value, [string]$What)
+    if ($Value -isnot [bool]) { throw ('the recorded ' + $What + ' is not true or false') }
+    return [bool]$Value
+}
+
+function Get-RecordChoice {
+    param($Value, [string[]]$Choices, [string]$What)
+    $text = [string]$Value
+    foreach ($c in $Choices) {
+        if ($c -ieq $text) { return $c }
+    }
+    throw ('the recorded ' + $What + ' is not one this script knows')
+}
+
+function Save-State {
+    Initialize-StateFolder
+    $doc = @{ version = 1; entries = $script:State }
+    $json = $doc | ConvertTo-Json -Depth 6
+    Set-Content -LiteralPath $script:StatePath -Value $json -Encoding UTF8
+}
+
+# Records one previous value, but only the first time. If the file cannot be written (or the folder cannot be
+# trusted) the exception stops the change that was about to follow: nothing is changed without a way back.
+function Add-StateOnce {
+    param([string]$Key, [hashtable]$Entry)
+    if ($script:State.ContainsKey($Key)) { return }
+    $script:State[$Key] = $Entry
+    try {
+        Save-State
+    } catch {
+        [void]$script:State.Remove($Key)
+        throw
+    }
+}
+
+function Remove-StateEntry {
+    param([string]$Key)
+    [void]$script:State.Remove($Key)
+    Save-State
+}
+
+# The range of DWORD values this script may write or put back for one registry value, or $null when it is not one
+# of the values it manages. The NetBIOS option of one network adapter is matched by pattern.
+function Get-KnownRegRange {
+    param([string]$Path, [string]$Name)
+    $k = $Path + '|' + $Name
+    if ($script:KnownReg.ContainsKey($k)) { return ,@($script:KnownReg[$k]) }
+    # .NET lets $ match before a final line break, so a line break in the key is refused on its own.
+    if (($Name -eq 'NetbiosOptions') -and ($Path -match $script:NetbtPattern) -and ($Path -notmatch '[\r\n]')) { return ,@(0, 2) }
+    return $null
+}
+
+# Writes one DWORD only when it differs; the previous value (or its absence) is recorded first.
+# Returns $true when it changed something.
 function Set-RegDword {
     param([string]$Path, [string]$Name, [int]$Value)
+    $range = Get-KnownRegRange $Path $Name
+    if (($null -eq $range) -or ($Value -lt $range[0]) -or ($Value -gt $range[1])) {
+        throw ('internal error: ' + $Name + ' is not a value this script manages')
+    }
+    $current = $null
+    $existed = $false
+    $kind = ''
+    if (Test-Path -LiteralPath $Path) {
+        $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
+        if ($null -ne $item) {
+            $existed = $true
+            $current = $item.$Name
+            $kind = [string](Get-Item -LiteralPath $Path).GetValueKind($Name)
+        }
+    }
+    if ($existed -and ($kind -eq 'DWord') -and ([int]$current -eq $Value)) { return $false }
+    Add-StateOnce ('reg|' + $Path + '|' + $Name) @{ kind = 'reg'; path = $Path; name = $Name; existed = $existed; type = $kind; value = $current } | Out-Null
     if (-not (Test-Path -LiteralPath $Path)) {
         New-Item -Path $Path -Force | Out-Null
     }
-    $current = $null
-    $item = Get-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction SilentlyContinue
-    if ($null -ne $item) { $current = $item.$Name }
-    if (($null -ne $current) -and ([int]$current -eq $Value)) { return $false }
     New-ItemProperty -LiteralPath $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
     return $true
 }
 
-# State of an optional Windows feature ('Enabled', 'Disabled', ...) or $null when it does not exist. The list is
-# read ONCE, on first use, and kept: Get-WindowsOptionalFeature is slow and Setup should finish quickly.
+# Puts a registry value back (or removes it when it did not exist). The key and the name come from the caller, which
+# passes constants of this script, and are checked against the built-in table again here; the file supplies only the
+# earlier value, which is type-checked and range-checked. An empty key that Apply created is left. It never throws:
+# when something fails it logs [WARN], KEEPS the record so Undo can be run again, and returns 'not restored'.
+# The SMBv1 server value is never written back as 1 (that would bring SMBv1 back): the note gives the manual command.
+function Restore-RegValue {
+    param([string]$Path, [string]$Name)
+    $key = 'reg|' + $Path + '|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    try {
+        $range = Get-KnownRegRange $Path $Name
+        if ($null -eq $range) { throw ('internal error: ' + $Name + ' is not a value this script manages') }
+        $rec = $script:State[$key]
+        $existed = Get-RecordBool $rec.existed 'existed flag'
+        if ($existed) {
+            $kind = Get-RecordChoice $rec.type @('DWord', 'QWord', 'String', 'ExpandString') 'value type'
+            if ($kind -eq 'DWord') {
+                $val = [int](ConvertTo-SafeInt $rec.value $range[0] $range[1] 'value')
+            } elseif ($kind -eq 'QWord') {
+                $val = [int64](ConvertTo-SafeInt $rec.value ([int64]::MinValue) ([int64]::MaxValue) 'value')
+            } else {
+                $val = [string]$rec.value
+                if ($val -notmatch '^[\x20-\x7E]{0,260}$') { throw 'the recorded text value is not plain text of at most 260 characters' }
+            }
+            if (($Name -eq 'SMB1') -and (($kind -ne 'DWord') -or ($val -ne 0))) {
+                Remove-StateEntry $key
+                Write-Result 'WARN' 'SMBv1 server value not turned back on' ('the earlier value ' + (Format-Value $rec.value) + ' is deliberately not written back, because that would bring SMBv1 back; if you really need it, run as administrator: Set-ItemProperty -Path ' + $Path + ' -Name SMB1 -Value 1')
+                return 'not restored'
+            }
+            if (-not (Test-Path -LiteralPath $Path)) {
+                New-Item -Path $Path -Force | Out-Null
+            }
+            New-ItemProperty -LiteralPath $Path -Name $Name -Value $val -PropertyType $kind -Force | Out-Null
+            $now = Get-RegDword -Path $Path -Name $Name
+            if (($null -eq $now) -or ([string]$now -ne [string]$val)) { throw ($Name + ' reads ' + (Format-Value $now) + ' after it was put back, expected ' + $val) }
+            $result = 'restored ' + $Name
+        } else {
+            if ($null -ne (Get-RegDword -Path $Path -Name $Name)) {
+                Remove-ItemProperty -LiteralPath $Path -Name $Name -ErrorAction Stop
+            }
+            if ($null -ne (Get-RegDword -Path $Path -Name $Name)) { throw ($Name + ' is still there after the removal') }
+            $result = 'removed ' + $Name
+        }
+        Remove-StateEntry $key
+        return $result
+    } catch {
+        Write-Result 'WARN' ($Name + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
+    }
+}
+
+# State of an optional Windows feature ('Enabled', 'Disabled', 'DisablePending', ...) or $null when it does not exist.
+# The list is read once, on first use, and kept: Get-WindowsOptionalFeature is slow and Setup should finish quickly.
+# After a feature was changed the kept list is stale (turning the Root feature off can already change its child), so
+# -Fresh reads the list again.
 $script:Features = $null
 $script:FeaturesError = $null
 function Get-FeatureState {
-    param([string]$Name)
+    param([string]$Name, [switch]$Fresh)
+    if ($Fresh) {
+        $script:Features = $null
+        $script:FeaturesError = $null
+    }
     if ($null -eq $script:Features) {
         $script:Features = @{}
         try {
@@ -5473,6 +7301,25 @@ function Get-FeatureState {
     return $null
 }
 
+# An optional feature that is turned off cannot be turned on again by Undo (that could bring back SMBv1 or
+# PowerShell 2.0 by accident): Undo only says which command to run.
+function Save-FeatureState {
+    param([string]$Name, [string]$State)
+    Add-StateOnce ('feature|' + $Name) @{ kind = 'feature'; name = $Name; state = $State } | Out-Null
+}
+
+function Restore-FeatureState {
+    param([string]$Name)
+    $key = 'feature|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return $null }
+    if ($script:KnownFeatures -notcontains $Name) { return $null }
+    $rec = $script:State[$key]
+    $was = [string]$rec.state
+    if ($was -notmatch '^[A-Za-z]{1,40}$') { $was = 'in an unknown state' }
+    Remove-StateEntry $key
+    return ($Name + ' was ' + $was + ' before; to turn it on again run, as administrator: Enable-WindowsOptionalFeature -Online -FeatureName ' + $Name)
+}
+
 # Current action of one attack surface reduction rule (0 off, 1 Block, 2 Audit, 6 Warn) or $null when not listed.
 function Get-AsrAction {
     param([string]$Id)
@@ -5486,8 +7333,19 @@ function Get-AsrAction {
     return $null
 }
 
+function Get-AsrActionName {
+    param($Action)
+    if ($null -eq $Action) { return 'not set' }
+    if ($Action -eq 0) { return 'off' }
+    if ($Action -eq 1) { return 'Block' }
+    if ($Action -eq 2) { return 'Audit' }
+    if ($Action -eq 6) { return 'Warn' }
+    return ('action ' + $Action)
+}
+
 # Attack surface reduction rule: 'Enabled' (Block) or 'AuditMode'. A rule that is already Block or Warn is
-# never weakened to Audit. Returns 'changed' or 'already set'; the caller reads the result back.
+# never weakened to Audit. The earlier action (or "not listed") is recorded first. Returns 'changed' or
+# 'already set'; the caller reads the result back.
 function Set-AsrRule {
     param([string]$Id, [string]$Action)
     $current = Get-AsrAction $Id
@@ -5497,6 +7355,10 @@ function Set-AsrRule {
         if ($current -eq $wanted) { return 'already set' }
         if (($wanted -eq 2) -and (($current -eq 1) -or ($current -eq 6))) { return 'already set' }
     }
+    $listed = $true
+    $was = -1
+    if ($null -eq $current) { $listed = $false } else { $was = $current }
+    Add-StateOnce ('asr|' + $Id.ToLower()) @{ kind = 'asr'; id = $Id.ToLower(); listed = $listed; action = $was } | Out-Null
     if ($wanted -eq 1) {
         Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions Enabled
     } else {
@@ -5504,7 +7366,439 @@ function Set-AsrRule {
     }
     return 'changed'
 }
+
+# Puts a rule back to its recorded action (or removes it when it was not listed) and reads the result back. The rule
+# id must be a GUID AND one of the rules in $script:KnownAsr (the id written in the file is never used). It never
+# throws: on a failure it logs [WARN], keeps the record and returns 'not restored'.
+function Restore-AsrRule {
+    param([string]$Id)
+    $key = 'asr|' + $Id.ToLower()
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    try {
+        if (($Id -notmatch $script:GuidPattern) -or ($script:KnownAsr -notcontains $Id)) {
+            throw ('internal error: ' + $Id + ' is not a rule this script manages')
+        }
+        $rec = $script:State[$key]
+        $listed = Get-RecordBool $rec.listed 'listed flag'
+        $action = -1
+        if ($listed) {
+            $action = [int](ConvertTo-SafeInt $rec.action 0 6 'rule action')
+            $names = @{ 0 = 'Disabled'; 1 = 'Enabled'; 2 = 'AuditMode'; 6 = 'Warn' }
+            $name = $names[$action]
+            if ($null -eq $name) { throw ('the earlier action ' + $action + ' of rule ' + $Id + ' is not one this script knows') }
+            Add-MpPreference -AttackSurfaceReductionRules_Ids $Id -AttackSurfaceReductionRules_Actions $name
+        } else {
+            Remove-MpPreference -AttackSurfaceReductionRules_Ids $Id
+        }
+        $now = Get-AsrAction $Id
+        if ($listed) { $ok = ($now -eq $action) } else { $ok = ($null -eq $now) }
+        if (-not $ok) { throw ('rule ' + $Id + ' is not back at its earlier action (Tamper Protection, another antivirus or a Defender that is not ready can block this)') }
+        Remove-StateEntry $key
+        return ('rule ' + $Id.Substring(0, 8))
+    } catch {
+        Write-Result 'WARN' ('Attack surface rule ' + $Id + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
+    }
+}
+
+# Windows Firewall: the profile settings of the local store as they were before Apply.
+function Save-FirewallState {
+    foreach ($p in @(Get-NetFirewallProfile -Profile Domain,Private,Public -PolicyStore PersistentStore)) {
+        Add-StateOnce ('fw|' + [string]$p.Name) @{ kind = 'fw'; name = [string]$p.Name; enabled = [string]$p.Enabled; inbound = [string]$p.DefaultInboundAction } | Out-Null
+    }
+}
+
+# Puts each recorded profile back and reads it back. A part that was recorded as NotConfigured (a Group Policy value)
+# cannot be set in the local store, so it is reported as [WARN] and left as it is. It never throws: on a failure it
+# logs [WARN], keeps that profile's record and goes on with the next profile.
+function Restore-FirewallState {
+    $done = @()
+    $kept = 0
+    foreach ($n in @('Domain', 'Private', 'Public')) {
+        $key = 'fw|' + $n
+        if (-not $script:State.ContainsKey($key)) { continue }
+        try {
+            $rec = $script:State[$key]
+            $enabled = Get-RecordChoice $rec.enabled @('True', 'False', 'NotConfigured') 'firewall state'
+            $inbound = Get-RecordChoice $rec.inbound @('Allow', 'Block', 'NotConfigured') 'inbound action'
+            $splat = @{ Profile = $n }
+            $left = @()
+            if (($enabled -eq 'True') -or ($enabled -eq 'False')) { $splat['Enabled'] = $enabled } else { $left += 'on/off state' }
+            if (($inbound -eq 'Allow') -or ($inbound -eq 'Block')) { $splat['DefaultInboundAction'] = $inbound } else { $left += 'inbound action' }
+            if ($splat.Count -gt 1) { Set-NetFirewallProfile @splat }
+            $now = Get-NetFirewallProfile -Profile $n -PolicyStore PersistentStore
+            $wrong = @()
+            if ($splat.ContainsKey('Enabled') -and ([string]$now.Enabled -ne $enabled)) { $wrong += 'Enabled is ' + [string]$now.Enabled }
+            if ($splat.ContainsKey('DefaultInboundAction') -and ([string]$now.DefaultInboundAction -ne $inbound)) { $wrong += 'DefaultInboundAction is ' + [string]$now.DefaultInboundAction }
+            if ($wrong.Count -gt 0) { throw ('read back after setting: ' + ($wrong -join ', ') + '; a Group Policy or another firewall product can win') }
+            Remove-StateEntry $key
+            if ($left.Count -gt 0) {
+                Write-Result 'WARN' ('Firewall profile ' + $n + ' only partly put back') ('the earlier ' + ($left -join ' and ') + ' was NotConfigured, which cannot be set in the local store, so it stays as it is now')
+            }
+            if ($splat.Count -gt 1) { $done += ('profile ' + $n) } else { $kept++ }
+        } catch {
+            $kept++
+            Write-Result 'WARN' ('Firewall profile ' + $n + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        }
+    }
+    if ($done.Count -gt 0) { return ($done -join ', ') }
+    if ($kept -gt 0) { return 'not restored' }
+    return 'no record'
+}
+
+# Defender preference (PUAProtection, MAPSReporting): the earlier numeric value.
+function Save-DefenderValue {
+    param([string]$Name, [int]$Value)
+    Add-StateOnce ('mp|' + $Name) @{ kind = 'mp'; name = $Name; value = $Value } | Out-Null
+}
+
+function Restore-DefenderValue {
+    param([string]$Name)
+    $key = 'mp|' + $Name
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    try {
+        if ($script:KnownMp -notcontains $Name) { throw ('internal error: ' + $Name + ' is not a preference this script manages') }
+        $rec = $script:State[$key]
+        $value = [int](ConvertTo-SafeInt $rec.value 0 2 'preference value')
+        $splat = @{}
+        $splat[$Name] = $value
+        Set-MpPreference @splat
+        $pref = Get-MpPreference
+        if ([int]$pref.$Name -ne $value) { throw ($Name + ' is not back at ' + $value + ' (Tamper Protection or another antivirus can block this)') }
+        Remove-StateEntry $key
+        return ('restored ' + $Name)
+    } catch {
+        Write-Result 'WARN' ('Defender ' + $Name + ' not put back; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
+    }
+}
+
+# Advanced audit policy. auditpol prints the words of the Windows language, so only the English words are
+# understood; anything else is reported as not known. The whole earlier policy is also saved once with
+# "auditpol /backup" (a file that can be restored by hand in any language).
+function Get-AuditSetting {
+    param([string]$Guid)
+    $out = @(& auditpol.exe /get ('/subcategory:' + $Guid) /r)
+    $line = ''
+    foreach ($l in $out) {
+        if (([string]$l).Trim() -ne '') { $line = [string]$l }
+    }
+    $raw = ''
+    $fields = $line.Split(',')
+    if (($LASTEXITCODE -eq 0) -and ($fields.Count -ge 6)) { $raw = $fields[4].Trim() }
+    $known = $true
+    $s = $false
+    $f = $false
+    if ($raw -eq 'No Auditing') { }
+    elseif ($raw -eq 'Success') { $s = $true }
+    elseif ($raw -eq 'Failure') { $f = $true }
+    elseif ($raw -eq 'Success and Failure') { $s = $true; $f = $true }
+    else { $known = $false }
+    return @{ raw = $raw; known = $known; success = $s; failure = $f }
+}
+
+function Save-AuditBackup {
+    Initialize-StateFolder
+    if (Test-Path -LiteralPath $script:AuditBackupPath) {
+        Assert-TrustedFile $script:AuditBackupPath
+        return
+    }
+    try {
+        & auditpol.exe /backup ('/file:' + $script:AuditBackupPath) | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw ('auditpol /backup exit code ' + $LASTEXITCODE) }
+    } catch {
+        Write-Log ('[WARN] could not save the whole earlier audit policy to ' + $script:AuditBackupPath + ': ' + $_.Exception.Message)
+    }
+}
+
+# Turns on the wanted flags of one subcategory (never turns a flag off); the earlier setting is recorded first.
+function Set-AuditSubcategory {
+    param([string]$Guid, [bool]$Success, [bool]$Failure)
+    $cur = Get-AuditSetting $Guid
+    Add-StateOnce ('audit|' + $Guid) @{ kind = 'audit'; guid = $Guid; raw = $cur.raw; known = $cur.known; success = $cur.success; failure = $cur.failure } | Out-Null
+    $flags = @()
+    if ($Success) { $flags += '/success:enable' }
+    if ($Failure) { $flags += '/failure:enable' }
+    $out = & auditpol.exe /set ('/subcategory:' + $Guid) @flags | Out-String
+    if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
+}
+
+function Restore-AuditSubcategory {
+    param([string]$Guid)
+    $key = 'audit|' + $Guid
+    if (-not $script:State.ContainsKey($key)) { return 'no record' }
+    try {
+        if ($script:KnownAudit -notcontains $Guid) { throw ('internal error: ' + $Guid + ' is not a subcategory this script manages') }
+        $rec = $script:State[$key]
+        $known = Get-RecordBool $rec.known 'known flag'
+        if (-not $known) {
+            throw ('the earlier setting of ' + $Guid + ' could not be read when it was recorded, so it is not guessed; restore the whole earlier policy by hand with: auditpol /restore /file:' + $script:AuditBackupPath)
+        }
+        $s = '/success:disable'
+        $f = '/failure:disable'
+        if (Get-RecordBool $rec.success 'success flag') { $s = '/success:enable' }
+        if (Get-RecordBool $rec.failure 'failure flag') { $f = '/failure:enable' }
+        $out = & auditpol.exe /set ('/subcategory:' + $Guid) $s $f | Out-String
+        if ($LASTEXITCODE -ne 0) { throw ('auditpol rejected it (exit code ' + $LASTEXITCODE + '): ' + $out.Trim()) }
+        Remove-StateEntry $key
+        return ('audit ' + $Guid)
+    } catch {
+        Write-Result 'WARN' ('Audit subcategory ' + $Guid + ' could not be restored; the record is kept, run Undo again to retry') $_.Exception.Message
+        return 'not restored'
+    }
+}
+
+# The Security event log size is only ever raised; Undo never shrinks it (it only reports that).
+function Save-EventLogState {
+    param([int64]$Bytes)
+    Add-StateOnce 'eventlog|Security' @{ kind = 'eventlog'; name = 'Security'; bytes = $Bytes } | Out-Null
+}
+
+function Restore-EventLogState {
+    $key = 'eventlog|Security'
+    if (-not $script:State.ContainsKey($key)) { return $null }
+    $rec = $script:State[$key]
+    $size = 'an unknown number of'
+    try { $size = [string][math]::Round((ConvertTo-SafeInt $rec.bytes 0 1099511627776 'log size') / 1MB) } catch { $size = 'an unknown number of' }
+    Remove-StateEntry $key
+    return ('Security log size not shrunk (it was ' + $size + ' MiB before Apply and stays as it is)')
+}
 """
+
+
+# The script starts with its parameters. Everything is safe by default: no argument means "Apply", exactly what
+# SetupComplete.cmd has always run; -DisableLegacyNetwork is an opt-in switch; the log path defaults to the file
+# SetupComplete.cmd already appends to.
+_WINDOWS_PS_PARAMS = r"""[CmdletBinding()]
+param(
+    [ValidateSet('Apply', 'Audit', 'Undo')]
+    [string]$Mode = 'Apply',
+    [switch]$DisableLegacyNetwork,
+    [string]$LogPath = (Join-Path $env:windir 'Temp\epma-hardening.log')
+)
+"""
+
+# Who is running, the log file decision, the state file. Runs after the helpers and before the first setting.
+_WINDOWS_PS_START = r"""
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = New-Object Security.Principal.WindowsPrincipal($identity)
+$isAdmin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+$isSystem = $identity.IsSystem
+
+# Two ways to get here. (1) Windows Setup: SetupComplete.cmd runs this as SYSTEM with no arguments and appends the
+# console output to the log file itself, so the script must not write the same lines to the file again.
+# (2) An administrator on an installed Windows 11 (harden.cmd): the script writes the log file itself.
+# Audit mode changes nothing, so it writes a file only when -LogPath is given on purpose.
+if ((-not $PSBoundParameters.ContainsKey('LogPath')) -and ($isSystem -or ($Mode -eq 'Audit'))) {
+    $script:LogToFile = $false
+}
+
+if (-not $isAdmin) {
+    Write-Host '[FAIL] This script must run as administrator: right-click harden.cmd and choose Run as administrator, or start PowerShell as administrator. Nothing was changed.'
+    if ($isSystem) { exit 0 }
+    exit 1
+}
+
+if ($script:LogToFile) {
+    try {
+        $logDir = Split-Path -Parent $LogPath
+        if ($logDir -and (-not (Test-Path -LiteralPath $logDir))) {
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+        }
+    } catch {
+        $script:LogToFile = $false
+        Write-Host ('[WARN] cannot create the folder of the log file ' + $LogPath + ': ' + $_.Exception.Message)
+    }
+}
+
+Write-Log ('[START] EPMA hardening, mode ' + $Mode + ', ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
+if ($Mode -eq 'Audit') {
+    Write-Info 'Audit mode: nothing is changed, no state file is read or written.'
+    Write-Info 'Audit mode reads the optional features with the DISM cmdlets, and DISM may write its own logs under C:\Windows\Logs\DISM; that is not a configuration change.'
+} else {
+    Write-Info ('Earlier values are recorded in ' + $script:StatePath)
+}
+
+# The folder of the state file comes first. Apply creates it with a protected access list in one step, or checks the
+# one that exists; Undo checks the one that exists. Anything that cannot be trusted stops the run before the first
+# change (Apply must not change what it cannot record) and before the first value is read (Undo must not replay a
+# file that another user could have written).
+if ($Mode -ne 'Audit') {
+    try {
+        if ($Mode -eq 'Apply') {
+            Initialize-StateFolder
+        } elseif ($null -ne (Get-Item -LiteralPath $script:StateDir -Force -ErrorAction SilentlyContinue)) {
+            Assert-StateFolder
+        }
+    } catch {
+        Write-Log ('[FAIL] ' + $_.Exception.Message + ' Nothing was changed.')
+        if ($isSystem) { exit 0 }
+        exit 1
+    }
+}
+
+if ($Mode -ne 'Audit') {
+    if (-not (Import-State)) {
+        if ($Mode -eq 'Undo') {
+            Write-Log ('[WARN] the state file ' + $script:StatePath + ' cannot be read (' + $script:StateError + '); nothing was put back.')
+            if ($isSystem) { exit 0 }
+            exit 1
+        }
+        # Apply: keep the unreadable file for the owner and start a new record.
+        try {
+            $aside = $script:StatePath + '.unreadable-' + (Get-Date -Format 'yyyyMMddHHmmss')
+            Move-Item -LiteralPath $script:StatePath -Destination $aside -Force
+            Write-Log ('[WARN] the state file could not be read (' + $script:StateError + '); it was renamed to ' + $aside + ' and a new one is started')
+        } catch {
+            Write-Log ('[FAIL] the state file ' + $script:StatePath + ' cannot be read and cannot be set aside (' + $_.Exception.Message + '); nothing was changed, because without a record there would be no way back.')
+            if ($isSystem) { exit 0 }
+            exit 1
+        }
+    } elseif ($Mode -eq 'Undo') {
+        if ($script:State.Count -eq 0) {
+            Write-Info 'no earlier values are recorded (there is no state file or it is empty): every setting will be skipped'
+        } else {
+            Test-StateEntries
+        }
+    }
+}
+"""
+
+# Audit mode only: read-only facts that this script never changes. They are NOT counted in the summary.
+# None of this could be run where it was written (no Windows, no pwsh): every query is wrapped in its own
+# try/catch and says what it could not read. Memory Integrity (HVCI) and Credential Guard are read from
+# Win32_DeviceGuard and from the registry; "cannot verify offline" applies to this whole block.
+_WINDOWS_PS_AUDIT_INFO = r"""
+Write-Log ''
+Write-Log '--- Read-only information (reported only; this script never turns these on) ---'
+
+# BitLocker status of the system drive.
+try {
+    if (Get-Command Get-BitLockerVolume -ErrorAction SilentlyContinue) {
+        $vol = Get-BitLockerVolume -MountPoint $env:SystemDrive
+        Write-Info ('BitLocker on ' + $env:SystemDrive + ' protection ' + (Format-Value $vol.ProtectionStatus) + ', volume status ' + (Format-Value $vol.VolumeStatus) + ', method ' + (Format-Value $vol.EncryptionMethod))
+    } else {
+        Write-Info 'BitLocker: the BitLocker cmdlets are not available on this Windows edition'
+    }
+} catch {
+    Write-Info ('BitLocker: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# TPM.
+try {
+    if (Get-Command Get-Tpm -ErrorAction SilentlyContinue) {
+        $tpm = Get-Tpm
+        Write-Info ('TPM: present ' + (Format-Value $tpm.TpmPresent) + ', ready ' + (Format-Value $tpm.TpmReady) + ', enabled ' + (Format-Value $tpm.TpmEnabled))
+    } else {
+        Write-Info 'TPM: the Get-Tpm cmdlet is not available'
+    }
+} catch {
+    Write-Info ('TPM: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# Secure Boot: the cmdlet throws on a PC that boots in legacy BIOS mode or that does not support it.
+try {
+    if (Confirm-SecureBootUEFI) {
+        Write-Info 'Secure Boot: on'
+    } else {
+        Write-Info 'Secure Boot: off'
+    }
+} catch {
+    Write-Info ('Secure Boot: cannot tell (' + $_.Exception.Message + ')')
+}
+
+# Microsoft Defender service and Tamper Protection.
+try {
+    if (Get-Command Get-MpComputerStatus -ErrorAction SilentlyContinue) {
+        $mp = Get-MpComputerStatus
+        Write-Info ('Microsoft Defender: service ' + (Format-Value $mp.AMServiceEnabled) + ', antivirus ' + (Format-Value $mp.AntivirusEnabled) + ', real-time protection ' + (Format-Value $mp.RealTimeProtectionEnabled) + ', Tamper Protection ' + (Format-Value $mp.IsTamperProtected))
+    } else {
+        Write-Info 'Microsoft Defender: the Defender cmdlets are not available'
+    }
+} catch {
+    Write-Info ('Microsoft Defender: cannot read the status (' + $_.Exception.Message + ')')
+}
+
+# Every attack surface reduction rule that is configured, with its action.
+try {
+    if (Get-Command Get-MpPreference -ErrorAction SilentlyContinue) {
+        $pref = Get-MpPreference
+        $ids = @()
+        if ($null -ne $pref.AttackSurfaceReductionRules_Ids) {
+            $ids = @($pref.AttackSurfaceReductionRules_Ids)
+        }
+        $actions = @($pref.AttackSurfaceReductionRules_Actions)
+        if ($ids.Count -eq 0) {
+            Write-Info 'Attack surface reduction: no rule is configured'
+        }
+        for ($i = 0; $i -lt $ids.Count; $i++) {
+            Write-Info ('Attack surface reduction rule ' + [string]$ids[$i] + ': ' + (Get-AsrActionName $actions[$i]))
+        }
+    }
+} catch {
+    Write-Info ('Attack surface reduction: cannot read the rules (' + $_.Exception.Message + ')')
+}
+
+# Memory Integrity (HVCI) and Credential Guard.
+try {
+    $dg = Get-CimInstance -ClassName Win32_DeviceGuard -Namespace 'root\Microsoft\Windows\DeviceGuard'
+    $running = @($dg.SecurityServicesRunning)
+    $configured = @($dg.SecurityServicesConfigured)
+    Write-Info ('Memory Integrity (HVCI): running ' + ($running -contains 2) + ', configured ' + ($configured -contains 2))
+    Write-Info ('Credential Guard: running ' + ($running -contains 1) + ', configured ' + ($configured -contains 1))
+    Write-Info ('Virtualization-based security status: ' + (Format-Value $dg.VirtualizationBasedSecurityStatus) + ' (0 off, 1 configured, 2 running)')
+} catch {
+    Write-Info ('Memory Integrity / Credential Guard: cannot read Win32_DeviceGuard (' + $_.Exception.Message + ')')
+}
+try {
+    $hv = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' -Name 'Enabled'
+    $cg = Get-RegDword -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa' -Name 'LsaCfgFlags'
+    Write-Info ('Registry: Memory Integrity Enabled = ' + (Format-Value $hv) + ', Credential Guard LsaCfgFlags = ' + (Format-Value $cg))
+} catch {
+    Write-Info ('Registry: cannot read the Memory Integrity / Credential Guard values (' + $_.Exception.Message + ')')
+}
+
+# Exploit Protection (system-wide defaults).
+try {
+    if (Get-Command Get-ProcessMitigation -ErrorAction SilentlyContinue) {
+        $mit = Get-ProcessMitigation -System
+        Write-Info ('Exploit Protection (system): DEP ' + (Format-Value $mit.DEP.Enable) + ', SEHOP ' + (Format-Value $mit.SEHOP.Enable) + ', ASLR bottom-up ' + (Format-Value $mit.ASLR.BottomUp))
+    } else {
+        Write-Info 'Exploit Protection: the Get-ProcessMitigation cmdlet is not available'
+    }
+} catch {
+    Write-Info ('Exploit Protection: cannot read the settings (' + $_.Exception.Message + ')')
+}
+"""
+
+_WINDOWS_PS_END = {
+    "Audit": r"""
+Write-Log ('[DONE] ' + $script:CountOk + ' in effect, ' + $script:CountDiff + ' not in effect')
+""",
+    "Undo": r"""
+try {
+    if (($script:State.Count -eq 0) -and (Test-Path -LiteralPath $script:StatePath)) {
+        Remove-Item -LiteralPath $script:StatePath -Force
+        Write-Info 'nothing is left to put back: the state file was removed'
+    }
+} catch {
+    Write-Log ('[WARN] the empty state file could not be removed: ' + $_.Exception.Message)
+}
+Write-Log '[NOTE] Not undone by this script: optional features that Apply turned off (SMBv1, PowerShell 2.0) stay off; the lines above give the Enable-WindowsOptionalFeature command if you really need them. The SMBv1 server value is never written back as 1.'
+Write-Log '[NOTE] The Security event log keeps its raised size (this script never shrinks it).'
+Write-Log '[NOTE] A setting that was already in the wanted state before Apply was never recorded, so Undo cannot know its history and leaves it alone.'
+Write-Log '[NOTE] Audit policy is put back per subcategory from the recorded auditpol output (English Windows only). The whole earlier policy was also saved once; restore it by hand with: auditpol /restore /file:<that file>'
+Write-Log '[NOTE] UAC and NetBIOS changes take full effect after a restart.'
+Write-Log ('[DONE] ' + $script:CountOk + ' put back, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' warnings')
+if (($script:CountWarn + $script:CountFail) -gt 0) {
+    Write-Log '[NOTE] Some items were not put back (see the [WARN] lines above). A record that could not be put back is kept, so running Undo again retries it. The exit code is 1.'
+}
+if (($script:CountWarn + $script:CountFail) -gt 0) { exit 1 }
+""",
+    "Apply": r"""
+Write-Log ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, ' + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')
+""",
+}
 
 
 def _windows_ps_comment_lines(rows):
@@ -5515,16 +7809,50 @@ def _windows_ps_comment_lines(rows):
     return out
 
 
+def _windows_ps_indent(code):
+    return "\n".join(("    " + ln) if ln.strip() else ln for ln in code.strip("\n").split("\n"))
+
+
 def _windows_harden_ps1():
-    if [s[0] for s in WINDOWS_HARDENING_SETTINGS] != list(_WINDOWS_PS_CODE):
+    ids = [s[0] for s in WINDOWS_HARDENING_SETTINGS]
+    if not (ids == list(_WINDOWS_PS_CODE) == list(_WINDOWS_PS_AUDIT) == list(_WINDOWS_PS_UNDO)):
         raise RuntimeError("PowerShell code blocks and hardening settings do not match")
     head = [
         "# EPMA USB CREATOR - optional hardened setup for Windows 11 (recommended settings inspired by common",
-        "# baselines; this is NOT a compliance profile). Runs once from SetupComplete.cmd as SYSTEM, can be run",
-        "# again at any time and changes nothing that is already set. PowerShell 5.1; no network access, no",
-        "# downloads, no extra tools (auditpol.exe and wevtutil.exe are part of Windows). Every setting has its own",
-        "# error handler and writes one line: [OK], [SKIP], [WARN] or [FAIL], what it is, and why. Output goes to",
-        "# " + WINDOWS_HARDENING_LOG + " (appended by SetupComplete.cmd). The exit code is always 0.",
+        "# baselines; this is NOT a compliance profile). One script, three situations:",
+        "#   * Windows Setup: SetupComplete.cmd runs it once as SYSTEM with no arguments (mode Apply, today's behaviour).",
+        "#   * An installed Windows 11: an administrator runs it (harden.cmd does), in any of the three modes.",
+        "# Parameters:",
+        "#   -Mode Apply   (default) applies the settings below. Before a setting is changed, its previous value is",
+        "#                 recorded in " + WINDOWS_HARDENING_STATE + " (a value already recorded is",
+        "#                 never overwritten). Safe to run again: it changes nothing that is already set.",
+        "#   -Mode Audit   changes NOTHING in the configuration and writes no state file: prints [OK] in effect / [DIFF]",
+        "#                 not in effect / [N/A] per setting, then read-only facts (BitLocker, TPM, Secure Boot, Defender,",
+        "#                 attack surface rules, Memory Integrity, Credential Guard, Exploit Protection), then a [DONE] line.",
+        "#                 The one thing it can write is not a configuration change: the DISM cmdlets that read the optional",
+        "#                 features may write their own logs under C:\\Windows\\Logs\\DISM (an [INFO] line says so).",
+        "#   -Mode Undo    puts back every recorded value (or removes a value that did not exist). It cannot turn",
+        "#                 optional features on again (it prints the Enable-WindowsOptionalFeature command), it does not",
+        "#                 shrink the Security log, never writes the SMBv1 server value back as 1, and a setting that Apply",
+        "#                 found already set was never recorded. It uses the state file for VALUES only: what is put back",
+        "#                 comes from tables built into this script, and every value is checked. A record it cannot put back",
+        "#                 is kept (run Undo again) and Undo then exits with code 1.",
+        "#   -DisableLegacyNetwork  opt-in: also turns off NetBIOS over TCP/IP and WPAD auto-discovery. Never applied",
+        "#                 without it, and never from SetupComplete.cmd.",
+        "#   -LogPath      log file (default %windir%\\Temp\\epma-hardening.log). Every line is also shown on the console.",
+        "# PowerShell 5.1; no network access, no downloads, no extra tools (auditpol.exe and wevtutil.exe are part of",
+        "# Windows). Every setting has its own error handler and writes one line per mode. Apply and Undo use [OK],",
+        "# [SKIP], [WARN] or [FAIL]. It must be run as administrator (it refuses otherwise). The exit code is 0 in",
+        "# Windows Setup and for Apply and Audit; run by hand it is 1 when it refuses to start (not an administrator,",
+        "# unreadable state, a state folder that cannot be trusted) and, for Undo, when any [WARN] or [FAIL] was logged.",
+        "#",
+        "# The state folder " + "%ProgramData%\\" + WINDOWS_HARDENING_STATE_DIR + " is created in one step with an access list",
+        "# for SYSTEM and Administrators only. A folder that already exists is used only if it is not a junction or",
+        "# symbolic link, is owned by SYSTEM or Administrators and nobody else can write to it; otherwise the script",
+        "# refuses and Apply changes nothing, because a setting that cannot be recorded cannot be undone.",
+        "#",
+        "# NOTHING in this file has been run on a real Windows: it was checked by structure tests only. Try Audit mode",
+        "# first, on a test PC.",
         "#",
         "# The script runs ONCE, at the end of Windows Setup, and does NOT retry. Firewall, Defender and the attack",
         "# surface rules are read back after they are set: [OK] means the value is in effect; [WARN] means the command",
@@ -5539,20 +7867,51 @@ def _windows_harden_ps1():
     ]
     body = []
     for sid, text, _risk in WINDOWS_HARDENING_SETTINGS:
-        code = _WINDOWS_PS_CODE[sid].replace("@WHAT@", text.replace("'", "''")).strip("\n")
+        what = text.replace("'", "''")
+        parts = [_windows_ps_indent(table[sid].replace("@WHAT@", what))
+                 for table in (_WINDOWS_PS_CODE, _WINDOWS_PS_AUDIT, _WINDOWS_PS_UNDO)]  # Apply, Audit, Undo
+        code = (
+            "if ($Mode -eq 'Apply') {\n" + parts[0] + "\n"
+            "} elseif ($Mode -eq 'Audit') {\n" + parts[1] + "\n"
+            "} else {\n" + parts[2] + "\n"
+            "}"
+        )
         body.append(f"\n# setting: {sid}\n{code}\n")
+    helpers = (_WINDOWS_PS_HELPERS
+               .replace("@STATE_DIR@", WINDOWS_HARDENING_STATE_DIR)
+               .replace("@STATE_FILE@", WINDOWS_HARDENING_STATE_FILE))
+    for placeholder, text_ in _ps_known_tables().items():
+        helpers = helpers.replace(placeholder, text_)
     tail = (
-        "\nWrite-Host ('[DONE] ' + $script:CountOk + ' ok, ' + $script:CountSkip + ' skipped, '"
-        " + $script:CountWarn + ' not in effect, ' + $script:CountFail + ' failed')\n"
-        "exit 0\n"
+        "\nif ($Mode -eq 'Audit') {\n"
+        + _windows_ps_indent(_WINDOWS_PS_AUDIT_INFO) + "\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Audit"]) + "\n"
+        + "} elseif ($Mode -eq 'Undo') {\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Undo"]) + "\n"
+        + "} else {\n"
+        + _windows_ps_indent(_WINDOWS_PS_END["Apply"]) + "\n"
+        + "}\nexit 0\n"
     )
     text = (
         "\n".join(head) + "\n"
-        + _WINDOWS_PS_HELPERS
-        + "\nWrite-Host ('[START] EPMA hardening ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))\n"
+        + _WINDOWS_PS_PARAMS
+        + helpers
+        + _WINDOWS_PS_START
         + "".join(body) + tail
     )
     return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("ascii")  # BOM: PowerShell 5.1 reads ANSI without it
+
+
+def windows_hardening_ps1(profile):
+    """The exact bytes of harden.ps1 (UTF-8 BOM, CRLF, pure ASCII) that hardening_files_windows() ships.
+
+    Other parts of the program (the Windows seed drive) call this instead of private names. Empty bytes for
+    HARDENING_NONE (nothing to add, like hardening_files_windows); an unknown profile raises ValueError.
+    """
+    if not _windows_hardening_check(profile):
+        return b""
+    return _windows_harden_ps1()
+# ===== end hardening2: windows script =====
 
 
 def hardening_files_windows(profile):
@@ -5560,13 +7919,15 @@ def hardening_files_windows(profile):
 
     Exactly two files, both under sources/$OEM$/$$/Setup/Scripts (Windows Setup copies `$$` to %windir%, so
     no answer file is needed and Setup stays fully interactive): SetupComplete.cmd and harden.ps1 (applied
-    once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log).
+    once at the end of Setup, logged to %windir%\\Temp\\epma-hardening.log). SetupComplete.cmd runs harden.ps1
+    with no arguments (mode Apply); the same harden.ps1 (see windows_hardening_ps1) also has the Audit and Undo
+    modes and the opt-in -DisableLegacyNetwork switch for an administrator on an installed Windows 11.
     Empty for HARDENING_NONE; an unknown profile raises ValueError.
     """
     if not _windows_hardening_check(profile):
         return {}
     return {
-        WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(),
+        WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(profile),
         WINDOWS_HARDENING_PS1: _windows_harden_ps1(),
     }
 # ===== end hardening: windows content =====
@@ -5862,10 +8223,13 @@ def _seed_readme(target):
 def hardening_files_seed(target, profile):
     """(FAT32 volume label, {relative_path: bytes}) of the seed drive for `target`.
 
-    target: SEED_UBUNTU, SEED_FEDORA or SEED_DEBIAN. profile: HARDENING_BASELINE (HARDENING_NONE has no
-    files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
-    never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile)."""
+    target: SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN or SEED_WINDOWS. profile: HARDENING_BASELINE (HARDENING_NONE
+    has no files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
+    never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile).
+    SEED_WINDOWS is the set of the Windows seed drive (harden.cmd, audit.cmd, undo.cmd, harden.ps1, README.txt)."""
     _seed_check_args(target, profile)
+    if target == SEED_WINDOWS:
+        return _windows_seed_files(profile)
     text = linux_hardening_script(profile)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("The hardening script is empty")
@@ -5881,6 +8245,213 @@ def hardening_files_seed(target, profile):
     files["README.txt"] = _seed_readme(target).encode("ascii")
     return SEED_LABELS[target], files
 # ===== end hardening: seed content =====
+
+
+# ===== hardening2: win-seed =====
+# The Windows 11 seed drive: a second small USB with harden.cmd / audit.cmd / undo.cmd (double-click launchers that
+# ask for administrator rights), harden.ps1 (windows_hardening_ps1) and a README. Exactly these five files. Nothing
+# here selects a disk, creates an account or stores a secret. Output is deterministic: same input, same bytes.
+SEED_WINDOWS_LABEL = "EPMA-SEED"
+SEED_LABELS[SEED_WINDOWS] = SEED_WINDOWS_LABEL
+SEED_WINDOWS_README_WIDTH = 76
+SEED_WINDOWS_LOG_SHOWN = "C:\\Windows\\Temp\\epma-hardening.log"  # the log of harden.ps1, as shown to the user
+# (file name, harden.ps1 -Mode, asks "Continue? [y/N]" first, lines echoed before anything happens)
+SEED_WINDOWS_LAUNCHERS = (
+    ("harden.cmd", "Apply", True, (
+        "EPMA USB CREATOR - hardening of this Windows PC. EXPERIMENTAL scripts.",
+        "This applies a small set of recommended security settings with harden.ps1.",
+        "Nothing is installed and nothing is downloaded. A log is written to",
+        SEED_WINDOWS_LOG_SHOWN + ". Run audit.cmd first to see a report.",
+    )),
+    ("audit.cmd", "Audit", False, (
+        "EPMA USB CREATOR - report on this Windows PC. EXPERIMENTAL scripts.",
+        "This only reports which settings are in effect. It changes nothing.",
+        "Nothing is installed and nothing is downloaded. Administrator rights are",
+        "still needed because some of the checks cannot be read without them.",
+    )),
+    ("undo.cmd", "Undo", True, (
+        "EPMA USB CREATOR - undo the hardening of this Windows PC. EXPERIMENTAL scripts.",
+        "This asks harden.ps1 to put back the settings it changed earlier.",
+        "Nothing is installed and nothing is downloaded. A log is written to",
+        SEED_WINDOWS_LOG_SHOWN + ".",
+    )),
+)
+
+
+def _windows_seed_launcher(name, mode, confirm, banner):
+    """The bytes of one double-click launcher (CRLF, plain ASCII, no BOM).
+
+    It re-launches itself as administrator when it is not (a UAC prompt), optionally asks `Continue? [y/N]`,
+    runs harden.ps1 from its own folder (`%~dp0`, quoted: paths with spaces work) in the given mode and waits
+    for a key so that the window stays open. It never deletes, formats or partitions anything.
+
+    System tools are called by full path (and the current folder is never searched for programs). The path of the
+    launcher itself reaches PowerShell through an environment variable, never inside a PowerShell string, so a
+    folder name with any quote character (a typographic apostrophe included) cannot break out of it. The
+    confirmation is the system `choice` tool: it answers 1 for y and 2 for n; an error (255) counts as
+    n, Ctrl+C (0) falls through to the cancel lines, and nothing typed is ever parsed by cmd."""
+    system32 = "%SystemRoot%\\System32\\"
+    powershell = system32 + "WindowsPowerShell\\v1.0\\powershell.exe"
+    ps = f'"{powershell}" -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" -Mode {mode}'
+    flag = "DIFF" if mode == "Audit" else "WARN"
+    lines = [
+        "@echo off",
+        "setlocal",
+        'set "NoDefaultCurrentDirectoryInExePath=1"',
+        f"rem {name}: EPMA hardening seed for Windows 11 (EXPERIMENTAL scripts, see README.txt).",
+        f"rem Runs harden.ps1 -Mode {mode} from this folder. Nothing is installed or downloaded.",
+        f"title EPMA hardening - {mode}",
+        'set "EPMA_SELF=%~f0"',
+        "echo.",
+        *("echo " + text for text in banner),
+        "echo.",
+        system32 + "net.exe session >nul 2>&1",
+        "if not errorlevel 1 goto :admin",
+        system32 + "fltmc.exe >nul 2>&1",
+        "if not errorlevel 1 goto :admin",
+        'if /i "%~1"=="elevated" goto :noadmin',
+        "echo Administrator rights are needed. Windows will now show a prompt:",
+        "echo choose Yes to continue. A new window opens for the work.",
+        f'"{powershell}" -NoProfile -ExecutionPolicy Bypass -Command '
+        '"Start-Process -FilePath $env:EPMA_SELF -ArgumentList \'elevated\' -Verb RunAs"',
+        "if errorlevel 1 goto :noadmin",
+        "exit /b 0",
+        "",
+        ":noadmin",
+        "echo.",
+        "echo Administrator rights were not granted. Nothing was changed.",
+        "pause",
+        "exit /b 1",
+        "",
+        ":admin",
+    ]
+    if confirm:
+        lines += [
+            system32 + 'choice.exe /c yn /n /m "Continue? [y/N] "',
+            "if errorlevel 2 goto :cancel",
+            "if errorlevel 1 goto :run",
+            ":cancel",
+            "echo.",
+            "echo Cancelled. Nothing was changed.",
+            "pause",
+            "exit /b 1",
+            "",
+            ":run",
+        ]
+    lines += [
+        ps,
+        'set "RC=%errorlevel%"',
+        "echo.",
+        f"echo Finished with exit code %RC%. Read the lines above: a [{flag}] line means a",
+        "echo setting is not in effect. A restart may be needed for a few settings.",
+        *(("echo Undo can finish with a non-zero exit code when one of its steps failed.",) if mode == "Undo" else ()),
+        "pause",
+        "exit /b %RC%",
+    ]
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+def _windows_seed_readme(profile):
+    """README.txt of the Windows seed drive: ASCII, CRLF (Notepad), lines of at most 76 characters."""
+    import textwrap
+    out = []
+
+    def para(text, bullet="", indent=""):
+        out.extend(textwrap.wrap(text, SEED_WINDOWS_README_WIDTH, initial_indent=indent + bullet,
+                                 subsequent_indent=indent + " " * len(bullet),
+                                 break_on_hyphens=False, break_long_words=False))
+
+    def blank():
+        out.append("")
+
+    def heading(text):
+        blank()
+        out.append(text.upper())
+
+    out.append("EPMA HARDENING SEED - Windows 11 (experimental scripts)")
+    out.append("=" * 60)
+    heading("What this drive is")
+    para("A small helper drive made by EPMA USB CREATOR. It holds a PowerShell script and three "
+         "double-click launchers that apply a small set of recommended security settings to "
+         "Windows 11. It is a SECOND small USB. It is NOT a Windows installer and it does not "
+         "boot by itself. Nothing is installed and nothing is downloaded.")
+    heading("How to use it: run it after Windows is installed")
+    for n, text in enumerate((
+            "Install Windows 11 as usual, then sign in with an administrator account.",
+            "Plug this drive in and open it in File Explorer.",
+            "Right-click audit.cmd and choose Open (or double-click it) FIRST. Windows asks for "
+            "permission (the User Account Control prompt): choose Yes. audit.cmd does not ask "
+            "you to confirm anything: it only shows a report of what is in effect and changes "
+            "nothing. In the report [OK] means in effect, [DIFF] means NOT in effect and [N/A] "
+            "means it does not apply to this PC.",
+            "Then double-click harden.cmd. Windows asks for permission again: choose Yes. "
+            "harden.cmd then asks 'Continue? [y/N]': press y to apply the settings, n to cancel.",
+            "Read the lines it prints. A [WARN] line means that a setting is NOT in effect. "
+            "Nothing was forced.",
+            "To go back, double-click undo.cmd (it asks 'Continue? [y/N]' too). Read the limits "
+            "of undo.cmd below.",
+    ), 1):
+        para(text, f"{n}. ")
+    blank()
+    para("harden.cmd and undo.cmd write a log to " + SEED_WINDOWS_LOG_SHOWN + ". audit.cmd only "
+         "prints in its window. A restart may be needed for a few settings. Running harden.cmd "
+         "twice changes nothing more.")
+    heading("Limits of undo.cmd")
+    for text in (
+            "undo.cmd puts back the settings that harden.ps1 recorded when it changed them.",
+            "It does not turn SMBv1 or PowerShell 2.0 on again (the log prints the command to do "
+            "it by hand), and it does not lower the Security log size.",
+            "A setting that was already in the wanted state before harden.cmd ran is not "
+            "recorded, so undo.cmd leaves it as it is.",
+            "undo.cmd can finish with a non-zero exit code when one of its steps failed: read the "
+            "lines it prints.",
+    ):
+        para(text, "- ", "  ")
+    heading("What the script changes")
+    for line in describe_hardening_windows_applied(profile):
+        para(line.split(" -- risk:", 1)[0], "- ", "  ")
+    para("Opt-in, never applied by default: harden.ps1 can also turn off NetBIOS over TCP/IP and "
+         "WPAD proxy auto-discovery (it can break very old networks). To apply them too, open "
+         "PowerShell as administrator, go to this drive (for example: E:) and run this "
+         "command (type it as one line):", "- ", "  ")
+    out.append("      powershell -ExecutionPolicy Bypass -File harden.ps1 -Mode Apply")
+    out.append("        -DisableLegacyNetwork")
+    heading("What it leaves alone")
+    for _sid, text, why in WINDOWS_HARDENING_NOT_CHANGED:
+        para(text + ". " + why, "- ", "  ")
+    heading("Read the files before you run them")
+    para("harden.cmd, audit.cmd, undo.cmd and harden.ps1 are plain text files. Open them in "
+         "Notepad (right-click, Open with) and read them first. Each launcher asks for "
+         "administrator rights and runs harden.ps1 from this drive. harden.cmd and undo.cmd "
+         "also ask you to confirm; audit.cmd does not.")
+    heading("Honest caveats")
+    for text in (
+            "These settings are inspired by common security baselines. They are a sensible "
+            "starting point, not a compliance claim, certification or guarantee.",
+            "The PowerShell script was never executed by its authors on a real Windows PC. Try it "
+            "on a spare PC or in a virtual machine before you use it on a PC you depend on.",
+            "Another antivirus program or Windows Tamper Protection can stop the Windows Defender "
+            "settings from being changed. The script then prints a [WARN] line.",
+            "Nothing here selects a disk, partitions or erases anything, and nothing creates an "
+            "account or sets a password.",
+            "This drive is not protected or authenticated in any way: whatever is on it runs "
+            "with administrator rights when you use a launcher. Keep it with you.",
+    ):
+        para(text, "- ", "  ")
+    return ("\r\n".join(out) + "\r\n").encode("ascii")
+
+
+def _windows_seed_files(profile):
+    """(label, files) of the Windows seed drive; see hardening_files_seed."""
+    ps1 = windows_hardening_ps1(profile)
+    if not isinstance(ps1, bytes) or not ps1.strip():
+        raise ValueError("The Windows hardening script is empty")
+    files = {name: _windows_seed_launcher(name, mode, confirm, banner)
+             for name, mode, confirm, banner in SEED_WINDOWS_LAUNCHERS}
+    files["harden.ps1"] = ps1
+    files["README.txt"] = _windows_seed_readme(profile)
+    return SEED_WINDOWS_LABEL, files
+# ===== end hardening2: win-seed =====
 
 
 # ===== hardening: engine-seed =====
@@ -6023,7 +8594,7 @@ def stage_seed_files(files):
         for rel, data in files.items():
             path = _seed_local_path(stage, rel)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_BINARY, PRIVATE_FILE_MODE)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
     except BaseException:
@@ -6053,7 +8624,7 @@ def copy_seed_files(stage_dir, dst_root, files, log, progress=None, cancel_event
         progress(total, total, "Flushing data to the drive...")
     check_canceled(cancel_event)
     log("Syncing writes to disk...")
-    run_cmd(["sync"], log, check=False)
+    sync_filesystems(log)
 
 
 def verify_seed_files(files, dst_root, log, progress=None, cancel_event=None):
@@ -6231,8 +8802,8 @@ def check_seed_target_size(size):
 
 def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, cancel_event=None, eject=True,
                    profile=HARDENING_BASELINE):
-    """Create a seed drive for `target` (ubuntu, fedora or debian): GPT + FAT32 with the label and the files
-    `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
+    """Create a seed drive for `target` (ubuntu, fedora, debian or windows): GPT + FAT32 with the label and the
+    files `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
 
     Returns True if the drive was ejected. Raises ValueError (nothing touched) for a bad target, label, file
     set or drive, and OperationCanceled on a cancel (see its docstring: `drive_touched` is False when nothing on
@@ -6258,36 +8829,40 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
             check_canceled(cancel_event, drive_touched=False)
         except OperationCanceled:
             # The safety re-check changes nothing: the drive is exactly as it was.
-            audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+            audit(f"OPERATION CANCELED by the user before the drive was touched ({dev_path(dev)}); nothing was changed",
                   logging.WARNING)
             raise OperationCanceled("Canceled by the user before the drive was touched.",
                                     drive_touched=False) from None
-        audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing the {target} hardening seed "
-              f"(profile={profile}, label={label}, files={len(files)}, "
+        audit(f"DESTRUCTIVE OPERATION START: erasing {dev_path(dev)} and writing the {target} hardening seed "
+              f"(profile={profile}, label={label}, "
+              f"files={len(files)}, "
               f"bytes={sum(len(d) for d in files.values())}, sha256={_seed_manifest_sha256(files)})")
         try:
             with prevent_sleep(log):
                 if IS_MAC:
                     ejected = macos_build_seed_usb(label, files, stage_dir, dev, log, progress=progress,
                                                    cancel_event=cancel_event, eject=eject)
+                elif IS_WINDOWS:
+                    ejected = windows_build_seed_usb(label, files, stage_dir, dev, log, progress=progress,
+                                                     cancel_event=cancel_event, eject=eject)
                 else:
                     ejected = linux_build_seed_usb(label, files, stage_dir, dev, log, priv, progress,
                                                    cancel_event, eject)
         except OperationCanceled as e:
             if not e.drive_touched:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} before the drive was touched; "
                       "nothing was changed", logging.WARNING)
             elif e.written:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} during verification; "
                       "the seed files were written but NOT verified", logging.WARNING)
             else:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)}; the drive was left unusable",
                       logging.WARNING)
             raise
         except Exception as e:
-            audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
+            audit(f"DESTRUCTIVE OPERATION FAILED on {dev_path(dev)}: {type(e).__name__}", logging.ERROR)
             raise
-        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+        audit(f"DESTRUCTIVE OPERATION COMPLETED on {dev_path(dev)} (ejected={bool(ejected)})")
         return bool(ejected)
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -6341,7 +8916,7 @@ class DownloadThread(threading.Thread):
 
     def _read_validator(self):
         try:
-            fd = os.open(self._meta_path(), os.O_RDONLY | O_NOFOLLOW)  # never through a symlink
+            fd = os.open(self._meta_path(), os.O_RDONLY | O_NOFOLLOW | O_BINARY)  # never through a symlink
             with os.fdopen(fd, encoding="utf-8") as fh:
                 value = json.load(fh).get("validator")
         except (OSError, ValueError, AttributeError):
@@ -6350,7 +8925,7 @@ class DownloadThread(threading.Thread):
 
     def _write_validator(self, validator):
         try:
-            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | O_NOFOLLOW,
+            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | O_NOFOLLOW | O_BINARY,
                          PRIVATE_FILE_MODE)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"validator": validator}, fh)
@@ -6374,7 +8949,7 @@ class DownloadThread(threading.Thread):
                 "file again to the same location resumes where it stopped.")
 
     def _hash_part(self, tmp_path, digest, size):
-        with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW), "rb") as fh:
+        with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW | O_BINARY), "rb") as fh:
             if _hash_stream(fh, digest, limit=size, check=self._check_cancel, chunk=CHUNK_SIZE) < size:
                 raise OSError("the partial file is shorter than expected")
 
@@ -6464,7 +9039,7 @@ class DownloadThread(threading.Thread):
             downloaded = offset
             start = time.time()
             # Create the partial file readable only by its owner.
-            flags = os.O_CREAT | os.O_WRONLY | O_NOFOLLOW | (os.O_APPEND if offset else os.O_TRUNC)
+            flags = os.O_CREAT | os.O_WRONLY | O_NOFOLLOW | O_BINARY | (os.O_APPEND if offset else os.O_TRUNC)
             fd = os.open(tmp_path, flags, PRIVATE_FILE_MODE)
             with os.fdopen(fd, "ab" if offset else "wb") as f:
                 while True:
@@ -6635,16 +9210,16 @@ def help_sections():
     retries = DOWNLOAD_MAX_ATTEMPTS - 1
     audit_mb = f"{AUDIT_LOG_MAX_BYTES / 1_000_000:g}"
     windows_settings = "\n".join("• " + line.split(" -- risk:")[0] for line in
-                                 describe_hardening_windows(HARDENING_BASELINE))
+                                 describe_hardening_windows_applied(HARDENING_BASELINE))
     windows_not_changed = "\n".join("• " + text + ": " + why for _id, text, why in WINDOWS_HARDENING_NOT_CHANGED)
     return [
-        ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
+        ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on Windows 11, macOS and Linux.
 
 ## Four image types and the hardening seed (five cards)
 • Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux and Other ISO — both write the ISO byte for byte to the whole drive (like dd). Use Linux for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images, and Other ISO for any other bootable image. An ISO that cannot boot from a USB drive is refused before anything is erased.
-• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes auto-install settings on it for Ubuntu, Fedora/RHEL or Debian. See "Hardened setup (optional)".
+• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes hardening files on it for Ubuntu, Fedora/RHEL, Debian or Windows 11. See "Hardened setup (optional)".
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
@@ -6699,7 +9274,7 @@ def help_sections():
 • Click "Ignore". Never click "Initialize" — it would erase what was just written.
 • This is normal. The content was already verified byte for byte."""),
 
-        ("Hardened setup (optional)", f"""## What it is
+        ("Hardened setup (optional)", """## What it is
 • Optional files that make a fresh install start from safer settings ("Hardened (recommended settings)"). The settings are inspired by common security baselines. This program does NOT claim that the result complies with, or is certified by, any standard.
 • Nothing here chooses a disk, creates an account or sets a password or key. Windows Setup and the Linux installers stay interactive: you still pick the disk, the language and your own account.
 • Every hardening script prints each change, keeps a backup of anything it modifies and can be undone. They were checked with simulated systems and automated tests only, so try them on a spare computer or a virtual machine before relying on them.
@@ -6711,10 +9286,10 @@ def help_sections():
 • If the image already contains one of these files, the program stops BEFORE erasing the drive and tells you, because the files would replace the image's own.
 
 ## What the Windows option changes
-{windows_settings}
+@WINDOWS_SETTINGS@
 
 ## What it deliberately leaves alone
-{windows_not_changed}
+@NOT_CHANGED@
 
 ## Linux and others (a second USB drive)
 • Choose the "Hardening seed" card, pick the target system, select a small USB drive (64 MiB or more) and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
@@ -6725,9 +9300,16 @@ def help_sections():
 • The script harden-linux.sh is a plain text file on the drive: read it before you use it. It supports --dry-run (changes nothing), --yes, --undo and --help, and it appends to /var/log/epma-hardening.log.
 • It tries not to lock you out of SSH: it only turns off root login or password login when an administrator account with a key exists, and it says so. It does not enable a firewall on a computer that runs Docker, libvirt or LXD unless you pass --yes. Test a second SSH session before you close the first.
 
+## Windows 11 (a second USB drive)
+• Choose the "Hardening seed" card and "Windows 11 (run after install)", select a small USB drive and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
+• It works on a Windows 11 that is already installed (it does not take part in the installation). Open the drive in File Explorer and double-click audit.cmd first: it only reports what is in effect (lines marked [DIFF] are not). Then double-click harden.cmd, answer y and accept the administrator prompt. A restart may be needed for a few settings.
+• The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. The log is C:\\Windows\\Temp\\epma-hardening.log.
+• Extra, opt-in: in an elevated PowerShell run harden.ps1 with -DisableLegacyNetwork to also turn off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).
+
 ## Undo
 • Linux: run the script again with --undo. It restores the files it backed up and removes the ones it created. It does not uninstall packages or turn services off.
-• Windows: the changes are ordinary Windows settings; the log lists each one.""".replace("\\\\", "\\")),
+• Windows: double-click undo.cmd on the seed drive (or run harden.ps1 -Mode Undo as administrator). It restores the values it recorded before changing them. It does not turn SMBv1 or the PowerShell 2.0 feature back on, does not shrink the Security log, and cannot restore a setting that was already in the wanted state before. It may report a non-zero exit code when a step failed: read its lines.""".replace("\\\\", "\\").replace(
+            "@WINDOWS_SETTINGS@", windows_settings).replace("@NOT_CHANGED@", windows_not_changed)),
 
         ("ChromeOS Flex", """## What it is
 • ChromeOS Flex is Google's free version of ChromeOS for PCs and Macs. It is the official way to run ChromeOS on a computer you already own: Google does not publish regular ChromeOS for ordinary computers, so this program does not offer it.
@@ -6750,6 +9332,7 @@ def help_sections():
 • The image is about 9.5 GB once extracted and the download about 1.4 GB: keep roughly 12 GB free on the computer while preparing it (a warning appears when there is less). The drive must be at least as large as the image, otherwise nothing is touched; a drive below 16 GB shows a warning first.
 • The official address redirects to a versioned file on dl.google.com. A redirect to any other server is refused and what arrived is discarded.
 • The administrator password is asked on macOS as well, because the whole drive is written directly.
+• On Windows the finished drive may make Windows offer to format it (it cannot read Linux or ChromeOS partitions): click Cancel, never Format.
 • On macOS the finished drive does not appear in Finder, as with Linux images (see "Quick start: Linux and other ISOs").
 • The download link is only accepted when it is Google's official address (@URL@).
 • Command line: fetch-chromeos downloads and extracts the image; write --mode chromeos writes it.""".replace(
@@ -6783,7 +9366,7 @@ def help_sections():
 • Hardening seed: a separate small drive (GPT + FAT32) with auto-install files; no image file is needed, so the image step is hidden and the button reads "Create Seed Drive".
 
 ## Dependencies
-• Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
+• Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex. On Windows 11 it needs nothing extra: PowerShell and DISM come with Windows (DISM splits install.wim when it is over 4 GB). On Windows a FAT32 volume is at most 30 GiB, so a bigger drive keeps the rest unallocated.
 • The Google Chrome, Linux and Other ISO cards need nothing extra. The Hardening seed card needs only parted, mkfs.vfat, wipefs and partprobe on Linux and nothing extra on macOS.
 • The dependencies are checked before anything is erased. When one is missing, the Create button stays disabled and a hint says what to install.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
@@ -6797,6 +9380,7 @@ def help_sections():
 
 ## Administrator password
 • Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• On Windows there is no password: the program itself must run as Administrator (the installed shortcut asks Windows for it with the UAC prompt; from a terminal, open it with Run as administrator). Without it nothing is changed.
 • It is checked once. Normally it is then dropped and sudo's own credential timestamp carries the operation; only if this computer does not keep that timestamp does the password stay in memory, until the operation ends. It is used only to run local disk commands and is never logged, written to disk or sent anywhere.
 
 ## Progress, Cancel and the log
@@ -6806,7 +9390,7 @@ def help_sections():
 • "Show details" opens a box with every command that runs; it opens by itself when a write fails. Keep its text if you need to report a problem."""),
 
         ("Safety", f"""## What protects you
-• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed.
+• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed; on Windows the disk that holds the running Windows is never listed.
 • You see the model, size and contents before erasing. Large or data-filled drives need the identifier typed.
 • Right before erasing, the drive is looked up again and must still be the same device (size, serial number, model). If it was swapped, the operation stops.
 • A privileged command that fails is never run a second time on its own.
@@ -6817,7 +9401,7 @@ def help_sections():
 
 ## What it cannot do for you
 • It cannot tell which of your USB drives you meant. Read the model, size and volumes in the confirmation every time.
-• It erases the whole drive, including partitions macOS or Linux may not show.
+• It erases the whole drive, including partitions Windows, macOS or Linux may not show.
 • A drive that was canceled or interrupted mid-write is not usable until written again."""),
 
         ("Verification and eject", """## Verification
@@ -6839,8 +9423,8 @@ def help_sections():
 • fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
 • write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
-• harden-seed --target ubuntu|fedora|debian --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
-• harden-files --target windows|ubuntu|fedora|debian --out DIR [--json] — write the same hardening files into a new or empty folder. No drive is involved and no administrator rights are needed.
+• harden-seed --target ubuntu|fedora|debian|windows --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
+• harden-files --target windows|windows-seed|ubuntu|fedora|debian --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive. No drive is involved and no administrator rights are needed.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -6853,6 +9437,7 @@ def help_sections():
 ## harden-seed and harden-files
 • harden-seed asks for the same confirmation as write (type the disk identifier, or pass --yes), checks the drive the same way, verifies what it wrote and ejects. The seed drive is erased like any other target.
 • The seed files never choose a disk, never partition or format anything and never create accounts or set passwords: storage and the user account stay interactive in the installer.
+• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows.
 • harden-files refuses a folder that is not empty and never overwrites anything.
 
 ## Exit codes
@@ -6927,7 +9512,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO or ChromeOS Flex download you ask for."""),
 
         ("About", f"""EPMA USB CREATOR {__version__}
-{APP_TAGLINE}, on macOS and Linux.
+{APP_TAGLINE}, on Windows 11, macOS and Linux.
 
 Platform: {platform_display_name()}
 License: GNU General Public License v3 or later
@@ -7244,7 +9829,7 @@ def drive_row_texts(disk):
     and the detail is the device path plus a summary of the volumes on the drive. A record without
     "model", "size" or "volumes" (an older one) still gives sensible text.
     """
-    dev = "/dev/" + str(disk.get("id", ""))
+    dev = dev_path(disk.get("id", ""))
     model = str(disk.get("model") or "").strip()
     size = human_size(disk["size"]) if isinstance(disk.get("size"), (int, float)) else ""
     volumes = disk.get("volumes")
@@ -7726,6 +10311,17 @@ class _DownloadWidgets:
 WINDOWS_HARDENING_LOG_SHOWN = "C:\\Windows\\Temp\\epma-hardening.log"  # where the log is after Windows setup
 # ===== end hardening: gui =====
 
+# ===== hardening2: GUI =====
+# The choices of the "Hardening seed" card. Each radio button has a key; this table says which seed target the
+# key means for the engine.
+SEED_CHOICES = {
+    SEED_UBUNTU: SEED_UBUNTU,
+    SEED_FEDORA: SEED_FEDORA,
+    SEED_DEBIAN: SEED_DEBIAN,
+    SEED_WINDOWS: SEED_WINDOWS,
+}
+# ===== end hardening2: GUI =====
+
 
 class App(_TkBase):
     def __init__(self):
@@ -7740,7 +10336,7 @@ class App(_TkBase):
         self.cancel_event = threading.Event()
         self.create_cancel_event = threading.Event()  # cancels the USB creation (not the download)
         self.disks = []
-        self.priv = PrivilegeHelper(self)
+        self.priv = WindowsPrivilege() if IS_WINDOWS else PrivilegeHelper(self)
         self._log_lock = threading.Lock()
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
@@ -7827,7 +10423,7 @@ class App(_TkBase):
             (CARD_WINDOWS, _("Windows 11"), _("Copies the files")),
             (CARD_LINUX, _("Linux"), _("Ubuntu, Fedora...")),
             (CARD_OTHER, _("Other ISO"), _("Any bootable image")),
-            (CARD_SEED, _("Hardening seed"), _("Auto-install files")),
+            (CARD_SEED, _("Hardening seed"), _("Second USB drive")),
         )):
             card = OptionCard(row, key, title, subtitle, self.select_card)
             # Worked out for five cards: each card is its cell minus 10 px wide and two neighbours are 12 px
@@ -7931,11 +10527,13 @@ class App(_TkBase):
     # build_seed_usb); this part only asks for them and goes through the same safety flow as every other write.
     @staticmethod
     def seed_target_texts():
-        """(target, translated name) for the three radio buttons of the Hardening seed card."""
+        """(choice key, translated name) for the four radio buttons of the Hardening seed card. The key is a
+        key of SEED_CHOICES (it says which seed target)."""
         return (
             (SEED_UBUNTU, _("Ubuntu (autoinstall)")),
             (SEED_FEDORA, _("Fedora / RHEL (kickstart)")),
             (SEED_DEBIAN, _("Debian (script + preseed)")),
+            (SEED_WINDOWS, _("Windows 11 (run after install)")),
         )
 
     def _build_hardening_option(self, panel):
@@ -7962,7 +10560,7 @@ class App(_TkBase):
     @staticmethod
     def _hardening_details_text():
         """The list of settings the Windows option applies, straight from the engine's own description."""
-        lines = [_(text) for text in map(str, describe_hardening_windows(HARDENING_BASELINE))]
+        lines = [_(text) for text in map(str, describe_hardening_windows_applied(HARDENING_BASELINE))]
         lines = [line if line.startswith("•") else "• " + line for line in lines]
         footer = _("The settings are applied at the end of Windows setup by a script, and every change is written "
                    "to {log}. You choose the disk, the account and the edition during setup as usual."
@@ -7987,27 +10585,46 @@ class App(_TkBase):
         """The "Hardening seed" card: what the second drive is, and which system it is for. No image file."""
         ttk.Label(
             panel, justify="left", wraplength=PANEL_WRAP,
-            text=_("Makes a SECOND, small USB drive (not the installer) that carries settings for an automatic, "
-                   "hardened Linux install. Write the installer to its own drive with the Linux card, then plug "
-                   "both drives into the computer you install on. The files never choose or erase a disk on "
-                   "that computer: you still pick the disk and create the account yourself. No image file is "
-                   "needed; writing this drive ERASES it.")).pack(anchor="w", pady=(0, 6))
-        self.seed_target_var = tk.StringVar(self, value=SEED_UBUNTU)
+            text=_("Makes a SECOND, small USB drive (not the installer) with settings for a hardened Linux or "
+                   "Windows 11 install. Write the installer on its own drive (Linux or Windows card) and plug "
+                   "both in. It never chooses or erases a disk on that PC. No image is needed; writing this "
+                   "drive ERASES it.")
+        ).pack(anchor="w", pady=(0, 6))
+        self.seed_target_var = tk.StringVar(self, value=SEED_UBUNTU)  # the choice key (see SEED_CHOICES)
         self.seed_radios = {}
-        row = ttk.Frame(panel)
-        row.pack(fill="x")
-        ttk.Label(row, text=_("Install target:")).pack(side="left", padx=(0, 10))
-        for target, text in self.seed_target_texts():
-            radio = ttk.Radiobutton(row, text=text, value=target, variable=self.seed_target_var,
-                                    command=self._on_seed_target_changed)
-            radio.pack(side="left", padx=(0, 12))
-            self.seed_radios[target] = radio
+        ttk.Label(panel, text=_("Install target:")).pack(anchor="w")
+        # Four radio buttons do not fit one row of a 780 px window (the texts are long, more so in Portuguese):
+        # two rows of two, each one sized by its own radios.
+        grid = ttk.Frame(panel)
+        grid.pack(fill="x", pady=(2, 0))
+        rows = (ttk.Frame(grid), ttk.Frame(grid))
+        for row in rows:
+            row.pack(anchor="w", pady=(0, 2))
+        for index, (choice, text) in enumerate(self.seed_target_texts()):
+            radio = ttk.Radiobutton(rows[0 if index < 2 else 1], text=text, value=choice,
+                                    variable=self.seed_target_var, command=self._on_seed_target_changed)
+            radio.pack(side="left", padx=(0, 16))
+            self.seed_radios[choice] = radio
+        self.seed_radio_area = grid
         self.seed_note = ttk.Label(panel, justify="left", wraplength=PANEL_WRAP, foreground="#8e8e93")
         self.seed_note.pack(anchor="w", pady=(6, 0))
         self._on_seed_target_changed()
 
-    def seed_target_note(self, target):
-        """One line about how the chosen system finds the seed drive."""
+    @staticmethod
+    def seed_step_heading(choice):
+        """The title of step 2 on the Hardening seed card: it says what the chosen drive carries."""
+        if choice == SEED_WINDOWS:
+            return _("Hardening scripts")
+        return _("Auto-install files")
+
+    def _refresh_seed_heading(self):
+        headings = getattr(self, "step_headings", {})
+        if 2 in headings and self.card_var.get() == CARD_SEED:
+            headings[2].title = self.seed_step_heading(self.seed_target_var.get())
+            headings[2].label.config(text=headings[2].title)
+
+    def seed_target_note(self, choice):
+        """A short note about how the chosen system finds the seed drive (or, for Windows, how it is used)."""
         return {
             SEED_UBUNTU: _("Ubuntu's installer looks for settings on a drive labelled CIDATA. It still asks for "
                            "the disk and your account."),
@@ -8015,10 +10632,15 @@ class App(_TkBase):
                            "the disk and your account."),
             SEED_DEBIAN: _("Debian does not look for the drive by itself: the README on it explains the boot "
                            "parameter, and the script to run after the install is on it too."),
-        }.get(target, "")
+            SEED_WINDOWS: _("Run harden.cmd as administrator on a Windows 11 that is already installed; "
+                            "audit.cmd shows a report first, undo.cmd goes back."),
+        }.get(choice, "")
 
     def _on_seed_target_changed(self):
-        self.seed_note.config(text=self.seed_target_note(self.seed_target_var.get()))
+        choice = self.seed_target_var.get()
+        self.seed_note.config(text=self.seed_target_note(choice))
+        self._refresh_seed_heading()
+        self.after_idle(self._fit_window)  # the notes differ in length
 
     def _apply_card_layout(self, key):
         """What changes with the card besides its panel: the seed card needs no image, so the file row, the
@@ -8037,7 +10659,7 @@ class App(_TkBase):
                     if self.sha_toggle.is_open:
                         self.iso_check_frame.pack(fill="x", pady=(0, 6), after=self.sha_toggle)
         heading = self.step_headings[2]
-        heading.title = _("Auto-install files") if seed else _("Image")
+        heading.title = self.seed_step_heading(self.seed_target_var.get()) if seed else _("Image")
         heading.label.config(text=heading.title)
         self.create_btn.config(text=_("Create Seed Drive") if seed else _("Create Bootable USB Drive"))
     # ===== end hardening: GUI =====
@@ -8221,6 +10843,8 @@ class App(_TkBase):
 
         def worker():
             try:
+                if IS_WINDOWS:
+                    raise RuntimeError(missing_dependencies_hint([]))
                 if IS_MAC:
                     if not shutil.which("brew"):
                         raise RuntimeError("Homebrew not found. Install it from https://brew.sh")
@@ -8992,16 +11616,16 @@ class App(_TkBase):
         """Final confirmation: always shows model, size and contents; high-risk drives also need
         their identifier typed. Returns True to go ahead."""
         level, reasons = assess_disk_risk(disk, translate=True)  # the level never depends on the language
-        text = (_("This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.").format(
-                    id=disk["id"], what=what)
+        text = (_("This will PERMANENTLY ERASE all data on {path} and write {what} to it.").format(
+                    path=dev_path(disk["id"]), what=what)
                 + "\n\n" + describe_disk_for_confirmation(disk, translate=True))
-        audit(f"Erase confirmation shown for /dev/{disk['id']} risk={level}")
+        audit(f"Erase confirmation shown for {dev_path(disk['id'])} risk={level}")
         if level == "high":
             ok = ask_typed_confirmation(self, _("Confirm erasing this drive"), text, disk["id"], reasons)
         else:
             ok = messagebox.askyesno(_("Final confirmation"), text + "\n\n" + _("Continue?"))
         if not ok:
-            audit(f"Erase of /dev/{disk['id']} declined by the user")
+            audit(f"Erase of {dev_path(disk['id'])} declined by the user")
         return ok
 
     def start_create_usb(self):
@@ -9028,7 +11652,8 @@ class App(_TkBase):
         mode = self.mode_var.get()
         iso = self.iso_path.get()
         seed = mode == MODE_SEED
-        target = self.seed_target_var.get() if seed else None
+        choice = self.seed_target_var.get() if seed else None
+        target = SEED_CHOICES.get(choice)  # read ONCE, like the rest
         hardening = self.hardening_selected(mode)
         if self._download_running or self._flex_busy:  # the button is disabled in this case; this covers a stale one
             messagebox.showerror(_("Download in progress"), _("Wait for the download to finish or cancel it first."))
@@ -9091,9 +11716,17 @@ class App(_TkBase):
         # the direct-write mode). Collect and verify the password now, before touching
         # the drive.
         if needs_admin(mode) and not self.priv.authenticate(
-                _("Administrator access is required to write /dev/{id}.").format(id=disk["id"])):
+                _("Administrator access is required to write {path}.").format(path=dev_path(disk["id"]))):
             self.priv.clear_cached_password()
-            self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
+            if IS_WINDOWS:
+                messagebox.showerror(
+                    _("Administrator required"),
+                    _("EPMA USB Creator must run as Administrator to erase and write a USB drive.\n\n"
+                      "Close it and open it again with right-click > Run as administrator (the Start menu "
+                      "shortcut of the installed program does this by itself). Nothing was changed."))
+                self.log(_("Canceled: the program is not running as Administrator. The drive was not modified."))
+            else:
+                self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
             return
         self.create_cancel_event.clear()
         self.update_create_button_state()
@@ -9119,7 +11752,7 @@ class App(_TkBase):
                                         expected_size=expected_size, mode=mode, progress=progress,
                                         cancel_event=self.create_cancel_event, **extra)
                 self._post(self._finish_create_progress, True)
-                self._post(self._show_create_success, ejected, mode, hardening)
+                self._post(self._show_create_success, ejected, mode, hardening, target)
             except OperationCanceled as e:
                 # Not an error: the user asked for it. Say clearly what state the drive is in.
                 log_text, title, body = self._canceled_texts(getattr(e, "drive_touched", True),
@@ -9173,11 +11806,15 @@ class App(_TkBase):
                 _("Canceled"),
                 _("The operation was canceled.\n\nThe USB drive was NOT modified."))
 
-    def _show_create_success(self, ejected, mode=None, hardening=HARDENING_NONE):
+    def _show_create_success(self, ejected, mode=None, hardening=HARDENING_NONE, target=None):
         """The write was verified: the inline panel replaces the old "Done" dialog. Without the eject the
         panel is amber and says the drive must be ejected by hand before it is unplugged. `mode` and `hardening`
         say what was written (the seed drive and the Windows hardening files have their own wording)."""
         if self._closing:
+            return
+        if mode == MODE_SEED and target == SEED_WINDOWS:  # hardening2: its own title and wording
+            title, note = self._windows_seed_success_texts(ejected)
+            self.show_success(title, note, verified_and_ejected=bool(ejected))
             return
         if mode == MODE_SEED:
             note = (_("The seed files were checked on the drive and it was ejected — you can unplug it now. "
@@ -9195,6 +11832,17 @@ class App(_TkBase):
                             "Windows setup finishes, their log will be at {log}."
                             ).format(log=WINDOWS_HARDENING_LOG_SHOWN)
         self.show_success(_("Bootable USB drive created successfully!"), note, verified_and_ejected=bool(ejected))
+
+    @staticmethod
+    def _windows_seed_success_texts(ejected):
+        """(title, text) of the success panel for the Windows seed drive (hardening2)."""
+        note = (_("The files were checked on the drive and it was ejected — you can unplug it now.") if ejected else
+                _("The files were checked on the drive, but it could not be ejected automatically. Eject it from "
+                  "the file manager before unplugging."))
+        return (_("Windows 11 hardening drive created and verified"),
+                note + " " + _("On a Windows 11 that is already installed, open this drive and run audit.cmd "
+                               "(shows a report, changes nothing), harden.cmd (as administrator) or undo.cmd (goes "
+                               "back). The scripts were never run on real Windows: try them on a test machine first."))
 
     def _notify(self, kind, title, message):
         """An information dialog from a worker's result; skipped while the window is closing."""
@@ -9421,6 +12069,8 @@ class CliError(Exception):
 
 
 def _emit(stream, text, end="\n"):
+    if stream is None:  # a windowed program (the MSI's GUI) has no console to print to
+        return
     try:
         stream.write(text + end)
     except UnicodeEncodeError:  # e.g. LANG=C: the "—" in disk labels cannot be encoded
@@ -9602,6 +12252,17 @@ class CliPrivilege:
                                "Check the messages above.")
 
 
+class WindowsCliPrivilege(WindowsPrivilege):
+    """Command line privilege check for Windows: the terminal itself must have been opened as Administrator."""
+
+    def authenticate(self, reason=None, max_attempts=3):
+        if not windows_is_admin():
+            raise RuntimeError("Administrator privileges are required. Open Windows Terminal or PowerShell with "
+                               "right-click > Run as administrator and run the command again. "
+                               "Nothing was changed.")
+        return True
+
+
 def cli_sha256_file(path, progress=None, chunk=SHA256_CHUNK):
     """sha256_file() reporting (done, total, text) to `progress`, the shape CliProgress takes."""
     return sha256_file(path, chunk=chunk,
@@ -9649,12 +12310,12 @@ def _disk_summary(disk):
 
 
 def _write_steps(mode, disk_id, eject, hardening_files=None):
-    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive"]
+    steps = [f"Re-check that {dev_path(disk_id)} is still the listed USB drive"]
     if mode in RAW_MODES:
-        steps += [f"Unmount /dev/{disk_id} and write the image to it byte for byte",
+        steps += [f"Unmount {dev_path(disk_id)} and write the image to it byte for byte",
                   "Read the drive back and compare it with the image"]
     else:
-        steps += [f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{VOL_NAME}')",
+        steps += [f"Erase {dev_path(disk_id)} and format it as GPT + FAT32 ('{VOL_NAME}')",
                   "Copy the ISO contents (install.wim is split when it exceeds 4 GB)",
                   "Verify the copied files against the ISO"]
         if hardening_files:
@@ -9667,7 +12328,7 @@ def _print_plan(plan, to_stdout):
     disk = plan["disk"]
     emit = _out if to_stdout else _err
     emit("Plan")
-    emit(f"  Disk : /dev/{disk['id']}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
+    emit(f"  Disk : {dev_path(disk['id'])}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
     if disk.get("model"):
         emit(f"  Model: {disk['model']}")
     if plan["mode"] == MODE_SEED:
@@ -9835,7 +12496,7 @@ def _prepare_write(args):
     disks = _list_disks()
     disk = next((d for d in disks if d.get("id") == disk_id), None)
     if disk is None:
-        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+        raise CliError(f"{dev_path(disk_id)} is not an eligible USB drive. "
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     mode = args.mode
     detected, _method = cli_detect_kind(iso)
@@ -9887,10 +12548,10 @@ def _confirm_write(args, plan):
     if not _is_interactive():
         raise CliError("Refusing to erase a drive without confirmation: this is not an interactive "
                        "terminal. Review the plan with --dry-run, then pass --yes.", EXIT_USAGE)
-    _err(f"\nThis will PERMANENTLY ERASE all data on /dev/{disk_id}.")
+    _err(f"\nThis will PERMANENTLY ERASE all data on {dev_path(disk_id)}.")
     _emit(sys.stderr, f"Type the disk id ({disk_id}) to confirm: ", end="")
     answer = sys.stdin.readline().strip()
-    if answer != disk_id:
+    if (normalize_typed_identifier(answer) if IS_WINDOWS else answer) != disk_id:
         raise CliError("The confirmation did not match. Nothing was changed.", EXIT_USAGE)
 
 
@@ -9908,7 +12569,7 @@ def _call_engine(plan, log, priv, progress, cancel):
 
 def _run_write(args, plan, result):
     needs_priv = needs_admin(plan["mode"])
-    priv = CliPrivilege()
+    priv = WindowsCliPrivilege() if IS_WINDOWS else CliPrivilege()
     progress = CliProgress()
     log = CliLogger(progress, verbose=args.verbose)
     cancel = threading.Event()
@@ -9926,7 +12587,7 @@ def _run_write(args, plan, result):
     except ValueError:  # not the main thread
         previous = None
     started = time.time()
-    audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}"
+    audit(f"CLI write requested: {dev_path(plan['disk']['id'])} mode={plan['mode']}"
           + (f" target={plan['target']}" if plan["mode"] == MODE_SEED else "")
           + (f" hardening={plan['hardening']}" if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else ""))
     ejected, failure = None, None
@@ -10014,23 +12675,40 @@ def cmd_write(args):
 # ===== hardening: cli =====
 HARDENED_WINDOWS_ONLY = ("--hardened is only available for Windows images (--mode windows). For Linux use "
                          f"'{CLI_PROG} harden-seed' with a separate USB drive.")
-HARDEN_FILES_TARGETS = ("windows", *SEED_TARGETS)
+# ===== hardening2: cli =====
+# `harden-files --target windows` is the set that goes on the SAME USB as Windows (unchanged); the Windows
+# SEED drive (a second small USB) has its own name here, because SEED_WINDOWS is also "windows".
+HARDEN_FILES_WINDOWS_SEED = "windows-seed"
+HARDEN_FILES_TARGETS = ("windows", HARDEN_FILES_WINDOWS_SEED,
+                        *(t for t in SEED_TARGETS if t != SEED_WINDOWS))
+HARDEN_FILES_WINDOWS_SAME_USB_NOTE = ("Note: --target windows is the file set for the SAME USB as the Windows installer "
+                                      "(sources\\$OEM$). For the files of a separate Windows seed drive "
+                                      "(harden.cmd, audit.cmd, undo.cmd), use --target windows-seed.")
+# ===== end hardening2: cli =====
 
 
 def _hardening_files(kind):
-    """(volume label or None, validated {relative_path: bytes}) for 'windows' or a seed target.
+    """(volume label or None, validated {relative_path: bytes}) for 'windows', 'windows-seed' or a seed target.
 
     The shared validator that build_usb()/build_seed_usb() apply is used here too, so a plan or a
     folder never holds files the engine would refuse. A refusal becomes a CliError.
+    Note that 'windows' here is always the same-USB set; for `harden-seed --target windows` pass 'windows-seed' (see _seed_files_kind).
     """
     try:
         if kind == "windows":
             label, files = None, hardening_files_windows(HARDENING_BASELINE)
+        elif kind == HARDEN_FILES_WINDOWS_SEED:
+            label, files = hardening_files_seed(SEED_WINDOWS, HARDENING_BASELINE)
         else:
             label, files = hardening_files_seed(kind, HARDENING_BASELINE)
         return label, validate_seed_files(files)
     except ValueError as e:
         raise CliError(f"The hardening files are not valid: {e}") from None
+
+
+def _seed_files_kind(target):
+    """The _hardening_files() kind of a `harden-seed` target (its 'windows' is the seed drive, not the same-USB set)."""
+    return HARDEN_FILES_WINDOWS_SEED if target == SEED_WINDOWS else target
 
 
 def _hardening_file_names(kind):
@@ -10047,23 +12725,23 @@ def _prepare_seed(args):
     disks = _list_disks()
     disk = next((d for d in disks if d.get("id") == disk_id), None)
     if disk is None:
-        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+        raise CliError(f"{dev_path(disk_id)} is not an eligible USB drive. "
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     try:  # a drive known to be too small is refused first: before the plan, the dry run and any confirmation
         check_seed_target_size(disk.get("size"))
     except ValueError as e:
         raise CliError(str(e), EXIT_USAGE) from None
-    label, files = _hardening_files(args.target)
+    label, files = _hardening_files(_seed_files_kind(args.target))
     names = sorted(files)
     missing = get_missing_dependencies(MODE_SEED)
     if missing:
         raise CliError("Missing required tools: " + ", ".join(missing) + ". " + missing_dependencies_hint(missing))
     eject = not args.no_eject
-    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive",
-             f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{label}')",
+    steps = [f"Re-check that {dev_path(disk_id)} is still the listed USB drive",
+             f"Erase {dev_path(disk_id)} and format it as GPT + FAT32 ('{label}')",
              f"Copy {len(names)} seed files: " + ", ".join(names),
-             "Read the drive back and compare every file byte for byte",
-             "Eject the drive" if eject else "Leave the drive connected (--no-eject)"]
+             "Read the drive back and compare every file byte for byte"]
+    steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
     # The identity (serial, WWN, ...) is kept for the safety re-check, like in _prepare_write().
     return {"iso": None, "iso_size": 0, "mode": MODE_SEED, "target": args.target, "volume_label": label,
             "files": names, "disk": _disk_summary(disk), "identity": tuple(disk.get("identity") or ()),
@@ -10073,7 +12751,8 @@ def _prepare_seed(args):
 
 def cmd_harden_seed(args):
     """Erase a small separate USB drive and write the hardening seed files on it (never an OS image)."""
-    result = {"ok": False, "mode": MODE_SEED, "target": args.target, "disk": None, "verified": False,
+    result = {"ok": False, "mode": MODE_SEED, "target": args.target,
+              "disk": None, "verified": False,
               "ejected": False, "error": None, "exit_code": EXIT_ERROR}
     try:
         plan = _prepare_seed(args)
@@ -10119,7 +12798,7 @@ def _fill_staging_folder(stage, files):
             while part != stage:  # makedirs applies the umask to every level it creates
                 os.chmod(part, 0o700)
                 part = os.path.dirname(part)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), PRIVATE_FILE_MODE)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | O_BINARY, PRIVATE_FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         os.chmod(target, PRIVATE_FILE_MODE)
@@ -10186,6 +12865,8 @@ def cmd_harden_files(args):
             _out(name)
     _err(f"Wrote {len(names)} files to {out}. They are plain text: read them before using them. "
          "No drive was touched.")
+    if target == "windows":
+        _err(HARDEN_FILES_WINDOWS_SAME_USB_NOTE)
     return EXIT_OK
 # ===== end hardening: cli =====
 
@@ -10273,7 +12954,7 @@ def build_cli_parser():
     p.add_argument("--iso", required=True, metavar="ISO",
                    help="path of the ISO or disk image (.bin for ChromeOS Flex; use fetch-chromeos to get it)")
     p.add_argument("--disk", required=True, metavar="DISKID",
-                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux, PhysicalDrive3 on Windows)")
     p.add_argument("--mode", choices=[MODE_AUTO, *ALL_MODES], default=MODE_AUTO,
                    help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
                         "chromeos: raw write of a ChromeOS Flex disk image; auto: detect (default)")
@@ -10286,14 +12967,16 @@ def build_cli_parser():
             epilog="The drive is ERASED. Use --dry-run first to see the plan without changing anything. "
                    "The seed files never choose a disk or create accounts.")
     p.add_argument("--target", required=True, choices=SEED_TARGETS,
-                   help="ubuntu (autoinstall), fedora (kickstart) or debian (script + preseed)")
+                   help="ubuntu (autoinstall), fedora (kickstart), debian (script + preseed) or "
+                        "windows (Windows 11: harden.cmd to run after install)")
     p.add_argument("--disk", required=True, metavar="DISKID",
-                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux, PhysicalDrive3 on Windows)")
     _add_write_flags(p)
     p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
             epilog="Nothing is overwritten: a folder that is not empty is refused.")
     p.add_argument("--target", required=True, choices=HARDEN_FILES_TARGETS,
-                   help="windows, ubuntu, fedora or debian")
+                   help="windows (files for the same USB as Windows), windows-seed (files for the Windows seed "
+                        "drive), ubuntu, fedora or debian")
     p.add_argument("--out", required=True, metavar="DIR", help="a new folder, or an empty one")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     return parser
@@ -10318,9 +13001,17 @@ def main(argv=None):
         except SystemExit as e:  # --help / --version (0) or a usage error (2)
             return e.code if isinstance(e.code, int) else (EXIT_OK if e.code is None else EXIT_USAGE)
         command = args.command or "gui"
-    if command in ("gui", "list", "write", "harden-seed") and not (IS_MAC or IS_LINUX):
-        _err("This script supports macOS and Linux only.")
+    if command in ("gui", "list", "write", "harden-seed") and not (IS_MAC or IS_LINUX or IS_WINDOWS):
+        _err("This script supports Windows 11, macOS and Linux only.")
         return EXIT_ERROR
+    if IS_WINDOWS and command == "gui":
+        windows_enable_dpi_awareness()
+        if not windows_is_admin():
+            # Writing a drive needs Administrator: ask Windows for it now (the UAC prompt) instead of failing later.
+            if windows_relaunch_elevated():
+                return EXIT_OK  # the elevated copy takes over
+            _err("EPMA USB Creator needs Administrator rights to write a USB drive, and they were not granted. "
+                 "Drives can be listed but not written.")
     debug = bool(getattr(args, "debug", False))
     try:
         if command == "gui":
