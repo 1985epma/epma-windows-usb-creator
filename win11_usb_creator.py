@@ -5172,6 +5172,15 @@ def describe_hardening_windows(profile):
     return [f"{text} -- risk: {risk}" for _sid, text, risk in WINDOWS_HARDENING_SETTINGS]
 
 
+def describe_hardening_windows_applied(profile):
+    """The lines of describe_hardening_windows() for what the scripts apply BY DEFAULT: the opt-in settings
+    (`-DisableLegacyNetwork`, never used by SetupComplete.cmd or the launchers) are left out."""
+    if not _windows_hardening_check(profile):
+        return []
+    return [f"{text} -- risk: {risk}" for sid, text, risk in WINDOWS_HARDENING_SETTINGS
+            if sid not in WINDOWS_HARDENING_OPTIN]
+
+
 def _windows_setupcomplete_cmd():
     # SetupComplete.cmd runs once as SYSTEM at the very end of Setup (before the first sign-in), from
     # %windir%\Setup\Scripts. It must never make Setup fail, so every path ends in `exit /b 0`. No parenthesised
@@ -7216,8 +7225,10 @@ def _windows_seed_readme(profile, during_setup):
     para("A log is written to " + SEED_WINDOWS_LOG_SHOWN + ". A restart may be needed for a few "
          "settings. Running harden.cmd twice changes nothing more.")
     heading("What the script changes")
-    for line in describe_hardening_windows(profile):
+    for line in describe_hardening_windows_applied(profile):
         para(line.split(" -- risk:", 1)[0], "- ", "  ")
+    para("Opt-in, never applied by default: run harden.ps1 yourself with -DisableLegacyNetwork to also turn "
+         "off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).", "- ", "  ")
     heading("What it leaves alone")
     for _sid, text, why in WINDOWS_HARDENING_NOT_CHANGED:
         para(text + ". " + why, "- ", "  ")
@@ -8047,7 +8058,7 @@ def help_sections():
     retries = DOWNLOAD_MAX_ATTEMPTS - 1
     audit_mb = f"{AUDIT_LOG_MAX_BYTES / 1_000_000:g}"
     windows_settings = "\n".join("• " + line.split(" -- risk:")[0] for line in
-                                 describe_hardening_windows(HARDENING_BASELINE))
+                                 describe_hardening_windows_applied(HARDENING_BASELINE))
     windows_not_changed = "\n".join("• " + text + ": " + why for _id, text, why in WINDOWS_HARDENING_NOT_CHANGED)
     return [
         ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
@@ -9392,7 +9403,7 @@ class App(_TkBase):
     @staticmethod
     def _hardening_details_text():
         """The list of settings the Windows option applies, straight from the engine's own description."""
-        lines = [_(text) for text in map(str, describe_hardening_windows(HARDENING_BASELINE))]
+        lines = [_(text) for text in map(str, describe_hardening_windows_applied(HARDENING_BASELINE))]
         lines = [line if line.startswith("•") else "• " + line for line in lines]
         footer = _("The settings are applied at the end of Windows setup by a script, and every change is written "
                    "to {log}. You choose the disk, the account and the edition during setup as usual."

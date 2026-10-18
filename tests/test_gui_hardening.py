@@ -237,7 +237,7 @@ class HardeningLayoutTests(GuiTestCase):
         win = self.win
         self.assertEqual(win.hardening_toggle.cget("text"), "▸ What does it change?")
         self.assertEqual(win.hardening_details.winfo_manager(), "")
-        with mock.patch.object(app, "describe_hardening_windows", create=True,
+        with mock.patch.object(app, "describe_hardening_windows_applied", create=True,
                                return_value=["Turns thing A on", "Turns thing B off"]) as describe:
             win.hardening_toggle.set_open(True)
         describe.assert_called_once_with(app.HARDENING_BASELINE)
@@ -351,7 +351,7 @@ class HardeningLayoutTests(GuiTestCase):
     def test_every_line_of_the_list_goes_through_the_translation(self):
         lines = ["Turns thing A on -- risk: x", "Turns thing B off -- risk: y"]
         translated = {lines[0]: "Liga A -- risco: x", lines[1]: "Desliga B -- risco: y"}
-        with mock.patch.object(app, "describe_hardening_windows", create=True, return_value=lines), \
+        with mock.patch.object(app, "describe_hardening_windows_applied", create=True, return_value=lines), \
                 mock.patch.dict(app.PT_BR, translated), mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
             text = app.App._hardening_details_text()
         self.assertIn("• Liga A -- risco: x", text)

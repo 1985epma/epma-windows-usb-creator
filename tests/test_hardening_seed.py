@@ -1071,11 +1071,13 @@ class WindowsSeedTests(SeedTestBase):
 
     def test_readme_lists_every_setting_and_what_is_left_alone(self):
         text = " ".join(self.text(app.SEED_WINDOWS, "README.txt").split())
-        lines = app.describe_hardening_windows(app.HARDENING_BASELINE)
+        lines = app.describe_hardening_windows_applied(app.HARDENING_BASELINE)
         self.assertGreater(len(lines), 5)
+        self.assertLess(len(lines), len(app.describe_hardening_windows(app.HARDENING_BASELINE)))
         for line in lines:
             summary = line.split(" -- risk:")[0]
             self.assertIn(" ".join(summary.split()), text)
+        self.assertIn("-DisableLegacyNetwork", text)     # the opt-in settings are named as opt-in, not listed as applied
         self.assertNotIn("-- risk", text)
         for _sid, item, _why in app.WINDOWS_HARDENING_NOT_CHANGED:
             self.assertIn(item, text)
