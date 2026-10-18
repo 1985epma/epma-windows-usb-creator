@@ -33,8 +33,11 @@ Scenarios (each with its own loop device, always detached in `finally`):
                 too small and when canceled before the start (device untouched), then GPT + ONE
                 FAT32 partition (not an EFI system partition) with the label from the seed, every
                 file byte for byte (nested folder, '$' in a name), and verify_seed_files must
-                reject a changed and a missing file. Only the USB-only safety re-check is stood in
-                for (a loop device is not a USB drive); everything else is the real code.
+                reject a changed and a missing file. Also the Windows seed ("windows", with and
+                without during_setup): flat .cmd/.ps1/.xml/.txt names with CRLF line endings and a
+                UTF-8 BOM must come back byte for byte, label EPMA-SEED. Only the USB-only safety
+                re-check is stood in for (a loop device is not a USB drive); everything else is the
+                real code.
 
 Environment:
   E2E_REQUIRE=1   a missing prerequisite is a FAILURE instead of a skip (CI sets this).
@@ -465,6 +468,23 @@ def seed_test_files():
     }
 
 
+# ===== hardening2: engine-cli =====
+def windows_seed_test_files(during_setup):
+    """A stand-in for the Windows seed drive's files: flat names, CRLF line endings, a BOM on the .ps1 file."""
+    files = {
+        "harden.cmd": b"@echo off\r\nrem stand-in\r\n",
+        "audit.cmd": b"@echo off\r\n",
+        "undo.cmd": b"@echo off\r\n",
+        "harden.ps1": b"\xef\xbb\xbf# stand-in\r\n" + b"Write-Output 'x'\r\n" * 2000,
+        "README.txt": b"seed drive e2e (windows)\r\n",
+    }
+    if during_setup:
+        files["autounattend.xml"] = b'<?xml version="1.0" encoding="utf-8"?>\r\n<unattend/>\r\n'
+        files["EPMA-SEED.txt"] = b"marker\r\n"
+    return files
+# ===== end hardening2: engine-cli =====
+
+
 @contextlib.contextmanager
 def seed_engine_patches(app, loop_name, label, files):
     """Point build_seed_usb at the loop device: the real USB-only listing would (rightly) not list it.
@@ -478,7 +498,7 @@ def seed_engine_patches(app, loop_name, label, files):
         log(f"(e2e) safety re-check stands in for the USB listing: {dev}")
 
     with mock.patch.object(app, "hardening_files_seed", create=True,
-                           side_effect=lambda target, profile: (label, dict(files))), \
+                           side_effect=lambda target, profile, **_kw: (label, dict(files))), \
             mock.patch.object(app, "reverify_target_disk", side_effect=recheck):
         yield
 
@@ -562,6 +582,17 @@ def scenario_seed_drive(app, workdir, priv, rec):
         with seed_engine_patches(app, name, "EPMA-SEED", files):
             app.build_seed_usb("debian", name, Recorder().log, priv, expected_size=size)
         check_seed_drive(app, dev, "EPMA-SEED", files)
+
+        # ===== hardening2: engine-cli =====
+        # The Windows seed drive, in both modes. The names are flat and the line endings are CRLF: nothing in the
+        # write or read-back path may change a byte (no text mode, no newline translation).
+        for during_setup in (False, True):
+            win_files = windows_seed_test_files(during_setup)
+            with seed_engine_patches(app, name, "EPMA-SEED", win_files):
+                app.build_seed_usb("windows", name, Recorder().log, priv, expected_size=size,
+                                   during_setup=during_setup)
+            check_seed_drive(app, dev, "EPMA-SEED", win_files)
+        # ===== end hardening2: engine-cli =====
 # ===== end hardening: engine-seed =====
 
 

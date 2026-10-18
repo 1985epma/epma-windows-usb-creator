@@ -147,7 +147,8 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / harden.ps1 (and, optionally, an answer file)
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -6230,9 +6231,13 @@ def check_seed_target_size(size):
 
 
 def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, cancel_event=None, eject=True,
-                   profile=HARDENING_BASELINE):
-    """Create a seed drive for `target` (ubuntu, fedora or debian): GPT + FAT32 with the label and the files
-    `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
+                   profile=HARDENING_BASELINE, during_setup=False):
+    """Create a seed drive for `target` (ubuntu, fedora, debian or windows): GPT + FAT32 with the label and the
+    files `hardening_files_seed(target, profile)` returns, verified by reading every file back, then ejected.
+
+    `during_setup` (EXPERIMENTAL) is only valid with SEED_WINDOWS: the drive then also carries an answer
+    file (autounattend.xml) that makes Windows Setup run the hardening script. Any other target raises
+    ValueError before anything is touched.
 
     Returns True if the drive was ejected. Raises ValueError (nothing touched) for a bad target, label, file
     set or drive, and OperationCanceled on a cancel (see its docstring: `drive_touched` is False when nothing on
@@ -6242,8 +6247,15 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
         raise ValueError(f"Unknown seed target: {target!r}")
     if profile not in HARDENING_PROFILES:
         raise ValueError(f"Unknown hardening profile: {profile!r}")
+    during_setup = bool(during_setup)
+    if during_setup and target != SEED_WINDOWS:  # hardening2: the answer-file mode exists for Windows only
+        raise ValueError("The during-setup (answer file) mode is only available for the Windows seed drive. "
+                         "Nothing was changed.")
     validate_device_name(dev)
-    label, files = hardening_files_seed(target, profile)
+    if target == SEED_WINDOWS:  # the other targets have no such option
+        label, files = hardening_files_seed(target, profile, during_setup=during_setup)
+    else:
+        label, files = hardening_files_seed(target, profile)
     label = validate_seed_label(label)
     files = validate_seed_files(files)
     check_seed_target_size(expected_size)
@@ -6263,7 +6275,8 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
             raise OperationCanceled("Canceled by the user before the drive was touched.",
                                     drive_touched=False) from None
         audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing the {target} hardening seed "
-              f"(profile={profile}, label={label}, files={len(files)}, "
+              f"(profile={profile}, label={label}, {'during_setup=True, ' if during_setup else ''}"
+              f"files={len(files)}, "
               f"bytes={sum(len(d) for d in files.values())}, sha256={_seed_manifest_sha256(files)})")
         try:
             with prevent_sleep(log):
@@ -6287,7 +6300,8 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
         except Exception as e:
             audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
             raise
-        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)}"
+              f"{', during_setup=True' if during_setup else ''})")
         return bool(ejected)
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -6839,8 +6853,8 @@ def help_sections():
 • fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
 • write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
-• harden-seed --target ubuntu|fedora|debian --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
-• harden-files --target windows|ubuntu|fedora|debian --out DIR [--json] — write the same hardening files into a new or empty folder. No drive is involved and no administrator rights are needed.
+• harden-seed --target ubuntu|fedora|debian|windows [--during-setup] --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it. --during-setup (EXPERIMENTAL) is only for --target windows.
+• harden-files --target windows|windows-seed|ubuntu|fedora|debian [--during-setup] --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive. --during-setup (EXPERIMENTAL) is only for windows-seed. No drive is involved and no administrator rights are needed.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -6853,6 +6867,7 @@ def help_sections():
 ## harden-seed and harden-files
 • harden-seed asks for the same confirmation as write (type the disk identifier, or pass --yes), checks the drive the same way, verifies what it wrote and ejects. The seed drive is erased like any other target.
 • The seed files never choose a disk, never partition or format anything and never create accounts or set passwords: storage and the user account stay interactive in the installer.
+• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows. With --during-setup (EXPERIMENTAL) it also adds an answer file (autounattend.xml) and a marker file so that Windows Setup runs the hardening script by itself; --dry-run lists every file name and says so. Any other target with --during-setup is a usage error (exit {EXIT_USAGE}).
 • harden-files refuses a folder that is not empty and never overwrites anything.
 
 ## Exit codes
@@ -9671,7 +9686,8 @@ def _print_plan(plan, to_stdout):
     if disk.get("model"):
         emit(f"  Model: {disk['model']}")
     if plan["mode"] == MODE_SEED:
-        emit(f"  Seed : {plan['target']} (volume label {plan['volume_label']})")
+        emit(f"  Seed : {plan['target']} (volume label {plan['volume_label']})"
+             + (" - during Windows setup, EXPERIMENTAL" if plan.get("during_setup") else ""))
         emit(f"  Files: {', '.join(plan['files'])}")
     else:
         emit(f"  ISO  : {plan['iso']} ({human_size(plan['iso_size'])})")
@@ -9899,7 +9915,8 @@ def _call_engine(plan, log, priv, progress, cancel):
     if plan["mode"] == MODE_SEED:
         return build_seed_usb(plan["target"], plan["disk"]["id"], log, priv,
                               expected_size=plan["disk"].get("size"), progress=progress,
-                              cancel_event=cancel, eject=plan["eject"], profile=HARDENING_BASELINE)
+                              cancel_event=cancel, eject=plan["eject"], profile=HARDENING_BASELINE,
+                              during_setup=bool(plan.get("during_setup")))
     extra = {"hardening": plan["hardening"]} if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else {}
     return build_usb(plan["iso"], plan["disk"]["id"], log, priv,
                      expected_size=plan["disk"].get("size"), mode=plan["mode"],
@@ -9928,6 +9945,7 @@ def _run_write(args, plan, result):
     started = time.time()
     audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}"
           + (f" target={plan['target']}" if plan["mode"] == MODE_SEED else "")
+          + (" during_setup=True" if plan.get("during_setup") else "")
           + (f" hardening={plan['hardening']}" if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else ""))
     ejected, failure = None, None
     try:
@@ -10014,23 +10032,43 @@ def cmd_write(args):
 # ===== hardening: cli =====
 HARDENED_WINDOWS_ONLY = ("--hardened is only available for Windows images (--mode windows). For Linux use "
                          f"'{CLI_PROG} harden-seed' with a separate USB drive.")
-HARDEN_FILES_TARGETS = ("windows", *SEED_TARGETS)
+# ===== hardening2: cli =====
+# `harden-files --target windows` is the set that goes on the SAME USB as Windows (unchanged); the Windows
+# SEED drive (a second small USB) has its own name here, because SEED_WINDOWS is also "windows".
+HARDEN_FILES_WINDOWS_SEED = "windows-seed"
+HARDEN_FILES_TARGETS = ("windows", HARDEN_FILES_WINDOWS_SEED,
+                        *(t for t in SEED_TARGETS if t != SEED_WINDOWS))
+DURING_SETUP_ONLY_WINDOWS = ("--during-setup only works with the Windows seed drive "
+                             "(harden-seed --target windows, or harden-files --target windows-seed).")
+DURING_SETUP_EXPERIMENTAL = ("EXPERIMENTAL: the answer file (autounattend.xml) makes Windows Setup run the "
+                             "hardening script. It was never tested on a real installation; an invalid answer "
+                             "file can stop Windows Setup. The default (run harden.cmd after install) is safer.")
+# ===== end hardening2: cli =====
 
 
-def _hardening_files(kind):
-    """(volume label or None, validated {relative_path: bytes}) for 'windows' or a seed target.
+def _hardening_files(kind, during_setup=False):
+    """(volume label or None, validated {relative_path: bytes}) for 'windows', 'windows-seed' or a seed target.
 
     The shared validator that build_usb()/build_seed_usb() apply is used here too, so a plan or a
     folder never holds files the engine would refuse. A refusal becomes a CliError.
+    `during_setup` only matters for the Windows seed drive ('windows-seed'). Note that 'windows' here is always
+    the same-USB set; for `harden-seed --target windows` pass 'windows-seed' (see _seed_files_kind).
     """
     try:
         if kind == "windows":
             label, files = None, hardening_files_windows(HARDENING_BASELINE)
+        elif kind == HARDEN_FILES_WINDOWS_SEED:
+            label, files = hardening_files_seed(SEED_WINDOWS, HARDENING_BASELINE, during_setup=bool(during_setup))
         else:
             label, files = hardening_files_seed(kind, HARDENING_BASELINE)
         return label, validate_seed_files(files)
     except ValueError as e:
         raise CliError(f"The hardening files are not valid: {e}") from None
+
+
+def _seed_files_kind(target):
+    """The _hardening_files() kind of a `harden-seed` target (its 'windows' is the seed drive, not the same-USB set)."""
+    return HARDEN_FILES_WINDOWS_SEED if target == SEED_WINDOWS else target
 
 
 def _hardening_file_names(kind):
@@ -10040,6 +10078,9 @@ def _hardening_file_names(kind):
 
 def _prepare_seed(args):
     """Validate everything for `harden-seed` and build the plan. Raises CliError; touches nothing."""
+    during_setup = bool(getattr(args, "during_setup", False))
+    if during_setup and args.target != SEED_WINDOWS:
+        raise CliError(DURING_SETUP_ONLY_WINDOWS, EXIT_USAGE)
     try:
         disk_id = validate_device_name(normalize_typed_identifier(args.disk))
     except ValueError as e:
@@ -10053,7 +10094,7 @@ def _prepare_seed(args):
         check_seed_target_size(disk.get("size"))
     except ValueError as e:
         raise CliError(str(e), EXIT_USAGE) from None
-    label, files = _hardening_files(args.target)
+    label, files = _hardening_files(_seed_files_kind(args.target), during_setup)
     names = sorted(files)
     missing = get_missing_dependencies(MODE_SEED)
     if missing:
@@ -10062,18 +10103,21 @@ def _prepare_seed(args):
     steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive",
              f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{label}')",
              f"Copy {len(names)} seed files: " + ", ".join(names),
-             "Read the drive back and compare every file byte for byte",
-             "Eject the drive" if eject else "Leave the drive connected (--no-eject)"]
+             "Read the drive back and compare every file byte for byte"]
+    if during_setup:
+        steps.append(DURING_SETUP_EXPERIMENTAL)
+    steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
     # The identity (serial, WWN, ...) is kept for the safety re-check, like in _prepare_write().
     return {"iso": None, "iso_size": 0, "mode": MODE_SEED, "target": args.target, "volume_label": label,
             "files": names, "disk": _disk_summary(disk), "identity": tuple(disk.get("identity") or ()),
-            "steps": steps, "eject": eject, "dry_run": bool(args.dry_run),
+            "during_setup": during_setup, "steps": steps, "eject": eject, "dry_run": bool(args.dry_run),
             "hardening": HARDENING_BASELINE, "hardening_files": []}
 
 
 def cmd_harden_seed(args):
     """Erase a small separate USB drive and write the hardening seed files on it (never an OS image)."""
-    result = {"ok": False, "mode": MODE_SEED, "target": args.target, "disk": None, "verified": False,
+    result = {"ok": False, "mode": MODE_SEED, "target": args.target,
+              "during_setup": bool(getattr(args, "during_setup", False)), "disk": None, "verified": False,
               "ejected": False, "error": None, "exit_code": EXIT_ERROR}
     try:
         plan = _prepare_seed(args)
@@ -10151,6 +10195,9 @@ def _install_staged(stage, out, out_existed):
 def cmd_harden_files(args):
     """Write the hardening files for one target into a new or empty folder. No drive, no privileges."""
     target = args.target
+    during_setup = bool(getattr(args, "during_setup", False))
+    if during_setup and target != HARDEN_FILES_WINDOWS_SEED:
+        raise CliError("--during-setup only works with --target windows-seed.", EXIT_USAGE)
     out = os.path.abspath(os.path.expanduser(args.out))
     if os.path.islink(out):
         raise CliError(f"{out} is a symbolic link. Pass a real folder that is new or empty.")
@@ -10164,7 +10211,7 @@ def cmd_harden_files(args):
     parent = os.path.dirname(out)
     if not os.path.isdir(parent):
         raise CliError(f"The parent folder does not exist: {parent}")
-    label, files = _hardening_files(target)
+    label, files = _hardening_files(target, during_setup)
     stage = None
     try:
         # Staging beside the destination keeps the final move on one filesystem (an atomic rename).
@@ -10179,13 +10226,15 @@ def cmd_harden_files(args):
             shutil.rmtree(stage, ignore_errors=True)
     names = sorted(files)
     if args.json:
-        _out(json.dumps({"target": target, "out": out, "volume_label": label,
+        _out(json.dumps({"target": target, "during_setup": during_setup, "out": out, "volume_label": label,
                          "files": [{"path": n, "bytes": len(files[n])} for n in names]}, indent=2))
     else:
         for name in names:
             _out(name)
     _err(f"Wrote {len(names)} files to {out}. They are plain text: read them before using them. "
          "No drive was touched.")
+    if during_setup:
+        _err(DURING_SETUP_EXPERIMENTAL)
     return EXIT_OK
 # ===== end hardening: cli =====
 
@@ -10286,14 +10335,21 @@ def build_cli_parser():
             epilog="The drive is ERASED. Use --dry-run first to see the plan without changing anything. "
                    "The seed files never choose a disk or create accounts.")
     p.add_argument("--target", required=True, choices=SEED_TARGETS,
-                   help="ubuntu (autoinstall), fedora (kickstart) or debian (script + preseed)")
+                   help="ubuntu (autoinstall), fedora (kickstart), debian (script + preseed) or "
+                        "windows (Windows 11: harden.cmd to run after install)")
     p.add_argument("--disk", required=True, metavar="DISKID",
                    help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+    p.add_argument("--during-setup", action="store_true",
+                   help="EXPERIMENTAL, --target windows only: also add an answer file (autounattend.xml) so "
+                        "that Windows Setup runs the hardening script during installation")
     _add_write_flags(p)
     p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
             epilog="Nothing is overwritten: a folder that is not empty is refused.")
     p.add_argument("--target", required=True, choices=HARDEN_FILES_TARGETS,
-                   help="windows, ubuntu, fedora or debian")
+                   help="windows (files for the same USB as Windows), windows-seed (files for the Windows seed "
+                        "drive), ubuntu, fedora or debian")
+    p.add_argument("--during-setup", action="store_true",
+                   help="EXPERIMENTAL, --target windows-seed only: include the answer file (autounattend.xml)")
     p.add_argument("--out", required=True, metavar="DIR", help="a new folder, or an empty one")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     return parser

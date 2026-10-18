@@ -193,6 +193,12 @@ writes the same files into a folder, without a drive.
 - **Experimental.** The PowerShell script was never executed by the authors' tooling (no PowerShell available) and
   the Linux script and seeds were run only against simulated systems; real installs were not tested. Treat the
   feature as experimental and try it on a spare computer or a virtual machine first.
+- **The Windows seed target is data too.** `harden-seed --target windows` (and the window's Windows 11 seed
+  options) writes `harden.cmd`, `audit.cmd`, `undo.cmd`, `harden.ps1` and a README to a separate seed drive for
+  the person to run, as administrator, on an installed Windows; the optional `--during-setup` mode adds an answer
+  file (`autounattend.xml`) and is **experimental** (an invalid answer file can stop Windows Setup). The files go
+  through the same validator, erase, pinning, read-back (byte for byte) and eject checks as any other target;
+  this program never runs them.
 - **This is not a compliance claim.** The settings are inspired by common baselines, nothing more. The
   program does not certify, audit or claim that a system meets any standard or regulation; review the
   settings against your own requirements.
