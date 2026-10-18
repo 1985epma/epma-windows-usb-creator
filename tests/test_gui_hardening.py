@@ -17,7 +17,7 @@ from tests.test_fixes_gui import USB_DISK, GuiTestCase
 
 NEW_TEXTS = (
     "Hardening seed", "Auto-install files", "Second USB drive", "Hardening scripts",
-    "Hardening scripts and answer file", "More about this choice", "Add hardening settings to the Windows installation (optional)",
+    "Add hardening settings to the Windows installation (optional)",
     "What does it change?", "Hide the list", "Install target:", "Ubuntu (autoinstall)", "Fedora / RHEL (kickstart)",
     "Debian (script + preseed)", "Create Seed Drive", "the hardening seed files",
     "Windows 11 and add the hardening files", "Seed drive created and verified",
@@ -32,33 +32,19 @@ NEW_TEXTS = (
 
 # hardening2: the texts the Windows 11 choices of the seed card add (each needs a Portuguese text that differs)
 NEW_TEXTS_WINDOWS = (
-    "Windows 11 (run after install)", "Windows 11 (during setup, experimental)",
+    "Windows 11 (run after install)",
     "Run harden.cmd as administrator on a Windows 11 that is already installed; audit.cmd shows a report first, "
     "undo.cmd goes back.",
-    "EXPERIMENTAL, never tested on real Windows. Plug this drive in BEFORE you start the Windows installer and "
-    "keep it in until after the first restart. Only 64-bit Intel/AMD (x64) PCs; on ARM use \"run after install\".",
-    "the hardening seed files (experimental: includes an answer file for Windows Setup)",
     "The files were checked on the drive and it was ejected — you can unplug it now.",
     "The files were checked on the drive, but it could not be ejected automatically. Eject it from the file "
     "manager before unplugging.",
-    "Windows 11 setup drive (experimental) created and verified",
     "Windows 11 hardening drive created and verified",
-    "EXPERIMENTAL: plug it in next to the Windows installer USB drive BEFORE you start the Windows installer, and "
-    "keep it in until after the first restart of the installation (the hardening runs at the end of Setup). Only "
-    "64-bit Intel/AMD (x64) PCs are covered; on an ARM PC use \"run after install\". If nothing was hardened, run "
-    "audit.cmd on this drive to see what is in effect; the log is {log}. An invalid answer file can stop an "
-    "installation, and the scripts were never run on real Windows: try it on a test machine first.",
     "On a Windows 11 that is already installed, open this drive and run audit.cmd (shows a report, changes "
     "nothing), harden.cmd (as administrator) or undo.cmd (goes back). The scripts were never run on real Windows: "
     "try them on a test machine first.",
 )
 RADIO_TEXTS = ("Ubuntu (autoinstall)", "Fedora / RHEL (kickstart)", "Debian (script + preseed)",
-               "Windows 11 (run after install)", "Windows 11 (during setup, experimental)")
-# what the (patched) engine description of the answer file says: the first lines are shown in the card's note
-FAKE_DURING_SETUP = ["EXPERIMENTAL: this adds an answer file (autounattend.xml) for Windows Setup.",
-                     "An invalid answer file can stop an installation.",
-                     "Setup stays interactive for the disk, the account and the edition.",
-                     "A fourth line that is not shown."]
+               "Windows 11 (run after install)")
 
 
 class SeedCardTableTests(unittest.TestCase):
@@ -84,50 +70,44 @@ class SeedCardTableTests(unittest.TestCase):
         self.assertEqual(app.SEED_TARGETS, (app.SEED_UBUNTU, app.SEED_FEDORA, app.SEED_DEBIAN, app.SEED_WINDOWS))
         self.assertEqual([t for _k, t in app.App.seed_target_texts()], list(RADIO_TEXTS))
 
-    def test_each_radio_key_maps_to_a_target_and_the_answer_file_flag(self):
+    def test_there_are_four_radios_and_each_key_maps_to_its_target_only(self):
+        self.assertEqual(len(app.SEED_CHOICES), 4)
         self.assertEqual([k for k, _t in app.App.seed_target_texts()], list(app.SEED_CHOICES))
         self.assertEqual(app.SEED_CHOICES, {
-            app.SEED_UBUNTU: (app.SEED_UBUNTU, False), app.SEED_FEDORA: (app.SEED_FEDORA, False),
-            app.SEED_DEBIAN: (app.SEED_DEBIAN, False), app.SEED_WINDOWS: (app.SEED_WINDOWS, False),
-            app.SEED_CHOICE_WINDOWS_SETUP: (app.SEED_WINDOWS, True)})
-        for target, _during in app.SEED_CHOICES.values():
+            app.SEED_UBUNTU: app.SEED_UBUNTU, app.SEED_FEDORA: app.SEED_FEDORA,
+            app.SEED_DEBIAN: app.SEED_DEBIAN, app.SEED_WINDOWS: app.SEED_WINDOWS})
+        for target in app.SEED_CHOICES.values():
+            self.assertIsInstance(target, str)  # a target, not a (target, flag) pair
             self.assertIn(target, app.SEED_TARGETS)
-        self.assertEqual({t for t, _d in app.SEED_CHOICES.values()}, set(app.SEED_TARGETS))
+        self.assertEqual(set(app.SEED_CHOICES.values()), set(app.SEED_TARGETS))
+
+    def test_no_radio_and_no_note_mentions_the_experimental_mode(self):
+        for lang in ("en", "pt"):
+            with mock.patch.object(app, "ACTIVE_LANGUAGE", lang):
+                texts = [t for _k, t in app.App.seed_target_texts()]
+                texts += [app.App.seed_target_note(None, choice) for choice in app.SEED_CHOICES]
+                texts += [app.App.seed_step_heading(choice) for choice in app.SEED_CHOICES]
+                texts += [part for ejected in (True, False) for part in app.App._windows_seed_success_texts(ejected)]
+            for text in texts:
+                with self.subTest(language=lang, text=text[:50]):
+                    self.assertNotIn("experimental", text.lower())
+                    self.assertNotIn("answer file", text.lower())
+                    self.assertNotIn("arquivo de resposta", text.lower())
+        self.assertFalse(hasattr(app, "SEED_CHOICE_WINDOWS_SETUP"))
+        self.assertFalse(hasattr(app.App, "_seed_experimental_details"))
 
     def test_the_target_notes_are_translated(self):
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
             for choice in app.SEED_CHOICES:
-                if choice == app.SEED_CHOICE_WINDOWS_SETUP:
-                    continue  # its text comes from the engine; see the next tests
                 note = app.App.seed_target_note(None, choice)
                 self.assertTrue(note)
                 self.assertIn(note, app.PT_BR.values())
-
-    def test_the_during_setup_note_is_short_and_has_the_facts_that_matter(self):
-        note = app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)
-        self.assertEqual(note.count("EXPERIMENTAL"), 1)
-        self.assertIn("BEFORE you start the Windows installer", note)
-        self.assertIn("until after the first restart", note)
-        self.assertIn("64-bit Intel/AMD (x64)", note)
-        self.assertIn("run after install", note)  # what to use on ARM: the radio's own wording
-        self.assertLessEqual(len(note), 240)
-        self.assertNotRegex(note.lower(), r"\b(cis|stig|nist|complian|certif)")
-
-    def test_the_full_description_of_the_during_setup_choice_comes_from_the_engine(self):
-        with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                               return_value=FAKE_DURING_SETUP):
-            text = app.App._seed_experimental_details()
-        self.assertEqual(text.splitlines(), ["• " + line for line in FAKE_DURING_SETUP])
-        with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                               return_value="Adds an answer file.\n\nIt may stop Setup.\n"):
-            self.assertEqual(app.App._seed_experimental_details(), "• Adds an answer file.\n• It may stop Setup.")
 
     def test_the_step_heading_follows_the_choice(self):
         headings = {choice: app.App.seed_step_heading(choice) for choice in app.SEED_CHOICES}
         self.assertEqual({headings[c] for c in (app.SEED_UBUNTU, app.SEED_FEDORA, app.SEED_DEBIAN)},
                          {"Auto-install files"})
         self.assertEqual(headings[app.SEED_WINDOWS], "Hardening scripts")
-        self.assertEqual(headings[app.SEED_CHOICE_WINDOWS_SETUP], "Hardening scripts and answer file")
         for text in set(headings.values()):
             self.assertIn(text, app.PT_BR)
 
@@ -137,29 +117,18 @@ class SeedCardTableTests(unittest.TestCase):
                          "audit.cmd shows a report first, undo.cmd goes back.")
         self.assertEqual(app.App.seed_target_note(None, "bogus"), "")
 
-    def test_the_windows_success_texts_are_honest_per_choice(self):
-        after = app.App._windows_seed_success_texts(True, False)
-        setup = app.App._windows_seed_success_texts(True, True)
+    def test_the_windows_success_texts_are_honest(self):
+        after = app.App._windows_seed_success_texts(True)
         for name in ("audit.cmd", "harden.cmd", "undo.cmd"):
             self.assertIn(name, after[1])
         self.assertIn("never run on real Windows", after[1])
         self.assertNotIn("EXPERIMENTAL", after[1] + after[0])
-        self.assertIn("BEFORE you start the Windows installer", setup[1])
-        self.assertIn("until after the first restart of the installation", setup[1])
-        self.assertIn("Only 64-bit Intel/AMD (x64) PCs are covered", setup[1])
-        self.assertIn("on an ARM PC use \"run after install\"", setup[1])
-        self.assertIn("run audit.cmd on this drive", setup[1])
-        self.assertIn("C:\\Windows\\Temp\\epma-hardening.log", setup[1])
-        self.assertNotIn("{log}", setup[1])
-        self.assertIn("EXPERIMENTAL", setup[1])
-        self.assertIn("experimental", setup[0])
-        self.assertIn("never run on real Windows", setup[1])
-        self.assertNotEqual(after[0], setup[0])
         self.assertIn("you can unplug it now", after[1])
-        notejected = app.App._windows_seed_success_texts(False, False)[1]
+        notejected = app.App._windows_seed_success_texts(False)[1]
         self.assertIn("could not be ejected automatically", notejected)
         self.assertNotIn("you can unplug it now", notejected)
-        for text in (*after, *setup, notejected):
+        self.assertEqual(app.App._windows_seed_success_texts(False)[0], after[0])
+        for text in (*after, notejected):
             self.assertNotRegex(text.lower(), r"\b(cis|stig|nist|complian|certif)")
             self.assertNotIn("ISO", text)  # there is no image
 
@@ -289,12 +258,10 @@ class HardeningLayoutTests(GuiTestCase):
         for choice, radio in win.seed_radios.items():
             self.assertEqual(radio.winfo_class(), "TRadiobutton")
             self.assertEqual(self.state(radio), "normal", "every choice is equally usable")
-            with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                                   return_value=FAKE_DURING_SETUP):
-                radio.invoke()
-                self.assertEqual(win.seed_target_var.get(), choice)
-                self.assertEqual(str(win.seed_note.cget("text")), win.seed_target_note(choice))
-                self.assertTrue(str(win.seed_note.cget("text")))
+            radio.invoke()
+            self.assertEqual(win.seed_target_var.get(), choice)
+            self.assertEqual(str(win.seed_note.cget("text")), win.seed_target_note(choice))
+            self.assertTrue(str(win.seed_note.cget("text")))
         win.seed_radios[app.SEED_UBUNTU].invoke()
         self.assertIn("harden.cmd", win.seed_target_note(app.SEED_WINDOWS))
         self.assertIn("OEMDRV", win.seed_target_note(app.SEED_FEDORA))
@@ -307,20 +274,20 @@ class HardeningLayoutTests(GuiTestCase):
         win.update_idletasks()
         self.assertEqual(win._panel_holder.winfo_reqheight(), win.panels[app.CARD_SEED].winfo_reqheight())
 
-    def test_the_five_radios_are_in_a_grid_and_none_is_clipped(self):
+    def test_the_four_radios_are_in_a_grid_and_none_is_clipped(self):
         win = self.win
         win.geometry("780x700")
         win.select_card(app.CARD_SEED)
         win.update()
         area = win.seed_radio_area
-        self.assertEqual(len(win.seed_radios), 5)
+        self.assertEqual(len(win.seed_radios), 4)
         rows = []
         for radio in win.seed_radios.values():
             if radio.master not in rows:
                 rows.append(radio.master)
         self.assertEqual(len(rows), 2, "two rows")
         self.assertEqual([len([w for w in r.winfo_children() if w in win.seed_radios.values()]) for r in rows],
-                         [3, 2])
+                         [2, 2])
         for row in rows:
             self.assertIs(row.master, area)
         self.assertLessEqual(area.winfo_reqwidth(), 780, "the radio area asks for more than the window is wide")
@@ -335,20 +302,19 @@ class HardeningLayoutTests(GuiTestCase):
         win = self.win
         win.geometry("780x700")
         win.select_card(app.CARD_SEED)
-        with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                               return_value=FAKE_DURING_SETUP):
-            win.seed_radios[app.SEED_CHOICE_WINDOWS_SETUP].invoke()
+        for choice in app.SEED_CHOICES:
+            win.seed_radios[choice].invoke()
             win.update()
-        self.assertEqual(int(str(win.seed_note.cget("wraplength"))), app.PANEL_WRAP)
-        self.assertLessEqual(win.seed_note.winfo_reqwidth(), app.PANEL_WRAP + 2)
-        self.assertEqual(win._panel_holder.winfo_reqheight(), win.panels[app.CARD_SEED].winfo_reqheight())
+            self.assertEqual(int(str(win.seed_note.cget("wraplength"))), app.PANEL_WRAP)
+            self.assertLessEqual(win.seed_note.winfo_reqwidth(), app.PANEL_WRAP + 2, choice)
+            self.assertEqual(win._panel_holder.winfo_reqheight(), win.panels[app.CARD_SEED].winfo_reqheight())
 
     def test_the_controls_lock_during_a_write(self):
         win = self.win
         win._creating = True
         win._sync_controls()
         self.assertEqual(self.state(win.hardening_check), "disabled")
-        self.assertEqual(len(win.seed_radios), 5)
+        self.assertEqual(len(win.seed_radios), 4)
         self.assertTrue(all(self.state(r) == "disabled" for r in win.seed_radios.values()))
         win._creating = False
         win._sync_controls()
@@ -424,7 +390,6 @@ class SeedImageStepTests(GuiTestCase, TempDirTestCase):
         self.assertEqual(str(win.step_headings[2].label.cget("text")), "Auto-install files")
         self.assertEqual(win.step_headings[2].title, "Auto-install files")
         for choice, heading in ((app.SEED_WINDOWS, "Hardening scripts"),
-                                (app.SEED_CHOICE_WINDOWS_SETUP, "Hardening scripts and answer file"),
                                 (app.SEED_FEDORA, "Auto-install files")):
             win.seed_radios[choice].invoke()  # the heading says what the chosen drive carries
             self.assertEqual(str(win.step_headings[2].label.cget("text")), heading)
@@ -638,79 +603,81 @@ class WriteFlowTests(GuiTestCase):
         self.assertTrue(callable(kwargs["progress"]))
         self.assertEqual(win.confirm_erase.call_args.args[1], "the hardening seed files")
 
-    def test_each_radio_reaches_the_engine_with_its_target_and_during_setup(self):
+    def test_each_radio_reaches_the_engine_with_its_target_only(self):
         win = self.win
         win.select_card(app.CARD_SEED)
         self.confirmed()
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
         seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
-        expected = {app.SEED_UBUNTU: (app.SEED_UBUNTU, False), app.SEED_FEDORA: (app.SEED_FEDORA, False),
-                    app.SEED_DEBIAN: (app.SEED_DEBIAN, False), app.SEED_WINDOWS: ("windows", False),
-                    app.SEED_CHOICE_WINDOWS_SETUP: ("windows", True)}
+        expected = {app.SEED_UBUNTU: app.SEED_UBUNTU, app.SEED_FEDORA: app.SEED_FEDORA,
+                    app.SEED_DEBIAN: app.SEED_DEBIAN, app.SEED_WINDOWS: "windows"}
         self.assertEqual(list(win.seed_radios), list(expected))
-        for choice, (target, during_setup) in expected.items():
+        for choice, target in expected.items():
             with self.subTest(choice=choice):
                 seed.reset_mock()
                 win.seed_radios[choice].invoke()
                 self.write()
                 seed.assert_called_once()
                 self.assertEqual(seed.call_args.args[0], target)
-                self.assertIs(seed.call_args.kwargs["during_setup"], during_setup)
                 self.assertEqual(seed.call_args.args[1], "disk9")
 
-    def test_the_windows_choices_use_the_same_safety_flow_and_need_no_image(self):
+    def test_build_seed_usb_receives_only_the_target_and_the_usual_arguments(self):
+        win = self.win
+        win.select_card(app.CARD_SEED)
+        self.confirmed()
+        seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
+        for choice in app.SEED_CHOICES:
+            with self.subTest(choice=choice):
+                seed.reset_mock()
+                win.seed_radios[choice].invoke()
+                self.write()
+                args, kwargs = seed.call_args
+                self.assertEqual(len(args), 4)  # target, device, log, priv
+                self.assertEqual(set(kwargs), {"expected_size", "progress", "cancel_event"})
+                self.assertNotIn("during_setup", kwargs)
+                self.assertNotIn("profile", kwargs)  # the engine's default (the recommended baseline) applies
+
+    def test_the_windows_choice_uses_the_same_safety_flow_and_needs_no_image(self):
         win = self.win
         win.select_card(app.CARD_SEED)
         win.iso_path.set("")
         self.admin.return_value = True
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
         image = self.patch(app, "build_usb", side_effect=AssertionError("the seed drive has no image"))
         self.confirmed()
         self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True, name="seed"))
-        for choice in (app.SEED_WINDOWS, app.SEED_CHOICE_WINDOWS_SETUP):
-            with self.subTest(choice=choice):
-                self.events.clear()
-                win.seed_radios[choice].invoke()
-                self.assertEqual(self.state(win.create_btn), "normal")
-                self.write()
-                self.assertEqual(self.events, ["confirm", ("pin", ("disk9", USB_DISK.get("identity"))), "auth", "seed"])
+        win.seed_radios[app.SEED_WINDOWS].invoke()
+        self.assertEqual(self.state(win.create_btn), "normal")
+        self.write()
+        self.assertEqual(self.events, ["confirm", ("pin", ("disk9", USB_DISK.get("identity"))), "auth", "seed"])
         image.assert_not_called()
 
-    def test_the_confirmation_names_the_experimental_answer_file_only_for_during_setup(self):
+    def test_the_confirmation_names_the_seed_files_for_every_choice(self):
         win = self.win
         win.select_card(app.CARD_SEED)
         self.box.yes = True
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
         self.patch(app, "assess_disk_risk", return_value=("low", []))
-        seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
-        wanted = {
-            app.SEED_WINDOWS: ("write the hardening seed files to it", False),
-            app.SEED_CHOICE_WINDOWS_SETUP: (
-                "write the hardening seed files (experimental: includes an answer file for Windows Setup) to it",
-                True),
-        }
-        for choice, (phrase, during_setup) in wanted.items():
+        self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
+        for choice in app.SEED_CHOICES:
             with self.subTest(choice=choice):
                 self.box.calls.clear()
                 win.seed_radios[choice].invoke()
                 self.write()
                 question = [c for c in self.box.calls if c[1] == "Final confirmation"]
                 self.assertEqual(len(question), 1)
-                self.assertIn(phrase, question[0][2])
-                self.assertIs("answer file" in question[0][2], during_setup)
-                self.assertIs(seed.call_args.kwargs["during_setup"], during_setup)
+                self.assertIn("write the hardening seed files to it", question[0][2])
+                self.assertNotIn("experimental", question[0][2].lower())
+                self.assertNotIn("answer file", question[0][2])
 
-    def test_the_high_risk_typed_confirmation_also_names_the_experimental_files(self):
+    def test_the_high_risk_typed_confirmation_names_the_seed_files(self):
         win = self.win
         win.select_card(app.CARD_SEED)
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
-        win.seed_radios[app.SEED_CHOICE_WINDOWS_SETUP].invoke()
+        win.seed_radios[app.SEED_WINDOWS].invoke()
         seed = self.patch(app, "build_seed_usb", create=True, side_effect=AssertionError("must not run"))
         self.patch(app, "assess_disk_risk", return_value=("high", ["it is very large"]))
         typed = self.patch(app, "ask_typed_confirmation", return_value=False)
         win.start_create_usb()
         typed.assert_called_once()
-        self.assertIn("includes an answer file for Windows Setup", typed.call_args.args[2])
+        self.assertIn("the hardening seed files", typed.call_args.args[2])
+        self.assertNotIn("answer file", typed.call_args.args[2])
         seed.assert_not_called()
 
     def test_the_seed_card_goes_through_the_whole_safety_flow_in_order(self):
@@ -886,17 +853,13 @@ class WriteFlowTests(GuiTestCase):
         seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
         self.write()
         self.assertEqual(seed.call_args.args[0], app.SEED_FEDORA)
-        self.assertIs(seed.call_args.kwargs["during_setup"], False)
 
-    def test_the_windows_choice_is_read_once_in_both_directions(self):
+    def test_the_windows_choice_is_read_once(self):
         win = self.win
         win.select_card(app.CARD_SEED)
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
         seed = self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
-        for first, changed_to, expected in (
-                (app.SEED_CHOICE_WINDOWS_SETUP, app.SEED_WINDOWS, ("windows", True)),
-                (app.SEED_WINDOWS, app.SEED_CHOICE_WINDOWS_SETUP, ("windows", False)),
-                (app.SEED_CHOICE_WINDOWS_SETUP, app.SEED_UBUNTU, ("windows", True))):
+        for first, changed_to, expected in ((app.SEED_WINDOWS, app.SEED_UBUNTU, "windows"),
+                                            (app.SEED_UBUNTU, app.SEED_WINDOWS, "ubuntu")):
             with self.subTest(first=first, changed_to=changed_to):
                 win.seed_radios[first].invoke()
 
@@ -908,13 +871,12 @@ class WriteFlowTests(GuiTestCase):
                 win.confirm_erase = mock.Mock(side_effect=change_the_choice)
                 self.write()
                 self.assertEqual(win.seed_target_var.get(), changed_to, "the window did change meanwhile")
-                self.assertEqual((seed.call_args.args[0], seed.call_args.kwargs["during_setup"]), expected)
+                self.assertEqual(seed.call_args.args[0], expected)
 
     def test_the_radios_are_locked_while_a_windows_seed_is_written(self):
         win = self.win
         win.select_card(app.CARD_SEED)
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
-        win.seed_radios[app.SEED_CHOICE_WINDOWS_SETUP].invoke()
+        win.seed_radios[app.SEED_WINDOWS].invoke()
         self.confirmed()
         self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True, wait=True))
         win.start_create_usb()
@@ -1016,11 +978,10 @@ class WriteFlowTests(GuiTestCase):
         self.assertEqual(self.box.calls, [])
         self.assertEqual(str(win.create_progress_label.cget("text")), "Done — 100%")
 
-    def test_success_panel_for_the_windows_choices(self):
+    def test_success_panel_for_the_windows_choice(self):
         win = self.win
         win.select_card(app.CARD_SEED)
         self.confirmed()
-        self.patch(app, "describe_windows_seed_during_setup", create=True, return_value=FAKE_DURING_SETUP)
         self.patch(app, "build_seed_usb", create=True, side_effect=self.fake_engine(True))
         win.seed_radios[app.SEED_WINDOWS].invoke()
         self.write()
@@ -1032,16 +993,6 @@ class WriteFlowTests(GuiTestCase):
             self.assertIn(name, panel.message_text)
         self.assertNotIn("EXPERIMENTAL", panel.message_text)
         self.assertNotIn("next to the installer", panel.message_text)   # the Linux wording does not apply
-        win.clear_success()
-        win.seed_radios[app.SEED_CHOICE_WINDOWS_SETUP].invoke()
-        self.write()
-        panel = win.success_panel
-        self.assertTrue(panel.shown)
-        self.assertTrue(panel.title_text.startswith("Windows 11 setup drive (experimental) created and verified"))
-        self.assertIn("BEFORE you start the Windows installer", panel.message_text)
-        self.assertIn("EXPERIMENTAL", panel.message_text)
-        self.assertIn("64-bit Intel/AMD (x64)", panel.message_text)
-        self.assertIn("epma-hardening.log", panel.message_text)
 
     def test_success_panel_for_a_windows_drive_that_could_not_be_ejected(self):
         win = self.win
@@ -1107,13 +1058,13 @@ class PortugueseSeedLayoutTests(GuiTestCase):
         self.addCleanup(patcher.stop)
         super().setUp()
 
-    def test_the_five_portuguese_radios_fit_a_780_px_window(self):
+    def test_the_four_portuguese_radios_fit_a_780_px_window(self):
         win = self.win
         win.geometry("780x700")
         win.select_card(app.CARD_SEED)
         win.update()
-        self.assertEqual(str(win.seed_radios[app.SEED_CHOICE_WINDOWS_SETUP].cget("text")),
-                         "Windows 11 (durante a instalação, experimental)")
+        self.assertEqual(str(win.seed_radios[app.SEED_WINDOWS].cget("text")),
+                         "Windows 11 (executar depois de instalar)")
         self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), 780)
         self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP)
 
@@ -1121,12 +1072,12 @@ class PortugueseSeedLayoutTests(GuiTestCase):
 class SeedCardHeightTests(GuiTestCase):
     """The Hardening seed card must not push the Create button off a small screen (1440x900 laptops).
 
-    Real (unmocked) panel and notes, the engine's own description of the during-setup mode, 780 px wide. The
-    limit was measured on the development machine (macOS, linespace 16 px); on a platform whose default font is
-    taller the limit grows in proportion, so a different font cannot fail this test by itself.
+    Real (unmocked) panel and notes, 780 px wide. The limit was measured on the development machine (macOS,
+    linespace 16 px); on a platform whose default font is taller the limit grows in proportion, so a different
+    font cannot fail this test by itself.
     """
 
-    LIMIT = 760           # measured here: 738 (EN) and 754 (PT), the worst case being the longest note
+    LIMIT = 760           # measured here: 738/754 (EN) and 754 (PT); the card is not taller than with five choices
     REFERENCE_LINESPACE = 16
     LANGUAGE = "en"
 
@@ -1158,27 +1109,18 @@ class SeedCardHeightTests(GuiTestCase):
                 self.assertEqual(win._panel_holder.winfo_reqheight(), win.panels[app.CARD_SEED].winfo_reqheight())
                 self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP)
 
-    def test_the_link_to_the_full_text_is_only_on_the_experimental_choice_and_opens_the_engine_text(self):
+    def test_the_card_has_no_disclosure_link_and_the_note_is_the_only_extra_text(self):
         win = self.win
         win.geometry("780x700")
         win.select_card(app.CARD_SEED)
+        self.assertFalse(hasattr(win, "seed_more"))
+        self.assertFalse(hasattr(win, "seed_more_text"))
+        heights = set()
         for choice in app.SEED_CHOICES:
             win.seed_radios[choice].invoke()
-            self.assertEqual(bool(win.seed_more.winfo_manager()), choice == app.SEED_CHOICE_WINDOWS_SETUP, choice)
-        win.update()
-        before = win.winfo_reqheight()
-        win.seed_more.set_open(True)
-        win.update()
-        shown = str(win.seed_more_text.cget("text"))
-        self.assertTrue(shown.startswith("• "))
-        self.assertEqual(shown, app.App._seed_experimental_details())
-        self.assertGreater(win.winfo_reqheight(), before)  # the window grows only while the text is open
-        self.assertLessEqual(win.seed_radio_area.winfo_reqwidth(), app.PANEL_WRAP, "the open link text fits too")
-        win.seed_radios[app.SEED_UBUNTU].invoke()  # another choice: the text and its link are gone again
-        win.update()
-        self.assertFalse(win.seed_more.is_open)
-        self.assertEqual(win.seed_more_text.winfo_manager(), "")
-        self.assertEqual(win.seed_more.winfo_manager(), "")
+            win.update()
+            heights.add(win.panels[app.CARD_SEED].winfo_reqheight())
+        self.assertLessEqual(max(heights), 160 * max(1.0, self.linespace() / self.REFERENCE_LINESPACE))
 
 
 class SeedCardHeightPortugueseTests(SeedCardHeightTests):
@@ -1203,32 +1145,23 @@ class PortugueseWindowTests(unittest.TestCase):
     def test_the_windows_radios_and_notes_are_translated_when_the_language_is_portuguese(self):
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
             texts = [t for _k, t in app.App.seed_target_texts()]
-            self.assertEqual(texts[3:], ["Windows 11 (executar depois de instalar)",
-                                         "Windows 11 (durante a instalação, experimental)"])
+            self.assertEqual(texts[3:], ["Windows 11 (executar depois de instalar)"])
             self.assertIn("harden.cmd", app.App.seed_target_note(None, app.SEED_WINDOWS))
             self.assertIn("administrador", app.App.seed_target_note(None, app.SEED_WINDOWS))
-            after = app.App._windows_seed_success_texts(True, False)
-            setup = app.App._windows_seed_success_texts(False, True)
+            after = app.App._windows_seed_success_texts(True)
             self.assertIn("Pendrive", after[0])
             self.assertIn("undo.cmd", after[1])
-            self.assertIn("EXPERIMENTAL", setup[1])
-            self.assertIn("ANTES", setup[1])
-            key = "the hardening seed files (experimental: includes an answer file for Windows Setup)"
-            self.assertEqual(app._(key), app.PT_BR[key])
-            with mock.patch.object(app, "describe_windows_seed_during_setup", create=True,
-                                   return_value=["Line one."]):
-                self.assertTrue(app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP).startswith(
-                    "EXPERIMENTAL, nunca testado"))
 
     def test_the_portuguese_name_of_the_run_later_mode_is_the_same_everywhere_in_the_window(self):
         name = "executar depois de instalar"
         with mock.patch.object(app, "ACTIVE_LANGUAGE", "pt"):
             texts = [t for _k, t in app.App.seed_target_texts()]
-            texts += [app.App.seed_target_note(None, app.SEED_CHOICE_WINDOWS_SETUP)]
-            texts += list(app.App._windows_seed_success_texts(True, True))
+            texts += [app.App.seed_target_note(None, app.SEED_WINDOWS)]
+            texts += list(app.App._windows_seed_success_texts(True))
         self.assertIn(name, texts[3])
-        self.assertIn(name, texts[5])
-        self.assertIn(name, texts[-1])
+        for key, value in app.PT_BR.items():  # every text that names the mode by its English name uses this name
+            if "run after install" in key:
+                self.assertIn(name, value, key[:60])
         for text in texts:
             self.assertNotIn("após a instalação", text)
             self.assertNotIn("executar após", text)
