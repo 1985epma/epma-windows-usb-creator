@@ -13,6 +13,23 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ### Added
 
+- **Windows 11 support and an MSI package.** The program now runs on Windows 11 (window and command line) and
+  does everything it does elsewhere: *Windows 11* (GPT + FAT32, `install.wim` split with DISM when over 4 GB),
+  *Google Chrome*, *Linux* and *Other ISO* (written byte for byte to `\\.\PhysicalDriveN`, unbuffered and
+  read back), and the Hardening seed drive. It uses only what ships with Windows (PowerShell Storage cmdlets,
+  DISM) and adds no dependency. Drives are named `PhysicalDrive3`; `3`, `disk 3` and `\\.\PhysicalDrive3` are
+  accepted where an identifier is typed. Only USB drives are listed and the disk holding the running Windows
+  is never offered. There is no password: the program must run as Administrator (the GUI relaunches itself
+  with the UAC prompt; the command line says how to open an elevated terminal). The audit log is in
+  `%LOCALAPPDATA%\epma-win11-usb-creator`. Files are copied and compared in plain Python (no rsync); the raw
+  image's partition table is written last, so Windows cannot mount the half-written image.
+  - **MSI** (`epma-usb-creator-<version>-x64.msi`, built in CI with PyInstaller + WiX): per-machine install,
+    Start-menu shortcut that runs as Administrator, optional `epma-usb-creator-cli.exe` on the `PATH`,
+    upgrade/uninstall, attached to every release with its SHA-256, provenance and SBOM. Not code-signed.
+  - **Not verified on real hardware:** this was written without a Windows machine. The unit tests simulate
+    PowerShell, DISM and the raw disk; the end-to-end test on a VHD and the MSI build/install smoke test run only
+    in CI (`windows.yml`). Windows limits FAT32 to 32 GB, so the *Windows 11* card makes a 30 GiB partition on
+    bigger drives. `install.esd` over 4 GB cannot be split on Windows.
 - **Hardened setup (optional, experimental).** Files that make a fresh install start from safer
   settings, "inspired by common security baselines" (no claim of compliance or certification).
   Nothing in them selects a disk, creates an account or contains a password or key.

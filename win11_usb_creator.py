@@ -17,7 +17,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 EPMA USB CREATOR: creates verified bootable USB drives from Windows 11, Linux and
-other ISOs, and Google's ChromeOS Flex, on macOS and any Linux distro (GUI and
+other ISOs, and Google's ChromeOS Flex, on Windows 11, macOS and any Linux distro (GUI and
 command line). Windows 11 gets a UEFI GPT + FAT32 drive; Linux, other hybrid ISOs
 and ChromeOS Flex are written byte for byte. Every write is read back and verified.
 
@@ -32,6 +32,10 @@ for you via apt/dnf/yum/pacman/zypper/apk):
 wimlib-imagex is required for Windows 11 because install.wim/install.esd
 usually exceeds 4 GB, the FAT32 file size limit — the script splits the
 file automatically when that happens.
+
+Windows 11 requirements: none beyond Python with Tkinter (or the MSI package, which
+bundles both). Disks are handled with the PowerShell Storage cmdlets and DISM, which
+ship with Windows; the program must run as Administrator (the MSI shortcut asks for it).
 
 Writing a drive needs root on Linux (and on macOS for the byte-for-byte
 modes), so the app asks for your sudo password (or uses pkexec if sudo isn't
@@ -81,6 +85,12 @@ if platform.system() == "Darwin":
         "Tkinter is not available for this Python installation.\n"
         "Install it with: brew install python-tk@<version matching your python>"
     )
+elif platform.system() == "Windows":
+    TK_MISSING_MESSAGE = (
+        "Tkinter is not available for this Python installation.\n"
+        "Reinstall Python from python.org with \"tcl/tk and IDLE\" selected, "
+        "or use the EPMA USB Creator MSI package, which bundles it."
+    )
 else:
     TK_MISSING_MESSAGE = (
         "Tkinter is not available for this Python installation.\n"
@@ -101,6 +111,7 @@ __version__ = "1.1.0"
 
 IS_MAC = platform.system() == "Darwin"
 IS_LINUX = platform.system() == "Linux"
+IS_WINDOWS = platform.system() == "Windows"
 
 APP_NAME = "epma-usb-creator"  # shown in the macOS menu bar / Dock and used as the Linux window class
 # The one-sentence description of the product: README, the Help > About text and the command
@@ -238,6 +249,7 @@ RAW_CANCELED_MARKER = "WRITE_CANCELED"  # printed by the root write scripts when
 DIRECT_IO_ALIGNMENT = 4096     # oflag=direct on Linux only when the image size is a multiple of this
 PRIVATE_FILE_MODE = 0o600      # owner-only read/write for files we create
 O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)  # never follow a symlink planted at a temp/part file path
+O_BINARY = getattr(os, "O_BINARY", 0)      # Windows only: never translate line endings in a file we open by descriptor
 SLEEP_INHIBIT_SECONDS = 12 * 3600  # the Linux sleep inhibitor is bounded, so it can never leak for good
 SLEEP_INHIBIT_CHECK_SECONDS = 0.3  # how long to wait to see that the inhibitor really started
 # A write error that retrying cannot fix (and that must not be mistaken for a network problem).
@@ -249,6 +261,7 @@ DOWNLOAD_FATAL_ERRNOS = tuple(getattr(errno, n) for n in ("ENOSPC", "EDQUOT", "E
 # disk name with spaces, quotes or shell metacharacters.
 MAC_DEVICE_RE = re.compile(r"^disk[0-9]+$")
 LINUX_DEVICE_RE = re.compile(r"^[a-zA-Z0-9_+-]{1,32}$")
+WINDOWS_DEVICE_RE = re.compile(r"^PhysicalDrive[0-9]{1,4}$")
 
 # Mount points that must never live on a disk we are about to erase.
 CRITICAL_MOUNTPOINTS = ("/", "/boot", "/boot/efi", "/home", "/usr", "/var", "/etc")
@@ -386,12 +399,12 @@ PT_BR = {
     # ----- confirmations and creation -----
     "Windows 11": "Windows 11",
     "the selected Linux image": "a imagem Linux selecionada",
-    "This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.":
-        "Isto vai APAGAR PERMANENTEMENTE todos os dados de /dev/{id} e gravar {what} nele.",
+    "This will PERMANENTLY ERASE all data on {path} and write {what} to it.":
+        "Isto vai APAGAR PERMANENTEMENTE todos os dados de {path} e gravar {what} nele.",
     "Confirm erasing this drive": "Confirmar o apagamento desta unidade",
     "Final confirmation": "Confirmação final",
     "Continue?": "Continuar?",
-    "Drive: /dev/{id}": "Unidade: /dev/{id}",
+    "Drive: {path}": "Unidade: {path}",
     "Model: {model}": "Modelo: {model}",
     "Size: {size}": "Tamanho: {size}",
     "Contents: could not be read": "Conteúdo: não foi possível ler",
@@ -418,8 +431,8 @@ PT_BR = {
     "To confirm, type the drive identifier exactly as shown ({expected}):":
         "Para confirmar, digite o identificador da unidade exatamente como aparece ({expected}):",
     "Erase this drive": "Apagar esta unidade",
-    "Administrator access is required to write /dev/{id}.":
-        "É necessário acesso de administrador para gravar em /dev/{id}.",
+    "Administrator access is required to write {path}.":
+        "É necessário acesso de administrador para gravar em {path}.",
     "Canceled: administrator password was not provided. The drive was not modified.":
         "Cancelado: a senha de administrador não foi informada. A unidade não foi modificada.",
     "It was verified against the ISO and ejected — you can unplug it now.":
@@ -446,6 +459,16 @@ PT_BR = {
     # ----- progress -----
     "Preparing the drive...": "Preparando a unidade...",
     "Writing the image...": "Gravando a imagem...",
+    "Checking the split install image...": "Conferindo a imagem de instalação dividida...",
+    "Administrator required": "Administrador necessário",
+    "EPMA USB Creator must run as Administrator to erase and write a USB drive.\n\n"
+    "Close it and open it again with right-click > Run as administrator (the Start menu "
+    "shortcut of the installed program does this by itself). Nothing was changed.":
+        "O EPMA USB Creator precisa rodar como Administrador para apagar e gravar um pendrive.\n\n"
+        "Feche-o e abra de novo com o botão direito > Executar como administrador (o atalho do menu "
+        "Iniciar do programa instalado já faz isso sozinho). Nada foi alterado.",
+    "Canceled: the program is not running as Administrator. The drive was not modified.":
+        "Cancelado: o programa não está rodando como Administrador. A unidade não foi modificada.",
     "Verifying the written image...": "Verificando a imagem gravada...",
     "Verifying the copied files...": "Verificando os arquivos copiados...",
     "Verifying the install image...": "Verificando a imagem de instalação...",
@@ -693,6 +716,9 @@ def audit_log_path():
     override = os.environ.get(ENV_AUDIT_LOG)
     if override:
         return os.path.expanduser(override)
+    if IS_WINDOWS:  # %LOCALAPPDATA% is private to the user (the folder's ACL is inherited from the profile)
+        base = os.environ.get("LOCALAPPDATA") or os.path.join(os.path.expanduser("~"), "AppData", "Local")
+        return os.path.join(base, "epma-win11-usb-creator", "audit.log")
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
     return os.path.join(base, "epma-win11-usb-creator", "audit.log")
 
@@ -761,15 +787,20 @@ def validate_device_name(dev):
     """
     if not isinstance(dev, str) or not dev:
         raise ValueError("No disk was selected.")
-    pattern = MAC_DEVICE_RE if IS_MAC else LINUX_DEVICE_RE
+    pattern = MAC_DEVICE_RE if IS_MAC else WINDOWS_DEVICE_RE if IS_WINDOWS else LINUX_DEVICE_RE
     # fullmatch, not match: "$" also matches just before a trailing newline, so "sdb\n" would pass.
     if not pattern.fullmatch(dev):
         audit(f"REJECTED invalid device identifier: {dev!r}", logging.WARNING)
         raise ValueError(
             f"Refusing to operate on {dev!r}: it is not a valid disk identifier. "
-            "Expected something like 'disk4' (macOS) or 'sdb' (Linux)."
+            "Expected something like 'disk4' (macOS), 'sdb' (Linux) or 'PhysicalDrive3' (Windows)."
         )
     return dev
+
+
+def dev_path(dev):
+    """How a disk identifier is shown to the user: /dev/disk4, /dev/sdb or \\\\.\\PhysicalDrive3."""
+    return "\\\\.\\" + str(dev) if IS_WINDOWS else "/dev/" + str(dev)
 
 
 def has_mbr_signature(head):
@@ -992,7 +1023,7 @@ def extract_disk_image(zip_path, dest_dir, progress=None, cancel_event=None):
             # A stale ".part" (or a symlink planted at that name) is removed, never written through.
             if os.path.lexists(tmp):
                 os.remove(tmp)
-            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | O_NOFOLLOW | O_BINARY, PRIVATE_FILE_MODE)
             created = True
             with os.fdopen(fd, "wb") as out, archive.open(info) as src:
                 while True:
@@ -1200,11 +1231,13 @@ def verify_raw_write(iso_path, device_path, log, priv, progress, cancel_event=No
 
 
 def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=None,
-                           extra_files=None):
+                           extra_files=None, split_hashes=None):
     """Compare what is on the drive with the ISO. Raises on any mismatch.
 
     Every file is compared by checksum (rsync dry run), and the install image is
     either compared directly or checked with `wimlib-imagex verify` when it was split.
+    On Windows (no rsync) the same check is made in Python, and a install image split by DISM is checked against
+    `split_hashes` ({part name: SHA-256}, taken when the parts were written) instead of `wimlib-imagex verify`.
     `extra_files` ({relative path: bytes}, the hardening files) are compared byte for byte too. They never
     replace a file of the ISO (an image that already holds one is refused before anything is copied), so
     the rsync comparison has no exemption: a hardening file that overwrote an ISO file shows up as a difference.
@@ -1219,8 +1252,11 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
         if re.match(r"^(>f|cd|\*deleting)", line):
             bad.append(line.strip())
 
-    run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
-            cancel_event=cancel_event)
+    if IS_WINDOWS:
+        bad.extend(compare_trees(src_root, dst_root, rel_big, cancel_event))
+    else:
+        run_cmd(["rsync", "-rcn", "-i", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], watch,
+                cancel_event=cancel_event)
     if bad:
         audit(f"VERIFICATION FAILED: {len(bad)} file(s) differ", logging.ERROR)
         raise RuntimeError(
@@ -1232,7 +1268,13 @@ def verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress,
     if progress:
         progress(0, 0, "Verifying the install image...")
     swm = os.path.join(sources, os.path.splitext(name)[0] + ".swm")
-    if os.path.exists(swm):
+    if split_hashes:
+        now = hash_split_parts(sources, os.path.splitext(name)[0], cancel_event)
+        if now != split_hashes:
+            raise RuntimeError(
+                "Verification FAILED: the split install image on the drive differs from what was written.\n\n"
+                "The drive was NOT ejected and should not be used.")
+    elif os.path.exists(swm):
         try:
             run_cmd(["wimlib-imagex", "verify", swm, f"--ref={sources}/{os.path.splitext(name)[0]}*.swm"], log,
                     cancel_event=cancel_event)
@@ -1320,8 +1362,12 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
 
     rel_big = os.path.relpath(big_file, src_root)
     log("Copying files from the ISO to the USB drive (this can take several minutes)...")
-    run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log,
-            cancel_event=cancel_event)
+    if IS_WINDOWS:  # no rsync on Windows: the same copy in plain Python (flushed file by file)
+        copy_tree_with_progress(src_root, dst_root, rel_big,
+                                lambda n: report(min(n, rest_total), "Copying files..."), cancel_event, log)
+    else:
+        run_cmd(["rsync", "-rv", f"--exclude={rel_big}", src_root + "/", dst_root + "/"], rsync_log,
+                cancel_event=cancel_event)
     report(rest_total, "Copying files...")
     check_canceled(cancel_event)
 
@@ -1329,19 +1375,33 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     target_sources = os.path.join(dst_root, os.path.dirname(rel_big))
     os.makedirs(target_sources, exist_ok=True)
 
+    split_hashes = None
     if size > FAT32_MAX_FILE_SIZE:
-        log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with wimlib-imagex...")
-        if not shutil.which("wimlib-imagex"):
+        use_dism = IS_WINDOWS and big_file.lower().endswith(".wim")  # Windows splits a .wim itself, with DISM
+        tool = "DISM" if use_dism else "wimlib-imagex"
+        log(f"{os.path.basename(big_file)} is {human_size(size)} (over 4GB). Splitting with {tool}...")
+        if not use_dism and not shutil.which("wimlib-imagex"):
             raise RuntimeError(wimlib_hint)
         out_swm = os.path.join(target_sources, os.path.splitext(os.path.basename(big_file))[0] + ".swm")
 
         def split_log(line):
             log(line)
-            m = re.search(r"(\d{1,3})%", line)
+            m = re.search(r"(\d{1,3})(?:\.\d+)?%", line)
             if m:
                 report(rest_total + size * min(int(m.group(1)), 100) // 100, "Splitting the install image...")
 
-        run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log, cancel_event=cancel_event)
+        if use_dism:
+            run_cmd([windows_dism_exe(), "/Split-Image", f"/ImageFile:{big_file}", f"/SWMFile:{out_swm}",
+                     "/FileSize:3800"], split_log, cancel_event=cancel_event)
+            # The parts are not byte copies of the source, so the read-back cannot compare them with it: it
+            # compares them with what was written (checked after the drive is detached and attached again).
+            report(total, "Checking the split install image...")
+            split_hashes = hash_split_parts(target_sources, os.path.splitext(os.path.basename(big_file))[0],
+                                            cancel_event)
+            if not split_hashes:
+                raise RuntimeError("DISM finished but no .swm part was found on the drive.")
+        else:
+            run_cmd(["wimlib-imagex", "split", big_file, out_swm, "3800"], split_log, cancel_event=cancel_event)
     else:
         log(f"Copying {os.path.basename(big_file)} ({human_size(size)})...")
         copy_file_with_progress(
@@ -1360,13 +1420,14 @@ def copy_windows_payload(src_root, dst_root, log, progress, wimlib_hint, reopen=
     report(total, "Flushing data to the drive...")
     check_canceled(cancel_event)
     log("Syncing writes to disk...")
-    run_cmd(["sync"], log, check=False)
+    sync_filesystems(log)
     # Remount so the check reads from the device itself and not from the system cache.
     if reopen:
         dst_root = reopen()
     try:
         verify_windows_payload(src_root, dst_root, rel_big, big_file, log, progress, cancel_event=cancel_event,
-                               **({"extra_files": extra_files} if extra_files else {}))
+                               **({"extra_files": extra_files} if extra_files else {}),
+                               **({"split_hashes": split_hashes} if split_hashes else {}))
     except OperationCanceled as e:
         e.written = True  # everything was copied; only the final check was interrupted
         raise
@@ -1467,22 +1528,28 @@ def sha256_file(path, cancel_event=None, progress=None, chunk=SHA256_CHUNK):
     return digest.hexdigest()
 
 
+# A windowed program (the MSI's GUI) must not flash a console for every command it runs, and it has no standard
+# input to hand on: on Windows each child gets no window and an empty stdin. Elsewhere nothing changes.
+SUBPROCESS_QUIET = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0), "stdin": subprocess.DEVNULL}
+                    if IS_WINDOWS else {})
+
+
 def _stop_process(proc, group=False):
     """Ask a child (or, with group=True, its whole process group) to stop; kill it if it does not."""
-    def send(sig):
-        if group:
-            os.killpg(os.getpgid(proc.pid), sig)
-        elif sig == signal.SIGTERM:
-            proc.terminate()
-        else:
+    def send(hard):
+        if group and not IS_WINDOWS:  # Windows has no process groups to signal: the child is stopped alone
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL if hard else signal.SIGTERM)
+        elif hard:
             proc.kill()
+        else:
+            proc.terminate()
 
     try:
-        send(signal.SIGTERM)
+        send(False)
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            send(signal.SIGKILL)
+            send(True)
     except (OSError, ProcessLookupError):
         pass
 
@@ -1497,7 +1564,7 @@ def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
     log(f"$ {' '.join(args)}")
     # errors="replace": a file name that is not valid UTF-8 (rsync -v lists them) must not abort the copy.
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                            errors="replace", bufsize=1)
+                            errors="replace", bufsize=1, **SUBPROCESS_QUIET)
     state = {"timed_out": False, "canceled": False}
     finished = threading.Event()
 
@@ -1539,6 +1606,13 @@ def run_cmd(args, log, check=True, timeout=None, cancel_event=None):
     return proc.returncode
 
 
+def sync_filesystems(log):
+    """`sync` on macOS and Linux. Windows has no such command: every file written there is flushed with
+    os.fsync, and the volume is flushed again when it is detached before the read-back."""
+    if not IS_WINDOWS:
+        run_cmd(["sync"], log, check=False)
+
+
 @contextlib.contextmanager
 def cancel_flag(cancel_event):
     """Yield the path of a private flag file that appears when `cancel_event` is set.
@@ -1573,9 +1647,41 @@ def cancel_flag(cancel_event):
         _silent_rmdir(flag_dir)
 
 
+ES_CONTINUOUS = 0x80000000      # SetThreadExecutionState flags (Windows)
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextlib.contextmanager
+def windows_keep_awake(log=None):
+    """Keep Windows awake with SetThreadExecutionState while the block runs. Best effort.
+
+    The setting belongs to the calling thread, so the block must run in the thread that enters it (the
+    worker thread that writes the drive does). It is dropped when the block ends or the thread dies.
+    """
+    kernel32 = None
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetThreadExecutionState.restype = ctypes.c_uint
+        if kernel32.SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) and log:
+            log("Sleep is blocked while the drive is being written.")
+    except (AttributeError, OSError, ImportError):
+        kernel32 = None
+    try:
+        yield
+    finally:
+        if kernel32 is not None:
+            with contextlib.suppress(Exception):
+                kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+
+
 @contextlib.contextmanager
 def prevent_sleep(log=None):
     """Keep the computer awake while a write runs. Best effort: failures are ignored."""
+    if IS_WINDOWS:
+        with windows_keep_awake(log):
+            yield
+        return
     proc = None
     stopper = None
     try:
@@ -1620,6 +1726,12 @@ def prevent_sleep(log=None):
 def platform_display_name():
     if IS_MAC:
         return "macOS"
+    if IS_WINDOWS:
+        try:  # Windows 11 still reports itself as "10" in platform.release(); the build number tells them apart
+            build = int(platform.version().split(".")[2])
+        except (IndexError, ValueError):
+            build = 0
+        return "Windows 11" if build >= 22000 else "Windows " + platform.release()
     if IS_LINUX:
         try:
             info = platform.freedesktop_os_release()
@@ -1704,11 +1816,18 @@ def ask_password(parent, title, prompt):
 
 
 def normalize_typed_identifier(text):
-    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed.
+    """What the user typed as a disk identifier, with whitespace and a '/dev/' prefix removed
+    (on Windows: '3', 'disk 3' and '\\\\.\\PhysicalDrive3' all become 'PhysicalDrive3').
 
     The window's confirmation dialog and the command line (--disk, the typed confirmation) both use it.
     """
     text = (text or "").strip()
+    if IS_WINDOWS:
+        # Windows people say "disk 3" (Disk Management, diskpart): accept it, "3" and the device path.
+        if text.startswith("\\\\.\\"):
+            text = text[4:]
+        m = re.fullmatch(r"(?:disk\s*)?([0-9]{1,4})", text, re.IGNORECASE)
+        return f"PhysicalDrive{int(m.group(1))}" if m else text
     return text[len("/dev/"):] if text.startswith("/dev/") else text
 
 
@@ -2102,7 +2221,7 @@ def build_disk_label(dev_path, model, size, volumes):
 
 def _disk_entry(dev_id, size, model, volumes, identity):
     """The record the drive list holds for one disk: id, size, label (built here), model, volumes, identity."""
-    return {"id": dev_id, "size": size, "label": build_disk_label(f"/dev/{dev_id}", model, size, volumes),
+    return {"id": dev_id, "size": size, "label": build_disk_label(dev_path(dev_id), model, size, volumes),
             "model": model, "volumes": volumes, "identity": identity}
 
 
@@ -2150,7 +2269,7 @@ def describe_disk_for_confirmation(disk, translate=False):
     `translate=True` is for the GUI dialog only; the default keeps the English text.
     """
     _ = _text_for(translate)
-    lines = [_("Drive: /dev/{id}").format(id=disk.get("id"))]
+    lines = [_("Drive: {path}").format(path=dev_path(disk.get("id")))]
     if disk.get("model"):
         lines.append(_("Model: {model}").format(model=disk["model"]))
     lines.append(_("Size: {size}").format(size=human_size(disk.get("size") or 0)))
@@ -2903,6 +3022,745 @@ def linux_build_usb(iso_path, dev_name, log, priv, progress=None, cancel_event=N
     return ejected
 
 
+# ============================================================
+# Windows backend
+#
+# Everything here uses what ships with Windows 11: the PowerShell Storage cmdlets (Get-Disk, Clear-Disk,
+# New-Partition, Format-Volume, Mount-DiskImage, ...) and DISM. There is no sudo: the program itself must run
+# as Administrator (the MSI's shortcut and executable ask for it; `python win11_usb_creator.py` relaunches
+# itself elevated). Values never become PowerShell code: every script is a fixed text with a typed param()
+# block, written to a private temporary file and started with `-File`, so the values arrive as data.
+# ============================================================
+POWERSHELL_TIMEOUT = 900        # seconds a Storage cmdlet script may run (formatting a big drive can be slow)
+WINDOWS_FAT32_MAX_PARTITION = 30 * 1024 ** 3  # Windows refuses to format FAT32 volumes over 32 GB: use at most 30 GiB
+WINDOWS_RAW_BLOCK = 4 * 1024 * 1024    # bytes written or read per step on a raw drive (a multiple of 4096)
+WINDOWS_RAW_ALIGN = 4096               # every raw offset and length is a multiple of this (covers 512 and 4K sectors)
+WINDOWS_RAW_HEAD = 1024 * 1024         # the start of a raw image (partition tables) is written LAST, see below
+WINDOWS_MOUNT_RETRIES = 30             # seconds to wait for a volume's drive letter to appear
+WINDOWS_PS_PREAMBLE = (
+    "$ErrorActionPreference = 'Stop'\n"
+    "$ProgressPreference = 'SilentlyContinue'\n"
+    "try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }\n"
+)
+EJECTED_MARKER = "EJECTED"
+NOT_EJECTED_MARKER = "NOT_EJECTED"
+
+
+def windows_system32(name):
+    """Full path of a tool in System32. Absolute on purpose: this program runs as Administrator and must not
+    pick a look-alike from the current folder or from PATH."""
+    root = os.environ.get("SystemRoot") or os.environ.get("windir") or r"C:\Windows"
+    return os.path.join(root, "System32", name)
+
+
+def windows_powershell_exe():
+    return windows_system32(os.path.join("WindowsPowerShell", "v1.0", "powershell.exe"))
+
+
+def windows_dism_exe():
+    return windows_system32("dism.exe")
+
+
+def windows_is_admin():
+    """True when the process runs elevated (Administrator). Always False off Windows."""
+    if not IS_WINDOWS:
+        return False
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_relaunch_elevated():
+    """Start this program again with the UAC prompt ("runas"). True if Windows accepted the request."""
+    try:
+        import ctypes
+        if getattr(sys, "frozen", False):
+            exe, params = sys.executable, subprocess.list2cmdline(sys.argv[1:])
+        else:
+            exe = sys.executable
+            params = subprocess.list2cmdline([os.path.abspath(sys.argv[0])] + sys.argv[1:])
+        shell_execute = ctypes.windll.shell32.ShellExecuteW
+        shell_execute.restype = ctypes.c_void_p
+        return (shell_execute(None, "runas", exe, params, None, 1) or 0) > 32
+    except (AttributeError, OSError):
+        return False
+
+
+def windows_enable_dpi_awareness():
+    """Ask Windows not to bitmap-scale the window (blurry text on high-DPI screens). Cosmetic; failures are ignored."""
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except (AttributeError, OSError, ImportError):  # noqa: S110 - cosmetic only
+        pass
+
+
+class WindowsPrivilege:
+    """Privilege helper for Windows, duck-typed to what the engine and the window use.
+
+    There is nothing to ask for: the process is already elevated or it is not. `authenticate()` says which and
+    never prompts; the window and the command line explain how to run elevated when it is not.
+    """
+
+    cached_password = None
+
+    @staticmethod
+    def needs_password():
+        return False
+
+    @staticmethod
+    def is_admin():
+        return windows_is_admin()
+
+    def authenticate(self, reason=None, max_attempts=3):
+        return windows_is_admin()
+
+    def clear_cached_password(self):
+        pass
+
+    def run_script(self, script, log, args=None, **_kw):
+        raise RuntimeError("Privileged shell scripts are not used on Windows.")
+
+
+def windows_run_ps(script, log, args=(), timeout=POWERSHELL_TIMEOUT, cancel_event=None, check=True):
+    """Run a fixed PowerShell `script` (it starts with a typed param() block) and stream its output to `log`.
+
+    The values in `args` are handed over as command-line arguments (`-File` mode), never pasted into the text.
+    Returns run_cmd's exit code.
+    """
+    args = [str(a) for a in args]
+    for a in args:
+        if a.startswith("-"):
+            raise ValueError("Refusing an argument that PowerShell would read as a parameter name.")
+    folder = tempfile.mkdtemp(prefix="epmaps_")
+    path = os.path.join(folder, "script.ps1")
+    try:
+        with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:  # BOM: PowerShell 5.1 reads UTF-8 only with it
+            fh.write(WINDOWS_PS_PREAMBLE + script)
+        cmd = [windows_powershell_exe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-File", path] + args
+        return run_cmd(cmd, log, check=check, timeout=timeout, cancel_event=cancel_event)
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def windows_ps_output(script, args=(), timeout=QUERY_TIMEOUT):
+    """Run a fixed PowerShell `script` and return its standard output as text. Raises RuntimeError on failure."""
+    args = [str(a) for a in args]
+    folder = tempfile.mkdtemp(prefix="epmaps_")
+    path = os.path.join(folder, "script.ps1")
+    try:
+        with open(path, "w", encoding="utf-8-sig", newline="\r\n") as fh:
+            fh.write(WINDOWS_PS_PREAMBLE + script)
+        cmd = [windows_powershell_exe(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+               "-File", path] + args
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=timeout, **SUBPROCESS_QUIET)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RuntimeError(f"Could not run PowerShell ({type(e).__name__}).") from None
+        if proc.returncode != 0:
+            detail = proc.stderr.decode("utf-8", "replace").strip().splitlines()
+            raise RuntimeError("PowerShell could not read the drives" + (f": {detail[0]}" if detail else "") +
+                               ". Run the program as Administrator.")
+        return proc.stdout.decode("utf-8-sig", "replace")
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+# Lists the disks as JSON. Fixed text, no parameters. The system/boot disk is flagged here and dropped in Python.
+WINDOWS_LIST_SCRIPT = r"""
+$sysLetter = ([string]$env:SystemDrive).TrimEnd(':')
+$out = @()
+foreach ($d in @(Get-Disk)) {
+  $holdsSystem = [bool]($d.IsBoot -or $d.IsSystem)
+  $vols = @()
+  foreach ($p in @(Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue)) {
+    $letter = ''
+    if ($p.DriveLetter) { $letter = [string]$p.DriveLetter }
+    if ($letter -ne '' -and $letter -eq $sysLetter) { $holdsSystem = $true }
+    $v = $null
+    if ($letter -ne '') { try { $v = Get-Volume -DriveLetter $letter -ErrorAction Stop } catch { $v = $null } }
+    $label = ''; $fs = ''; $free = -1
+    if ($v) { $label = [string]$v.FileSystemLabel; $fs = [string]$v.FileSystem; $free = [int64]$v.SizeRemaining }
+    $vols += [pscustomobject]@{ Letter = $letter; Label = $label; FileSystem = $fs; Size = [int64]$p.Size; Free = $free }
+  }
+  $out += [pscustomobject]@{
+    Number = [int]$d.Number; Model = [string]$d.FriendlyName; Serial = ([string]$d.SerialNumber).Trim()
+    UniqueId = [string]$d.UniqueId; BusType = [string]$d.BusType; Size = [int64]$d.Size
+    SectorSize = [int]$d.LogicalSectorSize; HoldsSystem = $holdsSystem; Volumes = @($vols)
+  }
+}
+ConvertTo-Json -InputObject @($out) -Depth 4 -Compress
+"""
+
+
+def windows_parse_disks(text):
+    """Turn the JSON of WINDOWS_LIST_SCRIPT into the drive list (pure: no I/O, unit-testable).
+
+    Only USB drives that do not hold the running Windows are offered; an unreadable record is hidden (fail closed).
+    """
+    data = json.loads(text.strip() or "[]")
+    if isinstance(data, dict):
+        data = [data]
+    disks = []
+    for rec in data:
+        try:
+            number = int(rec["Number"])
+            size = _as_int(rec.get("Size")) or 0
+            name = f"PhysicalDrive{number}"
+            if not WINDOWS_DEVICE_RE.fullmatch(name):
+                continue
+            if str(rec.get("BusType") or "").upper() != "USB":
+                continue  # only USB drives are offered (no internal disks, SD slots, virtual disks)
+            if rec.get("HoldsSystem") is not False:
+                audit(f"Hiding {name}: it holds the running Windows (or this could not be told)")
+                continue
+            if size <= 0:
+                audit(f"Hiding {name}: its size is zero or unreadable", logging.WARNING)
+                continue  # an empty card reader reports no media
+            model = str(rec.get("Model") or "").strip()
+            volumes = []
+            for vol in rec.get("Volumes") or []:
+                letter = str(vol.get("Letter") or "")
+                free = _as_int(vol.get("Free"))
+                vsize = _as_int(vol.get("Size")) or 0
+                volumes.append({
+                    "name": str(vol.get("Label") or "") or (letter + ":" if letter else ""),
+                    "filesystem": str(vol.get("FileSystem") or ""),
+                    "size": vsize,
+                    "used": (vsize - free) if (free is not None and free >= 0 and vsize >= free) else None,
+                    "mountpoint": (letter + ":\\") if letter else None,
+                })
+            identity = make_identity(serial=rec.get("Serial"), uniqueid=rec.get("UniqueId"), model=model)
+            disks.append(_disk_entry(name, size, model, volumes, identity))
+        except (KeyError, TypeError, ValueError) as e:
+            audit(f"Hiding a drive whose record could not be read ({type(e).__name__})", logging.WARNING)
+    return disks
+
+
+def windows_get_external_disks():
+    """List only USB drives that do not hold the running Windows."""
+    return windows_parse_disks(windows_ps_output(WINDOWS_LIST_SCRIPT, timeout=QUERY_TIMEOUT * 2))
+
+
+def windows_disk_number(dev):
+    """The disk number in 'PhysicalDrive3' (validated)."""
+    validate_device_name(dev)
+    return int(dev[len("PhysicalDrive"):])
+
+
+# Wipes the disk, then GPT + ONE FAT32 partition (capped: Windows will not format a bigger FAT32 volume) with a drive
+# letter. "$Number" the disk, "$Label" the volume label, "$MaxBytes" the cap. The disk must be an external USB drive
+# that is not the boot disk: checked again here, right before the wipe. Prints "EPMA_VOLUME <letter> <partition>".
+WINDOWS_PREPARE_SCRIPT = r"""
+param([int]$Number, [string]$Label, [long]$MaxBytes)
+$disk = Get-Disk -Number $Number
+if ($disk.BusType -ne 'USB') { throw "Disk $Number is not a USB drive." }
+if ($disk.IsBoot -or $disk.IsSystem) { throw "Disk $Number holds the running Windows." }
+$svc = Get-Service -Name ShellHWDetection -ErrorAction SilentlyContinue
+$stopped = $false
+if ($svc -and $svc.Status -eq 'Running') { Stop-Service -Name ShellHWDetection -Force -ErrorAction SilentlyContinue; $stopped = $true }
+try {
+  if ($disk.IsOffline) { Set-Disk -Number $Number -IsOffline $false }
+  if ($disk.IsReadOnly) { Set-Disk -Number $Number -IsReadOnly $false }
+  if ($disk.PartitionStyle -ne 'RAW') { Clear-Disk -Number $Number -RemoveData -RemoveOEM -Confirm:$false }
+  Initialize-Disk -Number $Number -PartitionStyle GPT
+  if ($MaxBytes -gt 0 -and $disk.Size -gt ($MaxBytes + 4MB)) {
+    $part = New-Partition -DiskNumber $Number -Size $MaxBytes -AssignDriveLetter
+  } else {
+    $part = New-Partition -DiskNumber $Number -UseMaximumSize -AssignDriveLetter
+  }
+  $null = Format-Volume -Partition $part -FileSystem FAT32 -NewFileSystemLabel $Label -Confirm:$false -Force
+  $part = Get-Partition -DiskNumber $Number -PartitionNumber $part.PartitionNumber
+  Write-Output ('EPMA_VOLUME ' + $part.DriveLetter + ' ' + $part.PartitionNumber)
+} finally {
+  if ($stopped) { Start-Service -Name ShellHWDetection -ErrorAction SilentlyContinue }
+}
+"""
+
+# Wipes the disk and leaves it uninitialised (RAW) for a byte-for-byte write. Prints "EPMA_RAW_READY".
+WINDOWS_PREPARE_RAW_SCRIPT = r"""
+param([int]$Number)
+$disk = Get-Disk -Number $Number
+if ($disk.BusType -ne 'USB') { throw "Disk $Number is not a USB drive." }
+if ($disk.IsBoot -or $disk.IsSystem) { throw "Disk $Number holds the running Windows." }
+if ($disk.IsOffline) { Set-Disk -Number $Number -IsOffline $false }
+if ($disk.IsReadOnly) { Set-Disk -Number $Number -IsReadOnly $false }
+if ($disk.PartitionStyle -ne 'RAW') { Clear-Disk -Number $Number -RemoveData -RemoveOEM -Confirm:$false }
+Write-Output 'EPMA_RAW_READY'
+"""
+
+# Detaches the volumes of the disk from their drive letters (that flushes and dismounts them), so the cache is
+# dropped and the next read comes from the device. Prints "EPMA_VOLUME <letter> <partition>" for the first
+# volume that is attached again (when "$Reattach" is 1) and EJECTED / NOT_EJECTED when "$Reattach" is 0.
+WINDOWS_DETACH_SCRIPT = r"""
+param([int]$Number, [int]$Reattach)
+$ok = $true
+try { Update-Disk -Number $Number -ErrorAction SilentlyContinue } catch { }
+$parts = @(Get-Partition -DiskNumber $Number -ErrorAction SilentlyContinue)
+foreach ($p in $parts) {
+  if ($p.DriveLetter) {
+    $l = [string]$p.DriveLetter
+    try { Write-VolumeCache -DriveLetter $l -ErrorAction SilentlyContinue } catch { }
+    try { Remove-PartitionAccessPath -DiskNumber $Number -PartitionNumber $p.PartitionNumber -AccessPath ($l + ':\') -ErrorAction Stop }
+    catch { $ok = $false }
+  }
+}
+if ($Reattach -eq 1) {
+  Start-Sleep -Milliseconds 500
+  $first = $parts | Where-Object { $_.Type -ne 'Reserved' } | Select-Object -First 1
+  Add-PartitionAccessPath -DiskNumber $Number -PartitionNumber $first.PartitionNumber -AssignDriveLetter
+  $first = Get-Partition -DiskNumber $Number -PartitionNumber $first.PartitionNumber
+  Write-Output ('EPMA_VOLUME ' + $first.DriveLetter + ' ' + $first.PartitionNumber)
+} elseif ($ok) { Write-Output 'EJECTED' } else { Write-Output 'NOT_EJECTED' }
+"""
+
+# Mounts an ISO read-only and prints its drive letter ("EPMA_ISO <letter> <was-already-mounted 0|1>").
+WINDOWS_ISO_MOUNT_SCRIPT = r"""
+param([string]$Iso)
+$before = Get-DiskImage -ImagePath $Iso
+$was = 0
+if ($before.Attached) { $was = 1 } else { $null = Mount-DiskImage -ImagePath $Iso -StorageType ISO -Access ReadOnly }
+$letter = ''
+for ($i = 0; $i -lt 30 -and $letter -eq ''; $i++) {
+  $vol = Get-DiskImage -ImagePath $Iso | Get-Volume -ErrorAction SilentlyContinue
+  if ($vol -and $vol.DriveLetter) { $letter = [string]$vol.DriveLetter } else { Start-Sleep -Seconds 1 }
+}
+if ($letter -eq '') { throw 'The ISO was mounted but Windows gave it no drive letter.' }
+Write-Output ('EPMA_ISO ' + $letter + ' ' + $was)
+"""
+
+WINDOWS_ISO_DISMOUNT_SCRIPT = r"""
+param([string]$Iso)
+$null = Dismount-DiskImage -ImagePath $Iso -ErrorAction SilentlyContinue
+"""
+
+
+def _marker_values(lines, marker):
+    """The words after `marker` on the first output line that starts with it, or None."""
+    for line in lines:
+        words = line.split()
+        if words and words[0] == marker:
+            return words[1:]
+    return None
+
+
+def windows_run_collect(script, log, args=(), **kw):
+    """windows_run_ps(), also returning every output line (for the EPMA_* marker lines)."""
+    seen = []
+
+    def watch(line):
+        seen.append(line.strip())
+        log(line)
+
+    windows_run_ps(script, watch, args=args, **kw)
+    return seen
+
+
+def windows_wait_for_root(letter, log):
+    """The root path of drive `letter`, once Windows lets us list it."""
+    root = f"{letter}:\\"
+    for _i in range(WINDOWS_MOUNT_RETRIES):
+        if os.path.isdir(root):
+            return root
+        time.sleep(1)
+    raise RuntimeError(f"Windows did not make the drive {letter}: available after formatting it.")
+
+
+def windows_prepare_fat32(number, label, log, cancel_event=None):
+    """Erase the disk and make GPT + one FAT32 volume. Returns (root path, partition number)."""
+    lines = windows_run_collect(WINDOWS_PREPARE_SCRIPT, log, args=[number, label, WINDOWS_FAT32_MAX_PARTITION],
+                                cancel_event=cancel_event)
+    vals = _marker_values(lines, "EPMA_VOLUME")
+    if not vals or len(vals) < 2 or not re.fullmatch(r"[A-Za-z]", vals[0]) or not vals[1].isdigit():
+        raise RuntimeError("Windows formatted the drive but did not report its drive letter.")
+    return windows_wait_for_root(vals[0].upper(), log), int(vals[1])
+
+
+def windows_reopen_volume(number, log):
+    """Detach the volume and attach it again, so the read-back comes from the device. Returns the new root path."""
+    lines = windows_run_collect(WINDOWS_DETACH_SCRIPT, log, args=[number, 1])
+    vals = _marker_values(lines, "EPMA_VOLUME")
+    if not vals or not re.fullmatch(r"[A-Za-z]", vals[0]):
+        raise RuntimeError("Could not mount the drive again to read it back.")
+    return windows_wait_for_root(vals[0].upper(), log)
+
+
+def windows_eject(number, log):
+    """Flush and detach every volume of the disk; after that the drive can be unplugged. True on success."""
+    log("Ejecting the USB drive...")
+    try:
+        lines = windows_run_collect(WINDOWS_DETACH_SCRIPT, log, args=[number, 0], check=True, timeout=120)
+    except Exception as e:
+        log(f"Warning: could not run the eject step: {e}")
+        return False
+    return EJECTED_MARKER in lines
+
+
+@contextlib.contextmanager
+def windows_mounted_iso(iso_path, log):
+    """Mount the ISO read-only; yield its root (for example 'F:\\'); dismount it afterwards (only if we mounted it)."""
+    lines = windows_run_collect(WINDOWS_ISO_MOUNT_SCRIPT, log, args=[iso_path], timeout=300)
+    vals = _marker_values(lines, "EPMA_ISO")
+    if not vals or not re.fullmatch(r"[A-Za-z]", vals[0]):
+        raise RuntimeError("Could not mount the ISO.")
+    already = vals[1:2] == ["1"]
+    try:
+        yield f"{vals[0].upper()}:\\"
+    finally:
+        if not already:
+            with contextlib.suppress(Exception):
+                windows_run_ps(WINDOWS_ISO_DISMOUNT_SCRIPT, log, args=[iso_path], timeout=120, check=False)
+
+
+# ---- Copy and compare a file tree in plain Python (Windows has no rsync) ----
+def _rel_key(rel):
+    return rel.replace("\\", "/").lower()
+
+
+def copy_tree_with_progress(src_root, dst_root, skip_rel, on_bytes, cancel_event=None, log=None):
+    """Copy every file under `src_root` to `dst_root`, except the relative path `skip_rel`; report bytes copied.
+
+    Each file is flushed to the drive (os.fsync) before the next one starts. Cancelable between chunks.
+    """
+    skip = _rel_key(skip_rel) if skip_rel else None
+    done = 0
+    for root, dirs, files in os.walk(src_root):
+        dirs.sort()
+        rel_dir = os.path.relpath(root, src_root)
+        out_dir = dst_root if rel_dir == "." else os.path.join(dst_root, rel_dir)
+        os.makedirs(out_dir, exist_ok=True)
+        for name in sorted(files):
+            src = os.path.join(root, name)
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if skip and _rel_key(rel) == skip:
+                continue
+            check_canceled(cancel_event)
+            if log:
+                log(rel.replace("\\", "/"))
+            with open(src, "rb") as fin, open(os.path.join(out_dir, name), "wb") as fout:
+                while True:
+                    check_canceled(cancel_event)
+                    chunk = fin.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    fout.write(chunk)
+                    done += len(chunk)
+                    on_bytes(done)
+                fout.flush()
+                os.fsync(fout.fileno())
+    return done
+
+
+def _files_equal(a, b, cancel_event=None):
+    """True when the two files hold the same bytes (read in chunks; cancelable)."""
+    if os.path.getsize(a) != os.path.getsize(b):
+        return False
+    with open(a, "rb") as fa, open(b, "rb") as fb:
+        while True:
+            check_canceled(cancel_event, written=True)
+            ca, cb = fa.read(VERIFY_CHUNK), fb.read(VERIFY_CHUNK)
+            if ca != cb:
+                return False
+            if not ca:
+                return True
+
+
+def compare_trees(src_root, dst_root, skip_rel, cancel_event=None):
+    """Names of the files under `src_root` (except `skip_rel`) that are missing from `dst_root` or differ there."""
+    skip = _rel_key(skip_rel) if skip_rel else None
+    bad = []
+    for root, dirs, files in os.walk(src_root):
+        dirs.sort()
+        rel_dir = os.path.relpath(root, src_root)
+        for name in sorted(files):
+            rel = name if rel_dir == "." else os.path.join(rel_dir, name)
+            if skip and _rel_key(rel) == skip:
+                continue
+            other = os.path.join(dst_root, rel)
+            try:
+                if not os.path.isfile(other):
+                    bad.append(f"{rel} (missing)")
+                elif not _files_equal(os.path.join(root, name), other, cancel_event):
+                    bad.append(f"{rel} (differs)")
+            except OSError as e:
+                bad.append(f"{rel} (unreadable: {e.strerror or type(e).__name__})")
+    return bad
+
+
+def hash_split_parts(sources_dir, stem, cancel_event=None):
+    """{file name: SHA-256} of the split install image parts (<stem>.swm, <stem>2.swm, ...) in `sources_dir`."""
+    parts = {}
+    for name in sorted(os.listdir(sources_dir)):
+        low = name.lower()
+        if low.startswith(stem.lower()) and low.endswith(".swm"):
+            parts[name] = sha256_file(os.path.join(sources_dir, name), cancel_event)
+    return parts
+
+
+# ---- Byte-for-byte writes to \\.\PhysicalDriveN (Linux and other hybrid ISOs, ChromeOS Flex) ----
+class DriveIOError(OSError):
+    """The drive itself refused or failed an open, read or write (as opposed to the image file)."""
+
+
+class WindowsRawDisk:
+    """Unbuffered, sector-aligned access to a physical drive through the Win32 API (ctypes; Windows only).
+
+    Reads and writes go straight to the device (FILE_FLAG_NO_BUFFERING), writes are write-through, so what a
+    read returns is what the drive holds - not what the system cache remembers. Offsets and lengths must be
+    multiples of WINDOWS_RAW_ALIGN; the buffer is a page-aligned mmap.
+    """
+
+    GENERIC_READ, GENERIC_WRITE = 0x80000000, 0x40000000
+    FILE_SHARE_READ, FILE_SHARE_WRITE = 1, 2
+    OPEN_EXISTING = 3
+    FILE_FLAG_WRITE_THROUGH, FILE_FLAG_NO_BUFFERING = 0x80000000, 0x20000000
+
+    def __init__(self, path, write=False, block=WINDOWS_RAW_BLOCK):
+        import ctypes
+        import mmap
+        from ctypes import wintypes
+        self._ct = ctypes
+        self._k = ctypes.WinDLL("kernel32", use_last_error=True)
+        k = self._k
+        k.CreateFileW.restype = wintypes.HANDLE
+        k.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        k.SetFilePointerEx.argtypes = [wintypes.HANDLE, ctypes.c_longlong, ctypes.POINTER(ctypes.c_longlong),
+                                       wintypes.DWORD]
+        for fn in (k.ReadFile, k.WriteFile):
+            fn.argtypes = [wintypes.HANDLE, wintypes.LPVOID, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD),
+                           wintypes.LPVOID]
+        k.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+        access = self.GENERIC_READ | (self.GENERIC_WRITE if write else 0)
+        flags = self.FILE_FLAG_NO_BUFFERING | (self.FILE_FLAG_WRITE_THROUGH if write else 0)
+        handle = k.CreateFileW(path, access, self.FILE_SHARE_READ | self.FILE_SHARE_WRITE, None,
+                               self.OPEN_EXISTING, flags, None)
+        if handle in (None, ctypes.c_void_p(-1).value):
+            raise DriveIOError(ctypes.get_last_error(), "Could not open " + path)
+        self._handle = handle
+        self._mm = mmap.mmap(-1, block)
+        self._cbuf = (ctypes.c_char * block).from_buffer(self._mm)
+        self._addr = ctypes.addressof(self._cbuf)
+        self.block = block
+
+    def _seek(self, offset):
+        if not self._k.SetFilePointerEx(self._handle, offset, None, 0):
+            raise DriveIOError(self._ct.get_last_error(), "Could not move to offset %d" % offset)
+
+    def read_at(self, offset, length):
+        """`length` bytes (a multiple of WINDOWS_RAW_ALIGN, at most one block) read from `offset`."""
+        from ctypes import wintypes
+        self._seek(offset)
+        got = wintypes.DWORD(0)
+        if not self._k.ReadFile(self._handle, self._addr, length, self._ct.byref(got), None):
+            raise DriveIOError(self._ct.get_last_error(), "Could not read the drive at offset %d" % offset)
+        return self._mm[:got.value]
+
+    def write_at(self, offset, data):
+        """Write `data` (a multiple of WINDOWS_RAW_ALIGN long, at most one block) at `offset`."""
+        from ctypes import wintypes
+        self._seek(offset)
+        self._mm[:len(data)] = data
+        put = wintypes.DWORD(0)
+        if not self._k.WriteFile(self._handle, self._addr, len(data), self._ct.byref(put), None) \
+                or put.value != len(data):
+            raise DriveIOError(self._ct.get_last_error(), "Could not write to the drive at offset %d" % offset)
+
+    def flush(self):
+        self._k.FlushFileBuffers(self._handle)
+
+    def close(self):
+        if self._handle is not None:
+            self._k.CloseHandle(self._handle)
+            self._handle = None
+            self._cbuf = None
+            self._mm.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def open_windows_raw_disk(number, write=False):
+    """Open \\\\.\\PhysicalDrive<number>. A separate function so tests can stand a file in for the drive."""
+    return WindowsRawDisk(f"\\\\.\\PhysicalDrive{int(number)}", write=write)
+
+
+def _align_up(n, align=WINDOWS_RAW_ALIGN):
+    return (n + align - 1) // align * align
+
+
+def windows_raw_write(iso_path, disk, log, progress=None, cancel_event=None, block=WINDOWS_RAW_BLOCK):
+    """Write the image to `disk` (an object with write_at/flush) byte for byte. Returns the image size.
+
+    The first WINDOWS_RAW_HEAD bytes - where the partition tables live - are written LAST. Until then the drive has
+    no partitions, so Windows cannot mount (and thereby lock) the volumes of the half-written image and refuse the
+    rest of the writes. A cancel before the end therefore leaves a drive with no partition table at all.
+    The last block is padded with zeros up to the sector size.
+    """
+    total = os.path.getsize(iso_path)
+    head = min(WINDOWS_RAW_HEAD, total)
+    state = {"last": 0.0}
+
+    def report(done):
+        now = time.time()
+        if progress and (now - state["last"] >= PROGRESS_UI_INTERVAL or done >= total):
+            state["last"] = now
+            progress(min(done, total), total, "Writing the image...")
+
+    with open(iso_path, "rb") as src:
+        head_data = src.read(head)
+        offset = head
+        src.seek(head)
+        while offset < total:
+            check_canceled(cancel_event, drive_touched=True)
+            data = src.read(min(block, total - offset))
+            if not data:
+                raise RuntimeError("The image ended earlier than its size said. Nothing more was written.")
+            padded = data + b"\0" * (_align_up(len(data)) - len(data))
+            disk.write_at(offset, padded)
+            offset += len(data)
+            report(offset)
+        check_canceled(cancel_event, drive_touched=True)
+        disk.write_at(0, head_data + b"\0" * (_align_up(len(head_data)) - len(head_data)))
+        disk.flush()
+    report(total)
+    return total
+
+
+def windows_raw_verify(iso_path, disk, log, progress=None, cancel_event=None, block=WINDOWS_RAW_BLOCK):
+    """Read the drive back and compare it with the image. Raises on any difference (same wording as elsewhere)."""
+    total = os.path.getsize(iso_path)
+    log("Verifying the written image: reading the drive back and comparing it with the ISO...")
+    state = {"last": 0.0}
+    with open(iso_path, "rb") as src:
+        offset = 0
+        while offset < total:
+            check_canceled(cancel_event, written=True)
+            want = src.read(min(block, total - offset))
+            got = disk.read_at(offset, _align_up(len(want)))[:len(want)]
+            if got != want:
+                first = next((i for i, (x, y) in enumerate(zip(got, want, strict=False)) if x != y),
+                             min(len(got), len(want)))
+                audit(f"VERIFICATION FAILED at byte {offset + first}", logging.ERROR)
+                raise RuntimeError(
+                    f"Verification FAILED: the data on the drive differs from the ISO (first difference "
+                    f"near byte {offset + first}).\n\nThe drive was NOT ejected and should not be used. "
+                    "Try again, and if it fails again, the USB drive or its port may be faulty.")
+            offset += len(want)
+            now = time.time()
+            if progress and (now - state["last"] >= VERIFY_PROGRESS_INTERVAL or offset >= total):
+                state["last"] = now
+                progress(min(offset, total), total, "Verifying the written image...")
+    audit("Verification passed (raw write matches the ISO)")
+    log("Verification passed: the drive content is identical to the ISO.")
+
+
+def windows_write_raw(iso_path, dev, log, progress=None, cancel_event=None, eject=True):
+    """Write the ISO byte-for-byte to the whole disk (Linux, other hybrid ISOs, ChromeOS Flex)."""
+    validate_hybrid_iso(iso_path)
+    check_canceled(cancel_event, drive_touched=False)
+    number = windows_disk_number(dev)
+    total = os.path.getsize(iso_path)
+    log(f"Erasing {dev_path(dev)} (administrator privileges required)...")
+    windows_run_collect(WINDOWS_PREPARE_RAW_SCRIPT, log, args=[number], cancel_event=cancel_event)
+    check_canceled(cancel_event, drive_touched=False)  # clearing the partition table is not a write of the image
+    log(f"Writing the ISO to {dev_path(dev)}. This can take several minutes.")
+    try:
+        with open_windows_raw_disk(number, write=True) as disk:
+            windows_raw_write(iso_path, disk, log, progress, cancel_event)
+    except DriveIOError as e:
+        raise RuntimeError(
+            f"Windows refused the write to {dev_path(dev)} ({e.strerror or type(e).__name__}). Close any program "
+            "that is using the drive (File Explorer windows, antivirus scans), unplug it and plug it in again, "
+            "then try again.") from None
+    except OperationCanceled:
+        log("Canceled. The drive holds a partial image and is unusable until written again.")
+        raise
+    if progress:
+        progress(total, total, "Written")
+    with open_windows_raw_disk(number, write=False) as disk:
+        windows_raw_verify(iso_path, disk, log, progress, cancel_event)
+    log("Note: Windows cannot read Linux or ChromeOS partitions (ext4 and others), so it may offer to format the "
+        "drive - click Cancel, never Format. That is normal; the content was just verified byte-for-byte.")
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The USB drive is ready to boot.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def windows_build_usb(iso_path, dev, log, priv=None, progress=None, cancel_event=None, eject=True,
+                      hardening_files=None):
+    """Windows 11 mode: GPT + FAT32, the ISO's files copied (install.wim split with DISM when over 4 GB) and read back."""
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    number = windows_disk_number(dev)
+    with windows_mounted_iso(iso_path, log) as iso_root:  # read-only and harmless: any problem shows up BEFORE the erase
+        check_canceled(cancel_event, drive_touched=False)
+        log(f"Erasing and formatting {dev_path(dev)} as GPT + FAT32 ('{VOL_NAME}')...")
+        target, _part = windows_prepare_fat32(number, VOL_NAME, log, cancel_event)
+        log(f"USB drive ready at: {target}")
+        state = {"target": target}
+        try:
+            check_canceled(cancel_event)
+
+            def reopen():
+                log("Detaching and attaching the drive again to read it back from the device...")
+                state["target"] = windows_reopen_volume(number, log)
+                return state["target"]
+
+            copy_windows_payload(
+                iso_root, target, log, progress,
+                "install.esd is over 4 GB and Windows cannot split it. Use the ISO from Microsoft's download page "
+                "(it holds install.wim), or install wimlib and run this program again.",
+                reopen=reopen, cancel_event=cancel_event,
+                **({"extra_files": hardening_files} if hardening_files else {}))
+        except OperationCanceled as e:
+            if e.written:
+                log("Canceled during verification. The files were copied completely but NOT verified.")
+            else:
+                log("Canceled. The drive is left incomplete and unusable.")
+            windows_eject(number, log)
+            raise
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The USB drive is ready to install Windows 11.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
+def windows_build_seed_usb(label, files, stage_dir, dev, log, progress=None, cancel_event=None, eject=True):
+    check_canceled(cancel_event, drive_touched=False)  # nothing has been changed yet
+    number = windows_disk_number(dev)
+    log(f"Erasing and formatting {dev_path(dev)} as GPT + FAT32 ('{label}')...")
+    try:
+        target, _part = windows_prepare_fat32(number, label, log, cancel_event)
+        log(f"USB drive ready at: {target}")
+        check_canceled(cancel_event)
+        copy_seed_files(stage_dir, target, files, log, progress, cancel_event)
+        log("Detaching and attaching the drive again to read it back from the device...")
+        target = windows_reopen_volume(number, log)
+        verify_seed_files(files, target, log, progress, cancel_event)
+    except OperationCanceled as e:
+        if e.written:
+            log("Canceled during verification. The files were copied completely but NOT verified.")
+        else:
+            log("Canceled. The drive is left incomplete and unusable.")
+        windows_eject(number, log)
+        raise
+    ejected = windows_eject(number, log) if eject else None
+    log("Done! The seed drive is ready: plug it in next to the installer USB drive.")
+    report_eject(ejected, log, skipped=not eject)
+    return ejected
+
+
 # ===== hardening: engine-windows =====
 # Extra files for a Windows drive (a SetupComplete script and its PowerShell script, see
 # hardening_files_windows). They are checked first, written after the ISO's own files, read back
@@ -3054,6 +3912,10 @@ def refuse_hardening_clash(iso_path, files, log, priv):
     if not files:
         return
     log("Checking that the image does not already contain the hardening files...")
+    if IS_WINDOWS:
+        with windows_mounted_iso(iso_path, log) as iso_root:
+            check_image_for_hardening_clash(iso_root, files)
+        return
     mount_dir = tempfile.mkdtemp(prefix="win11peek_")
     attempted = False
     try:
@@ -3084,7 +3946,11 @@ def refuse_hardening_clash(iso_path, files, log, priv):
 # Platform dispatch
 # ============================================================
 def get_external_disks():
-    return macos_get_external_disks() if IS_MAC else linux_get_external_disks()
+    if IS_MAC:
+        return macos_get_external_disks()
+    if IS_WINDOWS:
+        return windows_get_external_disks()
+    return linux_get_external_disks()
 
 
 def reverify_target_disk(dev, expected_size, log, expected_identity=None):
@@ -3101,7 +3967,7 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if dev not in current:
         audit(f"ABORTED: {dev} is no longer an eligible external disk", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} is no longer listed as an external drive.\n\n"
+            f"Aborted for safety: {dev_path(dev)} is no longer listed as an external drive.\n\n"
             "It may have been unplugged, or the name may now refer to a different disk. "
             "Click 'Refresh USB drives list' and select the drive again."
         )
@@ -3109,7 +3975,7 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if expected_size and actual_size != expected_size:
         audit(f"ABORTED: {dev} size changed {expected_size} -> {actual_size}", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} now reports a different size "
+            f"Aborted for safety: {dev_path(dev)} now reports a different size "
             f"({human_size(actual_size)} instead of {human_size(expected_size)}).\n\n"
             "This means the name now points to a different device. Refresh the list "
             "and select the drive again."
@@ -3118,12 +3984,12 @@ def reverify_target_disk(dev, expected_size, log, expected_identity=None):
     if changed:
         audit(f"ABORTED: {dev} identity changed ({changed})", logging.ERROR)
         raise RuntimeError(
-            f"Aborted for safety: /dev/{dev} no longer looks like the drive you confirmed "
+            f"Aborted for safety: {dev_path(dev)} no longer looks like the drive you confirmed "
             f"({changed}).\n\n"
             "This means the name now points to a different device. Refresh the list "
             "and select the drive again."
         )
-    log(f"Safety re-check passed: /dev/{dev} is still the same external drive "
+    log(f"Safety re-check passed: {dev_path(dev)} is still the same external drive "
         f"({human_size(actual_size)}).")
 
 
@@ -3144,6 +4010,8 @@ def hash_iso_for_audit(iso_path, log, progress, cancel_event):
 def missing_dependencies_hint(missing):
     """One sentence telling the user how to get the missing tools on this system."""
     button = "or use the 'Install missing dependencies' button"
+    if IS_WINDOWS:
+        return "They are part of Windows 11; this installation looks incomplete (run 'sfc /scannow' as Administrator)."
     if IS_MAC:
         if "wimlib-imagex" in missing:
             return f"Install wimlib with: brew install wimlib ({button})."
@@ -3197,11 +4065,11 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
         check_canceled(cancel_event, drive_touched=False)
     except OperationCanceled:
         # Hashing and the safety re-check change nothing: the drive is exactly as it was.
-        audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+        audit(f"OPERATION CANCELED by the user before the drive was touched ({dev_path(dev)}); nothing was changed",
               logging.WARNING)
         raise OperationCanceled("Canceled by the user before the drive was touched.",
                                 drive_touched=False) from None
-    audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing {mode} image "
+    audit(f"DESTRUCTIVE OPERATION START: erasing {dev_path(dev)} and writing {mode} image "
           f"(iso sha256={iso_sha}, size={os.path.getsize(iso_path)})" + hardening_audit_text(hardening, hardening_files))
     extra = {"hardening_files": hardening_files} if hardening_files else {}
     try:
@@ -3209,35 +4077,39 @@ def build_usb(iso_path, dev, log, priv, expected_size=None, mode=MODE_WINDOWS, p
             if mode in RAW_MODES:
                 if IS_MAC:
                     ejected = macos_write_raw(iso_path, dev, log, priv, progress, cancel_event, eject)
+                elif IS_WINDOWS:
+                    ejected = windows_write_raw(iso_path, dev, log, progress, cancel_event, eject)
                 else:
                     ejected = linux_write_raw(iso_path, dev, log, priv, progress, cancel_event, eject)
             elif IS_MAC:
                 ejected = macos_build_usb(iso_path, dev, log, progress=progress, cancel_event=cancel_event,
                                          eject=eject, **extra)
+            elif IS_WINDOWS:
+                ejected = windows_build_usb(iso_path, dev, log, priv, progress, cancel_event, eject, **extra)
             else:
                 ejected = linux_build_usb(iso_path, dev, log, priv, progress, cancel_event, eject, **extra)
     except OperationCanceled as e:
         if not e.drive_touched:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} before the drive was touched; "
                   "nothing was changed", logging.WARNING)
         elif e.written:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} during verification; "
                   "the image was written but NOT verified", logging.WARNING)
         else:
-            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+            audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)}; the drive was left unusable",
                   logging.WARNING)
         raise
     except Exception as e:
-        audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
+        audit(f"DESTRUCTIVE OPERATION FAILED on {dev_path(dev)}: {type(e).__name__}", logging.ERROR)
         raise
-    audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+    audit(f"DESTRUCTIVE OPERATION COMPLETED on {dev_path(dev)} (ejected={bool(ejected)})")
     return bool(ejected)
 
 
 def needs_admin(mode):
-    """Whether writing a drive in `mode` needs administrator rights: always on Linux, and on macOS
+    """Whether writing a drive in `mode` needs administrator rights: always on Linux and Windows, and on macOS
     only for the byte-for-byte modes (diskutil and hdiutil need no root, writing /dev/rdiskN does)."""
-    return IS_LINUX or mode in RAW_MODES
+    return IS_LINUX or IS_WINDOWS or mode in RAW_MODES
 
 
 def image_exceeds_drive(image_size, drive_size):
@@ -5049,7 +5921,17 @@ def chromeos_drive_too_small(mode, drive_size):
     return mode == MODE_CHROMEOS and bool(drive_size) and drive_size < CHROMEOS_MIN_USB_BYTES
 
 
+def windows_missing_tools(mode):
+    """The Windows tools this mode needs and this machine lacks (they ship with Windows, so normally none)."""
+    needed = {"powershell.exe": windows_powershell_exe()}
+    if mode == MODE_WINDOWS:
+        needed["dism.exe"] = windows_dism_exe()
+    return [name for name, path in needed.items() if not os.path.isfile(path)]
+
+
 def get_missing_dependencies(mode=MODE_WINDOWS):
+    if IS_WINDOWS:
+        return windows_missing_tools(mode)
     if mode == MODE_SEED:  # the seed drive needs no ISO tools: no rsync, no wimlib (see LINUX_SEED_TOOLS)
         return [] if IS_MAC else [t for t in LINUX_SEED_TOOLS if not shutil.which(t)]
     if mode in RAW_MODES:
@@ -7712,7 +8594,7 @@ def stage_seed_files(files):
         for rel, data in files.items():
             path = _seed_local_path(stage, rel)
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW, PRIVATE_FILE_MODE)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | O_NOFOLLOW | O_BINARY, PRIVATE_FILE_MODE)
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
     except BaseException:
@@ -7742,7 +8624,7 @@ def copy_seed_files(stage_dir, dst_root, files, log, progress=None, cancel_event
         progress(total, total, "Flushing data to the drive...")
     check_canceled(cancel_event)
     log("Syncing writes to disk...")
-    run_cmd(["sync"], log, check=False)
+    sync_filesystems(log)
 
 
 def verify_seed_files(files, dst_root, log, progress=None, cancel_event=None):
@@ -7947,11 +8829,11 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
             check_canceled(cancel_event, drive_touched=False)
         except OperationCanceled:
             # The safety re-check changes nothing: the drive is exactly as it was.
-            audit(f"OPERATION CANCELED by the user before the drive was touched (/dev/{dev}); nothing was changed",
+            audit(f"OPERATION CANCELED by the user before the drive was touched ({dev_path(dev)}); nothing was changed",
                   logging.WARNING)
             raise OperationCanceled("Canceled by the user before the drive was touched.",
                                     drive_touched=False) from None
-        audit(f"DESTRUCTIVE OPERATION START: erasing /dev/{dev} and writing the {target} hardening seed "
+        audit(f"DESTRUCTIVE OPERATION START: erasing {dev_path(dev)} and writing the {target} hardening seed "
               f"(profile={profile}, label={label}, "
               f"files={len(files)}, "
               f"bytes={sum(len(d) for d in files.values())}, sha256={_seed_manifest_sha256(files)})")
@@ -7960,24 +8842,27 @@ def build_seed_usb(target, dev, log, priv, expected_size=None, progress=None, ca
                 if IS_MAC:
                     ejected = macos_build_seed_usb(label, files, stage_dir, dev, log, progress=progress,
                                                    cancel_event=cancel_event, eject=eject)
+                elif IS_WINDOWS:
+                    ejected = windows_build_seed_usb(label, files, stage_dir, dev, log, progress=progress,
+                                                     cancel_event=cancel_event, eject=eject)
                 else:
                     ejected = linux_build_seed_usb(label, files, stage_dir, dev, log, priv, progress,
                                                    cancel_event, eject)
         except OperationCanceled as e:
             if not e.drive_touched:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} before the drive was touched; "
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} before the drive was touched; "
                       "nothing was changed", logging.WARNING)
             elif e.written:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev} during verification; "
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)} during verification; "
                       "the seed files were written but NOT verified", logging.WARNING)
             else:
-                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on /dev/{dev}; the drive was left unusable",
+                audit(f"DESTRUCTIVE OPERATION CANCELED by the user on {dev_path(dev)}; the drive was left unusable",
                       logging.WARNING)
             raise
         except Exception as e:
-            audit(f"DESTRUCTIVE OPERATION FAILED on /dev/{dev}: {type(e).__name__}", logging.ERROR)
+            audit(f"DESTRUCTIVE OPERATION FAILED on {dev_path(dev)}: {type(e).__name__}", logging.ERROR)
             raise
-        audit(f"DESTRUCTIVE OPERATION COMPLETED on /dev/{dev} (ejected={bool(ejected)})")
+        audit(f"DESTRUCTIVE OPERATION COMPLETED on {dev_path(dev)} (ejected={bool(ejected)})")
         return bool(ejected)
     finally:
         shutil.rmtree(stage_dir, ignore_errors=True)
@@ -8031,7 +8916,7 @@ class DownloadThread(threading.Thread):
 
     def _read_validator(self):
         try:
-            fd = os.open(self._meta_path(), os.O_RDONLY | O_NOFOLLOW)  # never through a symlink
+            fd = os.open(self._meta_path(), os.O_RDONLY | O_NOFOLLOW | O_BINARY)  # never through a symlink
             with os.fdopen(fd, encoding="utf-8") as fh:
                 value = json.load(fh).get("validator")
         except (OSError, ValueError, AttributeError):
@@ -8040,7 +8925,7 @@ class DownloadThread(threading.Thread):
 
     def _write_validator(self, validator):
         try:
-            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | O_NOFOLLOW,
+            fd = os.open(self._meta_path(), os.O_CREAT | os.O_WRONLY | os.O_TRUNC | O_NOFOLLOW | O_BINARY,
                          PRIVATE_FILE_MODE)
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump({"validator": validator}, fh)
@@ -8064,7 +8949,7 @@ class DownloadThread(threading.Thread):
                 "file again to the same location resumes where it stopped.")
 
     def _hash_part(self, tmp_path, digest, size):
-        with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW), "rb") as fh:
+        with os.fdopen(os.open(tmp_path, os.O_RDONLY | O_NOFOLLOW | O_BINARY), "rb") as fh:
             if _hash_stream(fh, digest, limit=size, check=self._check_cancel, chunk=CHUNK_SIZE) < size:
                 raise OSError("the partial file is shorter than expected")
 
@@ -8154,7 +9039,7 @@ class DownloadThread(threading.Thread):
             downloaded = offset
             start = time.time()
             # Create the partial file readable only by its owner.
-            flags = os.O_CREAT | os.O_WRONLY | O_NOFOLLOW | (os.O_APPEND if offset else os.O_TRUNC)
+            flags = os.O_CREAT | os.O_WRONLY | O_NOFOLLOW | O_BINARY | (os.O_APPEND if offset else os.O_TRUNC)
             fd = os.open(tmp_path, flags, PRIVATE_FILE_MODE)
             with os.fdopen(fd, "ab" if offset else "wb") as f:
                 while True:
@@ -8328,7 +9213,7 @@ def help_sections():
                                  describe_hardening_windows_applied(HARDENING_BASELINE))
     windows_not_changed = "\n".join("• " + text + ": " + why for _id, text, why in WINDOWS_HARDENING_NOT_CHANGED)
     return [
-        ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on macOS and Linux.
+        ("Overview", f"""EPMA USB CREATOR {__version__} writes a bootable USB drive from an ISO image on Windows 11, macOS and Linux.
 
 ## Four image types and the hardening seed (five cards)
 • Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
@@ -8447,6 +9332,7 @@ def help_sections():
 • The image is about 9.5 GB once extracted and the download about 1.4 GB: keep roughly 12 GB free on the computer while preparing it (a warning appears when there is less). The drive must be at least as large as the image, otherwise nothing is touched; a drive below 16 GB shows a warning first.
 • The official address redirects to a versioned file on dl.google.com. A redirect to any other server is refused and what arrived is discarded.
 • The administrator password is asked on macOS as well, because the whole drive is written directly.
+• On Windows the finished drive may make Windows offer to format it (it cannot read Linux or ChromeOS partitions): click Cancel, never Format.
 • On macOS the finished drive does not appear in Finder, as with Linux images (see "Quick start: Linux and other ISOs").
 • The download link is only accepted when it is Google's official address (@URL@).
 • Command line: fetch-chromeos downloads and extracts the image; write --mode chromeos writes it.""".replace(
@@ -8480,7 +9366,7 @@ def help_sections():
 • Hardening seed: a separate small drive (GPT + FAT32) with auto-install files; no image file is needed, so the image step is hidden and the button reads "Create Seed Drive".
 
 ## Dependencies
-• Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex.
+• Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex. On Windows 11 it needs nothing extra: PowerShell and DISM come with Windows (DISM splits install.wim when it is over 4 GB). On Windows a FAT32 volume is at most 30 GiB, so a bigger drive keeps the rest unallocated.
 • The Google Chrome, Linux and Other ISO cards need nothing extra. The Hardening seed card needs only parted, mkfs.vfat, wipefs and partprobe on Linux and nothing extra on macOS.
 • The dependencies are checked before anything is erased. When one is missing, the Create button stays disabled and a hint says what to install.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
@@ -8494,6 +9380,7 @@ def help_sections():
 
 ## Administrator password
 • Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• On Windows there is no password: the program itself must run as Administrator (the installed shortcut asks Windows for it with the UAC prompt; from a terminal, open it with Run as administrator). Without it nothing is changed.
 • It is checked once. Normally it is then dropped and sudo's own credential timestamp carries the operation; only if this computer does not keep that timestamp does the password stay in memory, until the operation ends. It is used only to run local disk commands and is never logged, written to disk or sent anywhere.
 
 ## Progress, Cancel and the log
@@ -8503,7 +9390,7 @@ def help_sections():
 • "Show details" opens a box with every command that runs; it opens by itself when a write fails. Keep its text if you need to report a problem."""),
 
         ("Safety", f"""## What protects you
-• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed.
+• Only USB drives are listed. If the program cannot confirm that a disk is external and safe, it hides the disk instead of offering it. On Linux, disks that hold the system ({critical_mounts}, or anything under /boot) are never listed; on Windows the disk that holds the running Windows is never listed.
 • You see the model, size and contents before erasing. Large or data-filled drives need the identifier typed.
 • Right before erasing, the drive is looked up again and must still be the same device (size, serial number, model). If it was swapped, the operation stops.
 • A privileged command that fails is never run a second time on its own.
@@ -8514,7 +9401,7 @@ def help_sections():
 
 ## What it cannot do for you
 • It cannot tell which of your USB drives you meant. Read the model, size and volumes in the confirmation every time.
-• It erases the whole drive, including partitions macOS or Linux may not show.
+• It erases the whole drive, including partitions Windows, macOS or Linux may not show.
 • A drive that was canceled or interrupted mid-write is not usable until written again."""),
 
         ("Verification and eject", """## Verification
@@ -8625,7 +9512,7 @@ Data goes to stdout; messages, progress and errors go to stderr. NO_COLOR is hon
 • No telemetry, no accounts, no data leaves your computer. The only network traffic is the ISO or ChromeOS Flex download you ask for."""),
 
         ("About", f"""EPMA USB CREATOR {__version__}
-{APP_TAGLINE}, on macOS and Linux.
+{APP_TAGLINE}, on Windows 11, macOS and Linux.
 
 Platform: {platform_display_name()}
 License: GNU General Public License v3 or later
@@ -8942,7 +9829,7 @@ def drive_row_texts(disk):
     and the detail is the device path plus a summary of the volumes on the drive. A record without
     "model", "size" or "volumes" (an older one) still gives sensible text.
     """
-    dev = "/dev/" + str(disk.get("id", ""))
+    dev = dev_path(disk.get("id", ""))
     model = str(disk.get("model") or "").strip()
     size = human_size(disk["size"]) if isinstance(disk.get("size"), (int, float)) else ""
     volumes = disk.get("volumes")
@@ -9449,7 +10336,7 @@ class App(_TkBase):
         self.cancel_event = threading.Event()
         self.create_cancel_event = threading.Event()  # cancels the USB creation (not the download)
         self.disks = []
-        self.priv = PrivilegeHelper(self)
+        self.priv = WindowsPrivilege() if IS_WINDOWS else PrivilegeHelper(self)
         self._log_lock = threading.Lock()
         self._log_pending = []
         self._sha_job = 0  # identifies the running SHA-256 calculation, so stale results are ignored
@@ -9956,6 +10843,8 @@ class App(_TkBase):
 
         def worker():
             try:
+                if IS_WINDOWS:
+                    raise RuntimeError(missing_dependencies_hint([]))
                 if IS_MAC:
                     if not shutil.which("brew"):
                         raise RuntimeError("Homebrew not found. Install it from https://brew.sh")
@@ -10727,16 +11616,16 @@ class App(_TkBase):
         """Final confirmation: always shows model, size and contents; high-risk drives also need
         their identifier typed. Returns True to go ahead."""
         level, reasons = assess_disk_risk(disk, translate=True)  # the level never depends on the language
-        text = (_("This will PERMANENTLY ERASE all data on /dev/{id} and write {what} to it.").format(
-                    id=disk["id"], what=what)
+        text = (_("This will PERMANENTLY ERASE all data on {path} and write {what} to it.").format(
+                    path=dev_path(disk["id"]), what=what)
                 + "\n\n" + describe_disk_for_confirmation(disk, translate=True))
-        audit(f"Erase confirmation shown for /dev/{disk['id']} risk={level}")
+        audit(f"Erase confirmation shown for {dev_path(disk['id'])} risk={level}")
         if level == "high":
             ok = ask_typed_confirmation(self, _("Confirm erasing this drive"), text, disk["id"], reasons)
         else:
             ok = messagebox.askyesno(_("Final confirmation"), text + "\n\n" + _("Continue?"))
         if not ok:
-            audit(f"Erase of /dev/{disk['id']} declined by the user")
+            audit(f"Erase of {dev_path(disk['id'])} declined by the user")
         return ok
 
     def start_create_usb(self):
@@ -10827,9 +11716,17 @@ class App(_TkBase):
         # the direct-write mode). Collect and verify the password now, before touching
         # the drive.
         if needs_admin(mode) and not self.priv.authenticate(
-                _("Administrator access is required to write /dev/{id}.").format(id=disk["id"])):
+                _("Administrator access is required to write {path}.").format(path=dev_path(disk["id"]))):
             self.priv.clear_cached_password()
-            self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
+            if IS_WINDOWS:
+                messagebox.showerror(
+                    _("Administrator required"),
+                    _("EPMA USB Creator must run as Administrator to erase and write a USB drive.\n\n"
+                      "Close it and open it again with right-click > Run as administrator (the Start menu "
+                      "shortcut of the installed program does this by itself). Nothing was changed."))
+                self.log(_("Canceled: the program is not running as Administrator. The drive was not modified."))
+            else:
+                self.log(_("Canceled: administrator password was not provided. The drive was not modified."))
             return
         self.create_cancel_event.clear()
         self.update_create_button_state()
@@ -11172,6 +12069,8 @@ class CliError(Exception):
 
 
 def _emit(stream, text, end="\n"):
+    if stream is None:  # a windowed program (the MSI's GUI) has no console to print to
+        return
     try:
         stream.write(text + end)
     except UnicodeEncodeError:  # e.g. LANG=C: the "—" in disk labels cannot be encoded
@@ -11353,6 +12252,17 @@ class CliPrivilege:
                                "Check the messages above.")
 
 
+class WindowsCliPrivilege(WindowsPrivilege):
+    """Command line privilege check for Windows: the terminal itself must have been opened as Administrator."""
+
+    def authenticate(self, reason=None, max_attempts=3):
+        if not windows_is_admin():
+            raise RuntimeError("Administrator privileges are required. Open Windows Terminal or PowerShell with "
+                               "right-click > Run as administrator and run the command again. "
+                               "Nothing was changed.")
+        return True
+
+
 def cli_sha256_file(path, progress=None, chunk=SHA256_CHUNK):
     """sha256_file() reporting (done, total, text) to `progress`, the shape CliProgress takes."""
     return sha256_file(path, chunk=chunk,
@@ -11400,12 +12310,12 @@ def _disk_summary(disk):
 
 
 def _write_steps(mode, disk_id, eject, hardening_files=None):
-    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive"]
+    steps = [f"Re-check that {dev_path(disk_id)} is still the listed USB drive"]
     if mode in RAW_MODES:
-        steps += [f"Unmount /dev/{disk_id} and write the image to it byte for byte",
+        steps += [f"Unmount {dev_path(disk_id)} and write the image to it byte for byte",
                   "Read the drive back and compare it with the image"]
     else:
-        steps += [f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{VOL_NAME}')",
+        steps += [f"Erase {dev_path(disk_id)} and format it as GPT + FAT32 ('{VOL_NAME}')",
                   "Copy the ISO contents (install.wim is split when it exceeds 4 GB)",
                   "Verify the copied files against the ISO"]
         if hardening_files:
@@ -11418,7 +12328,7 @@ def _print_plan(plan, to_stdout):
     disk = plan["disk"]
     emit = _out if to_stdout else _err
     emit("Plan")
-    emit(f"  Disk : /dev/{disk['id']}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
+    emit(f"  Disk : {dev_path(disk['id'])}  {disk.get('size_human', '')}  {disk.get('label', '')}".rstrip())
     if disk.get("model"):
         emit(f"  Model: {disk['model']}")
     if plan["mode"] == MODE_SEED:
@@ -11586,7 +12496,7 @@ def _prepare_write(args):
     disks = _list_disks()
     disk = next((d for d in disks if d.get("id") == disk_id), None)
     if disk is None:
-        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+        raise CliError(f"{dev_path(disk_id)} is not an eligible USB drive. "
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     mode = args.mode
     detected, _method = cli_detect_kind(iso)
@@ -11638,10 +12548,10 @@ def _confirm_write(args, plan):
     if not _is_interactive():
         raise CliError("Refusing to erase a drive without confirmation: this is not an interactive "
                        "terminal. Review the plan with --dry-run, then pass --yes.", EXIT_USAGE)
-    _err(f"\nThis will PERMANENTLY ERASE all data on /dev/{disk_id}.")
+    _err(f"\nThis will PERMANENTLY ERASE all data on {dev_path(disk_id)}.")
     _emit(sys.stderr, f"Type the disk id ({disk_id}) to confirm: ", end="")
     answer = sys.stdin.readline().strip()
-    if answer != disk_id:
+    if (normalize_typed_identifier(answer) if IS_WINDOWS else answer) != disk_id:
         raise CliError("The confirmation did not match. Nothing was changed.", EXIT_USAGE)
 
 
@@ -11659,7 +12569,7 @@ def _call_engine(plan, log, priv, progress, cancel):
 
 def _run_write(args, plan, result):
     needs_priv = needs_admin(plan["mode"])
-    priv = CliPrivilege()
+    priv = WindowsCliPrivilege() if IS_WINDOWS else CliPrivilege()
     progress = CliProgress()
     log = CliLogger(progress, verbose=args.verbose)
     cancel = threading.Event()
@@ -11677,7 +12587,7 @@ def _run_write(args, plan, result):
     except ValueError:  # not the main thread
         previous = None
     started = time.time()
-    audit(f"CLI write requested: /dev/{plan['disk']['id']} mode={plan['mode']}"
+    audit(f"CLI write requested: {dev_path(plan['disk']['id'])} mode={plan['mode']}"
           + (f" target={plan['target']}" if plan["mode"] == MODE_SEED else "")
           + (f" hardening={plan['hardening']}" if plan.get("hardening", HARDENING_NONE) != HARDENING_NONE else ""))
     ejected, failure = None, None
@@ -11815,7 +12725,7 @@ def _prepare_seed(args):
     disks = _list_disks()
     disk = next((d for d in disks if d.get("id") == disk_id), None)
     if disk is None:
-        raise CliError(f"/dev/{disk_id} is not an eligible USB drive. "
+        raise CliError(f"{dev_path(disk_id)} is not an eligible USB drive. "
                        f"Run '{CLI_PROG} list' to see the drives that can be written.")
     try:  # a drive known to be too small is refused first: before the plan, the dry run and any confirmation
         check_seed_target_size(disk.get("size"))
@@ -11827,8 +12737,8 @@ def _prepare_seed(args):
     if missing:
         raise CliError("Missing required tools: " + ", ".join(missing) + ". " + missing_dependencies_hint(missing))
     eject = not args.no_eject
-    steps = [f"Re-check that /dev/{disk_id} is still the listed USB drive",
-             f"Erase /dev/{disk_id} and format it as GPT + FAT32 ('{label}')",
+    steps = [f"Re-check that {dev_path(disk_id)} is still the listed USB drive",
+             f"Erase {dev_path(disk_id)} and format it as GPT + FAT32 ('{label}')",
              f"Copy {len(names)} seed files: " + ", ".join(names),
              "Read the drive back and compare every file byte for byte"]
     steps.append("Eject the drive" if eject else "Leave the drive connected (--no-eject)")
@@ -11888,7 +12798,7 @@ def _fill_staging_folder(stage, files):
             while part != stage:  # makedirs applies the umask to every level it creates
                 os.chmod(part, 0o700)
                 part = os.path.dirname(part)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), PRIVATE_FILE_MODE)
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | O_BINARY, PRIVATE_FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         os.chmod(target, PRIVATE_FILE_MODE)
@@ -12044,7 +12954,7 @@ def build_cli_parser():
     p.add_argument("--iso", required=True, metavar="ISO",
                    help="path of the ISO or disk image (.bin for ChromeOS Flex; use fetch-chromeos to get it)")
     p.add_argument("--disk", required=True, metavar="DISKID",
-                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux, PhysicalDrive3 on Windows)")
     p.add_argument("--mode", choices=[MODE_AUTO, *ALL_MODES], default=MODE_AUTO,
                    help="windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; "
                         "chromeos: raw write of a ChromeOS Flex disk image; auto: detect (default)")
@@ -12060,7 +12970,7 @@ def build_cli_parser():
                    help="ubuntu (autoinstall), fedora (kickstart), debian (script + preseed) or "
                         "windows (Windows 11: harden.cmd to run after install)")
     p.add_argument("--disk", required=True, metavar="DISKID",
-                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux)")
+                   help="drive id as shown by 'list' (disk4 on macOS, sdb on Linux, PhysicalDrive3 on Windows)")
     _add_write_flags(p)
     p = add("harden-files", "write the hardening files into a new or empty folder (no drive is touched)",
             epilog="Nothing is overwritten: a folder that is not empty is refused.")
@@ -12091,9 +13001,17 @@ def main(argv=None):
         except SystemExit as e:  # --help / --version (0) or a usage error (2)
             return e.code if isinstance(e.code, int) else (EXIT_OK if e.code is None else EXIT_USAGE)
         command = args.command or "gui"
-    if command in ("gui", "list", "write", "harden-seed") and not (IS_MAC or IS_LINUX):
-        _err("This script supports macOS and Linux only.")
+    if command in ("gui", "list", "write", "harden-seed") and not (IS_MAC or IS_LINUX or IS_WINDOWS):
+        _err("This script supports Windows 11, macOS and Linux only.")
         return EXIT_ERROR
+    if IS_WINDOWS and command == "gui":
+        windows_enable_dpi_awareness()
+        if not windows_is_admin():
+            # Writing a drive needs Administrator: ask Windows for it now (the UAC prompt) instead of failing later.
+            if windows_relaunch_elevated():
+                return EXIT_OK  # the elevated copy takes over
+            _err("EPMA USB Creator needs Administrator rights to write a USB drive, and they were not granted. "
+                 "Drives can be listed but not written.")
     debug = bool(getattr(args, "debug", False))
     try:
         if command == "gui":

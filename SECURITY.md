@@ -67,12 +67,22 @@ When the application **cannot confirm** that a disk is external and safe, it
 resulted in the disk being listed anyway.
 
 Only drives attached over **USB** are ever offered (macOS `BusProtocol == USB`, Linux
-`tran == usb`); SD cards, internal disks and Thunderbolt/NVMe enclosures are not.
+`tran == usb`, Windows `BusType == USB`); SD cards, internal disks and Thunderbolt/NVMe enclosures are not.
 
 This includes a specific safeguard for machines that boot from removable media
 (for example, a Raspberry Pi booting from its SD card, or a USB-booted system):
 on Linux, any disk holding `/`, `/boot` (or anything under it), `/boot/efi`, `/home`,
 `/usr`, `/var` or `/etc` is hidden, even when the operating system reports it as removable.
+
+**Windows.** The program runs elevated (Administrator) and never pastes a value into PowerShell code: each script
+is a fixed text with a typed `param()` block, written to a private temporary folder and started with
+`-File`, so the disk number, label and paths arrive as data. PowerShell and DISM are started from `System32` by
+absolute path (never found through `PATH` or the current folder). A disk is hidden when the system/boot flag is
+set, when it holds the system drive letter, or when that flag cannot be read; the wipe scripts check "USB and not
+the boot disk" once more right before `Clear-Disk`. Raw writes open `\\.\PhysicalDriveN` with the Win32 API
+(unbuffered, write-through) only for a disk that passed the same re-verification as on the other systems.
+The MSI is built in CI from pinned build tools (hash-checked `pip` requirements, a pinned WiX version), carries
+a SHA-256 and a GitHub build-provenance attestation, and is **not code-signed**; Windows SmartScreen may warn.
 
 ### 4. Re-verification before destruction
 

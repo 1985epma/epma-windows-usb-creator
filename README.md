@@ -2,14 +2,14 @@
 
 **English** · [Português](README.pt-BR.md)
 
-Cross-platform application (**macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) and **Google's ChromeOS Flex** directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
+Cross-platform application (**Windows 11**, **macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) and **Google's ChromeOS Flex** directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
 
 It has a graphical interface (US English) and a [command line mode](#command-line).
 
 Written in pure Python with Tkinter — **zero third-party Python dependencies**.
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue)
-![Platforms](https://img.shields.io/badge/platforms-macOS%20%7C%20Linux-lightgrey)
+![Platforms](https://img.shields.io/badge/platforms-Windows%2011%20%7C%20macOS%20%7C%20Linux-lightgrey)
 ![Python](https://img.shields.io/badge/python-3.10%2B-green)
 [![Release](https://img.shields.io/github/v/release/1985epma/epma-windows-usb-creator)](https://github.com/1985epma/epma-windows-usb-creator/releases/latest)
 [![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
@@ -82,6 +82,14 @@ Every change is listed in the [CHANGELOG](CHANGELOG.md); downloads are on the [R
 
 ## Requirements
 
+### Windows 11
+
+Nothing to install with the **MSI package** (see [Installation](#windows-11-msi-package)): it bundles Python and Tkinter, and the program uses what ships with Windows — PowerShell (Storage cmdlets) and DISM, which also splits `install.wim` when it is over 4 GB. Running from source needs Python **3.10 or newer** with Tkinter (the python.org installer includes it).
+
+The program must run as **Administrator**: the installed shortcut asks Windows for it (UAC prompt), and `python win11_usb_creator.py` relaunches itself elevated. For the command line, open Windows Terminal or PowerShell with *Run as administrator*. There is no password prompt on Windows.
+
+Windows formats FAT32 volumes up to 32 GB only, so on a bigger drive the *Windows 11* card creates a 30 GiB partition and leaves the rest unallocated (the byte-for-byte cards use the whole drive).
+
 ### macOS
 
 ```bash
@@ -114,6 +122,17 @@ Alternatively, just launch the application and use the **"Install missing depend
 On Linux, partitioning/formatting/mounting a raw block device requires root, so the application will ask for your administrator password (via `sudo`, or `pkexec` if `sudo` is unavailable).
 
 ## Installation
+
+### Windows 11 (MSI package)
+
+Download `epma-usb-creator-<version>-x64.msi` from the [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases) page, check it and install:
+
+```powershell
+Get-FileHash .\epma-usb-creator-1.2.0-x64.msi -Algorithm SHA256   # compare with SHA256SUMS.txt
+msiexec /i epma-usb-creator-1.2.0-x64.msi /qb                      # or just double-click it
+```
+
+It installs to `C:\Program Files\EPMA USB Creator` with a Start-menu shortcut (**EPMA USB Creator**, always started as Administrator) and, optionally, the command-line tool `epma-usb-creator-cli.exe` on the `PATH`. Updates replace the old version; uninstall from *Settings → Apps*. The package is **not code-signed**, so Windows SmartScreen may warn: choose *More info → Run anyway* after checking the SHA-256 (and the GitHub attestation, with `gh attestation verify`). [installer/README.md](installer/README.md) has the exact commands, silent installs and how to build the MSI yourself.
 
 ### Homebrew (macOS — recommended)
 
@@ -265,7 +284,7 @@ This application **completely erases** the selected disk and executes privileged
 
 ### Preventing the wrong disk from being erased
 
-- Only **USB** drives are listed. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check) and the bus protocol must be `USB`; on Linux the disk holding the root filesystem is excluded and only devices with USB transport are shown (SD cards and internal disks are not).
+- Only **USB** drives are listed. On Windows the disk that holds the running Windows (boot/system flag or the system drive letter) is excluded, the bus type must be `USB`, and the PowerShell scripts check both again right before the wipe. On macOS the internal disk is filtered twice (`diskutil list external physical` plus an explicit `Internal` flag check) and the bus protocol must be `USB`; on Linux the disk holding the root filesystem is excluded and only devices with USB transport are shown (SD cards and internal disks are not).
 - **Fail closed:** if the application cannot *confirm* that a disk is external, it hides the disk instead of listing it. On Linux, disks holding `/`, `/boot` (or anything under it), `/boot/efi`, `/home`, `/usr`, `/var` or `/etc` are never listed, even when the system reports them as removable — this protects machines that boot from an SD card or USB stick, such as a Raspberry Pi.
 - **You see what you are erasing:** the list and the final dialog show the model, size and volumes (with used space). Drives that are large, hold a lot of data or look like a backup disk require typing the disk identifier.
 - **Re-verification before erasing:** immediately before writing, the application re-enumerates the disks and confirms the selected identifier still points to the same device with the same size **and the same serial/model**. Names such as `/dev/sdb` are recycled by the operating system — if a drive is swapped in between, the operation is aborted.
@@ -313,7 +332,8 @@ Every change is automatically checked by GitHub Actions (all actions are pinned 
 |---|---|
 | [`ci.yml`](.github/workflows/ci.yml) | Linting, unit tests (Python 3.10–3.15, Linux and macOS), ShellCheck of the embedded scripts, end-to-end tests on loop devices, Linux distribution probes |
 | [`security.yml`](.github/workflows/security.yml) | Security regression guard, Bandit, Semgrep, CodeQL, secret scanning |
-| [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums, build provenance and an SBOM; updates the Homebrew tap |
+| [`windows.yml`](.github/workflows/windows.yml) | Builds the Windows MSI, installs and uninstalls it silently, runs the unit tests on Windows and the end-to-end test on a virtual disk (VHD) |
+| [`release.yml`](.github/workflows/release.yml) | Publishes releases with SHA-256 checksums, build provenance and an SBOM (the MSI included); updates the Homebrew tap |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | OpenSSF Scorecard supply-chain assessment |
 
 The security pipeline is built in two layers: a dependency-free regression guard that verifies that every audit fix remains in place, plus external analysers as a second opinion. Each workflow file is extensively commented, explaining what every step does and why.
@@ -356,7 +376,7 @@ Make sure the machine is in **UEFI** mode (not Legacy/CSM). The generated drive 
 
 ## Limitations
 
-- Does not run on Windows (the script exits with an error on that platform).
+- **Windows support is new and was written without a Windows machine at hand**: the unit tests simulate the PowerShell/DISM/raw-disk steps, and the end-to-end test on a virtual disk runs only in CI. Try it with a spare USB drive first. The MSI is not code-signed. `install.esd` files over 4 GB cannot be split on Windows (DISM splits `.wim` only); the ISO from Microsoft's download page has `install.wim`.
 - Produces **UEFI/GPT** media only — no legacy BIOS boot support.
 - Does not bypass Windows 11 requirements (TPM 2.0 / Secure Boot).
 - A cancelled or interrupted download keeps its partial file and resumes when the server supports it; a failed integrity check discards it.
