@@ -7040,13 +7040,17 @@ def _seed_readme(target):
     return "\n".join(out) + "\n"
 
 
-def hardening_files_seed(target, profile):
+def hardening_files_seed(target, profile, during_setup=False):
     """(FAT32 volume label, {relative_path: bytes}) of the seed drive for `target`.
 
-    target: SEED_UBUNTU, SEED_FEDORA or SEED_DEBIAN. profile: HARDENING_BASELINE (HARDENING_NONE has no
-    files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
-    never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile)."""
+    target: SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN or SEED_WINDOWS. profile: HARDENING_BASELINE (HARDENING_NONE
+    has no files and raises ValueError, as do unknown targets and profiles). The files never choose a disk and
+    never contain a password, hash or key; harden-linux.sh is exactly linux_hardening_script(profile).
+    during_setup only matters for SEED_WINDOWS (EXPERIMENTAL answer file for Windows Setup); the three
+    Linux targets ignore it."""
     _seed_check_args(target, profile)
+    if target == SEED_WINDOWS:
+        return _windows_seed_files(profile, bool(during_setup))
     text = linux_hardening_script(profile)
     if not isinstance(text, str) or not text.strip():
         raise ValueError("The hardening script is empty")
@@ -7062,6 +7066,209 @@ def hardening_files_seed(target, profile):
     files["README.txt"] = _seed_readme(target).encode("ascii")
     return SEED_LABELS[target], files
 # ===== end hardening: seed content =====
+
+
+# ===== hardening2: win-seed =====
+# The Windows 11 seed drive: a second small USB with harden.cmd / audit.cmd / undo.cmd (double-click launchers that
+# ask for administrator rights), harden.ps1 (windows_hardening_ps1) and a README. With during_setup=True (EXPERIMENTAL)
+# it also carries autounattend.xml (windows_seed_autounattend) and a marker file the answer file looks for. Nothing
+# here selects a disk, creates an account or stores a secret. Output is deterministic: same input, same bytes.
+SEED_WINDOWS_LABEL = "EPMA-SEED"
+SEED_LABELS[SEED_WINDOWS] = SEED_WINDOWS_LABEL
+SEED_WINDOWS_MARKER = "EPMA-SEED.txt"
+SEED_WINDOWS_README_WIDTH = 76
+SEED_WINDOWS_LOG_SHOWN = "C:\\Windows\\Temp\\epma-hardening.log"  # the log of harden.ps1, as shown to the user
+# (file name, harden.ps1 -Mode, asks "Continue? [y/N]" first, lines echoed before anything happens)
+SEED_WINDOWS_LAUNCHERS = (
+    ("harden.cmd", "Apply", True, (
+        "EPMA USB CREATOR - hardening of this Windows PC. EXPERIMENTAL scripts.",
+        "This applies a small set of recommended security settings with harden.ps1.",
+        "Nothing is installed and nothing is downloaded. A log is written to",
+        SEED_WINDOWS_LOG_SHOWN + ". Run audit.cmd first to see a report.",
+    )),
+    ("audit.cmd", "Audit", False, (
+        "EPMA USB CREATOR - report on this Windows PC. EXPERIMENTAL scripts.",
+        "This only reports which settings are in effect. It changes nothing.",
+        "Nothing is installed and nothing is downloaded. Administrator rights are",
+        "still needed because some of the checks cannot be read without them.",
+    )),
+    ("undo.cmd", "Undo", True, (
+        "EPMA USB CREATOR - undo the hardening of this Windows PC. EXPERIMENTAL scripts.",
+        "This asks harden.ps1 to put back the settings it changed earlier.",
+        "Nothing is installed and nothing is downloaded. A log is written to",
+        SEED_WINDOWS_LOG_SHOWN + ".",
+    )),
+)
+
+
+def _windows_seed_launcher(name, mode, confirm, banner):
+    """The bytes of one double-click launcher (CRLF, plain ASCII, no BOM).
+
+    It re-launches itself as administrator when it is not (a UAC prompt), optionally asks `Continue? [y/N]`,
+    runs harden.ps1 from its own folder (`%~dp0`, quoted: paths with spaces work) in the given mode and waits
+    for a key so that the window stays open. It never deletes, formats or partitions anything."""
+    ps = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" -Mode {mode}'
+    lines = [
+        "@echo off",
+        "setlocal",
+        f"rem {name}: EPMA hardening seed for Windows 11 (EXPERIMENTAL scripts, see README.txt).",
+        f"rem Runs harden.ps1 -Mode {mode} from this folder. Nothing is installed or downloaded.",
+        f"title EPMA hardening - {mode}",
+        'set "SELF=%~f0"',
+        "echo.",
+        *("echo " + text for text in banner),
+        "echo.",
+        "net session >nul 2>&1",
+        "if not errorlevel 1 goto :admin",
+        "fltmc >nul 2>&1",
+        "if not errorlevel 1 goto :admin",
+        'if /i "%~1"=="elevated" goto :noadmin',
+        "echo Administrator rights are needed. Windows will now show a prompt:",
+        "echo choose Yes to continue. A new window opens for the work.",
+        "set \"SELF_PS=%SELF:'=''%\"",
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
+        '"Start-Process -FilePath \'%SELF_PS%\' -ArgumentList \'elevated\' -Verb RunAs"',
+        "if errorlevel 1 goto :noadmin",
+        "exit /b 0",
+        "",
+        ":noadmin",
+        "echo.",
+        "echo Administrator rights were not granted. Nothing was changed.",
+        "pause",
+        "exit /b 1",
+        "",
+        ":admin",
+    ]
+    if confirm:
+        lines += [
+            'set "ANSWER="',
+            'set /p "ANSWER=Continue? [y/N] "',
+            'if /i "%ANSWER%"=="y" goto :run',
+            'if /i "%ANSWER%"=="yes" goto :run',
+            "echo.",
+            "echo Cancelled. Nothing was changed.",
+            "pause",
+            "exit /b 1",
+            "",
+            ":run",
+        ]
+    lines += [
+        ps,
+        'set "RC=%errorlevel%"',
+        "echo.",
+        "echo Finished with exit code %RC%. Read the lines above: a WARN line means a",
+        "echo setting is not in effect. A restart may be needed for a few settings.",
+        "pause",
+        "exit /b %RC%",
+    ]
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+def _windows_seed_readme(profile, during_setup):
+    """README.txt of the Windows seed drive: ASCII, CRLF (Notepad), lines of at most 76 characters."""
+    import textwrap
+    out = []
+
+    def para(text, bullet="", indent=""):
+        out.extend(textwrap.wrap(text, SEED_WINDOWS_README_WIDTH, initial_indent=indent + bullet,
+                                 subsequent_indent=indent + " " * len(bullet),
+                                 break_on_hyphens=False, break_long_words=False))
+
+    def blank():
+        out.append("")
+
+    def heading(text):
+        blank()
+        out.append(text.upper())
+
+    out.append("EPMA HARDENING SEED - Windows 11 (experimental scripts)")
+    out.append("=" * 60)
+    heading("What this drive is")
+    para("A small helper drive made by EPMA USB CREATOR. It holds a PowerShell script and three "
+         "double-click launchers that apply a small set of recommended security settings to "
+         "Windows 11. It is a SECOND small USB. It is NOT a Windows installer and it does not "
+         "boot by itself. Nothing is installed and nothing is downloaded.")
+    heading("Way 1 (recommended): run it after Windows is installed")
+    for n, text in enumerate((
+            "Install Windows 11 as usual, then sign in with an administrator account.",
+            "Plug this drive in and open it in File Explorer.",
+            "Right-click audit.cmd and choose Open (or double-click it) FIRST. It only shows a "
+            "report of what is in effect and changes nothing.",
+            "Then double-click harden.cmd. Windows asks for permission (the User Account Control "
+            "prompt): choose Yes. Type y at 'Continue? [y/N]' to apply the settings.",
+            "Read the lines it prints. A [WARN] line means that a setting is NOT in effect. "
+            "Nothing was forced.",
+            "To go back, double-click undo.cmd and type y.",
+    ), 1):
+        para(text, f"{n}. ")
+    blank()
+    para("A log is written to " + SEED_WINDOWS_LOG_SHOWN + ". A restart may be needed for a few "
+         "settings. Running harden.cmd twice changes nothing more.")
+    heading("What the script changes")
+    for line in describe_hardening_windows(profile):
+        para(line.split(" -- risk:", 1)[0], "- ", "  ")
+    heading("What it leaves alone")
+    for _sid, text, why in WINDOWS_HARDENING_NOT_CHANGED:
+        para(text + ". " + why, "- ", "  ")
+    heading("Read the files before you run them")
+    para("harden.cmd, audit.cmd, undo.cmd and harden.ps1 are plain text files. Open them in "
+         "Notepad (right-click, Open with) and read them first. Each launcher only asks for "
+         "administrator rights, asks you to confirm, and runs harden.ps1 from this drive.")
+    heading("Honest caveats")
+    for text in (
+            "These settings are inspired by common security baselines. They are a sensible "
+            "starting point, not a compliance claim, certification or guarantee.",
+            "The PowerShell script was never executed by its authors on a real Windows PC. Try it "
+            "on a spare PC or in a virtual machine before you use it on a PC you depend on.",
+            "Another antivirus program or Windows Tamper Protection can stop the Windows Defender "
+            "settings from being changed. The script then prints a [WARN] line.",
+            "Nothing here selects a disk, partitions or erases anything, and nothing creates an "
+            "account or sets a password.",
+    ):
+        para(text, "- ", "  ")
+    if during_setup:
+        heading("EXPERIMENTAL: apply it while Windows is being installed")
+        para("This drive also holds an answer file, autounattend.xml, and a small marker file, "
+             + SEED_WINDOWS_MARKER + " (the answer file looks for it to find the letter of this "
+             "drive: do not rename or remove it). This way of using the drive is EXPERIMENTAL "
+             "and has not been tried by its authors on a real Windows PC. Way 1 above is the "
+             "safer path.")
+        blank()
+        for n, text in enumerate((
+                "Plug this drive in next to the Windows installer USB, before you start Setup.",
+                "Start Windows Setup from the installer USB as usual.",
+                "Setup then runs harden.ps1 at the end of the specialize phase. Setup still asks "
+                "for the language, the disk, the edition and your account, as usual.",
+                "Afterwards, run audit.cmd to see what is in effect.",
+        ), 1):
+            para(text, f"{n}. ")
+        blank()
+        para("If Setup complains about the answer file, unplug this drive and install normally, "
+             "then use harden.cmd after installing.")
+        para("If the installer USB already has its own autounattend.xml, it is not defined which "
+             "one Windows uses: use only one of them.")
+    return ("\r\n".join(out) + "\r\n").encode("ascii")
+
+
+def _windows_seed_files(profile, during_setup):
+    """(label, files) of the Windows seed drive; see hardening_files_seed."""
+    ps1 = windows_hardening_ps1(profile)  # noqa: F821  (defined by the WIN-SCRIPT part)
+    if not isinstance(ps1, bytes) or not ps1.strip():
+        raise ValueError("The Windows hardening script is empty")
+    files = {name: _windows_seed_launcher(name, mode, confirm, banner)
+             for name, mode, confirm, banner in SEED_WINDOWS_LAUNCHERS}
+    files["harden.ps1"] = ps1
+    files["README.txt"] = _windows_seed_readme(profile, during_setup)
+    if during_setup:
+        xml = windows_seed_autounattend(profile)  # noqa: F821  (defined by the WIN-XML part)
+        if not isinstance(xml, bytes) or not xml.strip():
+            raise ValueError("The Windows answer file is empty")
+        files["autounattend.xml"] = xml
+        files[SEED_WINDOWS_MARKER] = (
+            "EPMA hardening seed drive. This file marks the drive; the answer file looks for it.\r\n"
+        ).encode("ascii")
+    return SEED_WINDOWS_LABEL, files
+# ===== end hardening2: win-seed =====
 
 
 # ===== hardening: engine-seed =====
