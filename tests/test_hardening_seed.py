@@ -1143,10 +1143,13 @@ class WindowsSeedTests(SeedTestBase):
                         self.assertNotIn(needle, text)
 
 
-@unittest.skipUnless(hasattr(app, "windows_hardening_ps1") and hasattr(app, "windows_seed_autounattend"),
-                     "the Windows script and answer file are not in this build")
 class RealWindowsSeedTests(unittest.TestCase):
-    """The same drive with the real script and answer file (runs once the Windows parts are merged)."""
+    """The same drive with the real script and answer file (never skipped: a renamed symbol fails here)."""
+
+    def test_the_symbols_this_class_uses_exist(self):
+        for name in ("windows_hardening_ps1", "windows_seed_autounattend", "hardening_files_seed",
+                     "validate_seed_files"):
+            self.assertTrue(callable(getattr(app, name, None)), f"{name} is missing")
 
     def test_real_pieces_end_up_on_the_drive_unchanged(self):
         ps1 = app.windows_hardening_ps1(app.HARDENING_BASELINE)
@@ -1180,9 +1183,11 @@ class RealWindowsSeedTests(unittest.TestCase):
                 self.assertNotIn("BEGIN PRIVATE", text)
 
 
-@unittest.skipUnless(hasattr(app, "linux_hardening_script"), "linux_hardening_script is not in this build")
 class RealScriptTests(unittest.TestCase):
-    """Same structural checks with the real script (this runs once the scripts part is merged)."""
+    """Same structural checks with the real script (never skipped: a renamed symbol fails here)."""
+
+    def test_the_symbol_this_class_uses_exists(self):
+        self.assertTrue(callable(getattr(app, "linux_hardening_script", None)), "linux_hardening_script is missing")
 
     def test_real_script_round_trips_in_every_seed(self):
         script = app.linux_hardening_script(app.HARDENING_BASELINE).encode("utf-8")

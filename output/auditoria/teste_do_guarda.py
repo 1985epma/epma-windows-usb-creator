@@ -224,6 +224,24 @@ CENARIOS = [
         ),
         "G14",
     ),
+    (
+        # Ainda cita during_setup e ainda lança um erro (o teste antigo aprovava), mas já não compara com SEED_WINDOWS.
+        "Pendrive de sementes: a recusa de during_setup passa a comparar com um texto solto, não com SEED_WINDOWS",
+        lambda s: s.replace(
+            "    if during_setup and target != SEED_WINDOWS:",
+            "    if during_setup and target != \"windows\":",
+        ),
+        "G14",
+    ),
+    (
+        # Cita SEED_WINDOWS e during_setup e lança erro, mas a lógica está invertida (recusaria o próprio Windows).
+        "Pendrive de sementes: a recusa de during_setup é invertida (recusa o Windows em vez dos outros alvos)",
+        lambda s: s.replace(
+            "    if during_setup and target != SEED_WINDOWS:",
+            "    if during_setup and target == SEED_WINDOWS:",
+        ),
+        "G14",
+    ),
     # ===== end hardening2: engine-cli =====
 ]
 

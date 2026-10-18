@@ -873,6 +873,22 @@ class HardenFilesTests(HardeningCliCase):
         self.files_seed.assert_not_called()
         self.assertTrue(os.path.isfile(os.path.join(out, "sources", "$OEM$", "$$", "Setup", "Scripts", "harden.ps1")))
 
+    def test_windows_points_to_windows_seed_for_the_seed_drive_files_on_stderr_only(self):
+        for flag in ([], ["--json"]):
+            with self.subTest(flag=flag):
+                code, stdout, err = run_main(["harden-files", "--target", "windows", "--out",
+                                              self.out_dir("same-usb" + str(len(flag))), *flag])
+                self.assertEqual(code, 0)
+                self.assertIn("--target windows-seed", err)
+                self.assertIn("SAME USB", err)
+                self.assertNotIn("windows-seed", stdout)  # the data on stdout (names or JSON) is unchanged
+                if flag:
+                    self.assertEqual(sorted(f["path"] for f in json.loads(stdout)["files"]), sorted(WIN_FILES))
+        for target in ("windows-seed", "ubuntu", "fedora", "debian"):  # the note is for the same-USB set only
+            with self.subTest(target=target):
+                err = run_main(["harden-files", "--target", target, "--out", self.out_dir("o-" + target)])[2]
+                self.assertNotIn("SAME USB", err)
+
     def test_during_setup_is_only_for_windows_seed(self):
         for target in ("windows", "ubuntu", "fedora", "debian"):
             with self.subTest(target=target):

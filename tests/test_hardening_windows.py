@@ -103,11 +103,8 @@ class FileSetTests(HardeningWindowsBase):
                 self.assertLessEqual(len(data), MAX_FILE)
         self.assertLessEqual(sum(len(d) for d in self.files.values()), MAX_TOTAL)
 
-    def test_shared_validator_accepts_the_files_when_present(self):
-        validate = getattr(app, "validate_seed_files", None)
-        if validate is None:
-            self.skipTest("validate_seed_files is not merged into this branch yet")
-        self.assertEqual(validate(self.files), self.files)
+    def test_shared_validator_accepts_the_files(self):
+        self.assertEqual(app.validate_seed_files(self.files), self.files)
 
     def test_plain_ascii_everywhere(self):
         for path, data in self.files.items():
