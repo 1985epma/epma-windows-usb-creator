@@ -147,7 +147,8 @@ HARDENING_NONE = "none"
 HARDENING_BASELINE = "baseline"
 HARDENING_PROFILES = (HARDENING_NONE, HARDENING_BASELINE)
 SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN = "ubuntu", "fedora", "debian"
-SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN)
+SEED_WINDOWS = "windows"  # Windows 11: a seed drive with harden.cmd / harden.ps1 (and, optionally, an answer file)
+SEED_TARGETS = (SEED_UBUNTU, SEED_FEDORA, SEED_DEBIAN, SEED_WINDOWS)
 
 # What detect_iso_kind() finds in an image. The strings are what `detect` prints; KIND_MODE says which
 # mode writes each kind (the two sets of names are kept apart on purpose, whatever their spelling).
@@ -601,6 +602,16 @@ PT_BR = {
     "Advanced audit policy: sign-ins, account lockouts, account and group changes, audit-policy changes, process creation; Security log size raised to 128 MiB -- risk: The Security event log fills much faster (process creation and sign-ins are frequent events), so its maximum size is raised to 128 MiB (never lowered). Retention is still limited: on a busy PC the oldest events can be overwritten within days, so export the log if you need to keep it.": "Política de auditoria avançada: logons, bloqueios de conta, alterações de contas e grupos, alterações da política de auditoria, criação de processos; tamanho do log de Segurança aumentado para 128 MiB -- risco: O log de eventos de Segurança enche muito mais rápido (criação de processos e logons são eventos frequentes); por isso o tamanho máximo dele sobe para 128 MiB (nunca é reduzido). A retenção continua limitada: num PC muito usado, os eventos mais antigos podem ser sobrescritos em poucos dias; exporte o log se precisar guardá-lo.",
     "Keep User Account Control switched on -- risk: Only acts when UAC was switched off; takes effect after the next restart.": "Manter o Controle de Conta de Usuário ativado -- risco: Só age quando o UAC estava desativado; vale após a próxima reinicialização.",
     # ===== end hardening: windows content =====
+    # ===== hardening2: windows xml =====
+    # One entry per line of describe_windows_seed_during_setup().
+    "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.": "EXPERIMENTAL: este modo não foi testado em uma instalação real do Windows. Se algo parecer errado, use o modo \"executar após a instalação\".",
+    "The seed drive carries an answer file (autounattend.xml). Windows Setup looks for that file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start.": "O pendrive do kit leva um arquivo de resposta (autounattend.xml). A instalação do Windows procura esse arquivo na raiz das unidades removíveis; por isso, conecte o pendrive do kit ao lado do pendrive instalador do Windows antes de começar.",
+    "The answer file adds one step, early on the first start of the new system: it looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, runs harden.ps1 from that drive in Apply mode.": "O arquivo de resposta adiciona uma etapa, logo no primeiro início do sistema novo: procura o arquivo EPMA-SEED.txt nas unidades D: a Z: e, onde o encontrar, executa o harden.ps1 dessa unidade no modo Apply.",
+    "Keep both drives plugged in until the first screens of the new Windows (region, keyboard, network) appear. If the seed drive is gone by then, nothing is hardened and the installation goes on normally.": "Mantenha os dois pendrives conectados até aparecerem as primeiras telas do novo Windows (região, teclado, rede). Se o pendrive do kit já tiver sido retirado, nada é reforçado e a instalação continua normalmente.",
+    "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.": "Ele não escolhe nem apaga um disco, não define chave de produto, não aceita termos de licença, não cria contas, não define idioma nem região, não ignora as verificações de hardware, não baixa nada e não reinicia o PC. A instalação continua interativa.",
+    "If no drive has the marker file, nothing happens and Setup continues as usual.": "Se nenhuma unidade tiver o arquivo marcador, nada acontece e a instalação continua como de costume.",
+    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC o arquivo de resposta não faz nada: use o modo \"executar após a instalação\".",
+    # ===== end hardening2: windows xml =====
 }
 
 
@@ -5570,6 +5581,100 @@ def hardening_files_windows(profile):
         WINDOWS_HARDENING_PS1: _windows_harden_ps1(),
     }
 # ===== end hardening: windows content =====
+
+
+# ===== hardening2: windows xml =====
+# The answer file (autounattend.xml) of the EXPERIMENTAL "during setup" seed drive. It lives on a SECOND small USB
+# next to the Windows installer USB: Windows Setup looks for autounattend.xml on the root of removable drives.
+#
+# Design: the smallest file that can work, and nothing that could change how Setup behaves.
+# * ONE pass, `specialize`, ONE component, Microsoft-Windows-Deployment, ONE RunSynchronousCommand. Every other
+#   pass and setting is absent on purpose, so Windows Setup stays fully interactive (disk, language, licence,
+#   account). No disk, product key, licence, account, locale, autologon, hardware-check or restart setting is declared.
+# * The same command works whatever drive letter the seed drive gets: Setup caches the answer file and runs the
+#   specialize pass on the first start of the new system, when the letters can differ from the ones seen in Setup.
+#   So the command looks for the marker file on the drives D: to Z: and only acts where it finds it.
+# * Path is a command line, not a batch file: nothing is doubled. It is handed to cmd.exe, which is also what makes
+#   `for` and `if exist` available. The text after `/c` starts with `(`, not with a quote, so cmd does not strip any
+#   quote character (it only strips when the first character after /c is a quote). `%d` is the single-percent loop
+#   variable of the command line (a batch file would need `%%d`); it holds `D:` ... `Z:` (with the colon), so
+#   the text never contains `%d:`, which cmd could read as the substring/replace syntax of a variable. The only character that XML must escape is `&`
+#   (written `&amp;` in the file; a parser hands the plain `&` back, and a test re-reads it).
+# * `exit 0` after the script (stops the search: the first drive with the marker wins) and `exit 0` after the loop
+#   (nothing found): the exit code of this step is always 0, so a missing seed or a failing script never makes the
+#   installation fail. Nothing restarts, shuts down or downloads anything.
+# * amd64 only. UNVERIFIED: a processorArchitecture="arm64" component of the same name is probably right for
+#   Windows 11 on ARM, but it could not be confirmed offline, so it is left out: those PCs simply skip this step
+#   (use the "after install" mode there).
+# * UNVERIFIED (no Windows, no ADK schema and no web access where this was written; never run on real Windows):
+#   (1) that Setup accepts an answer file with only a specialize pass and stays interactive (published samples and
+#   common practice say yes); (2) that a removable drive already has a letter when the specialize pass runs, i.e.
+#   that the seed drive must stay plugged in until the first screens of the new Windows (region, network) appear;
+#   (3) that Setup does not expand `%d` itself before the command runs; (4) that `if exist` on an empty card reader
+#   or an unready drive is silent (cmd normally is); (5) the order Order/Path/Description (taken from published
+#   Microsoft samples) and whether a non-zero exit would stop Setup (not relied on: the step always exits 0).
+WINDOWS_SEED_ANSWER_FILE = "autounattend.xml"
+WINDOWS_SEED_MARKER = "EPMA-SEED.txt"  # root of the seed drive; the answer file acts only where it finds this
+WINDOWS_SEED_SCRIPT = "harden.ps1"  # root of the seed drive; run with -Mode Apply
+WINDOWS_SEED_DRIVE_LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ"  # C: is the installed system; A: and B: are floppy letters
+WINDOWS_SEED_PATH_MAX = 259  # documented limit of the Path element of RunSynchronousCommand
+WINDOWS_SEED_DESCRIPTION = "EPMA USB CREATOR: run harden.ps1 from the seed drive, if one is plugged in"
+WINDOWS_SEED_COMMAND = (
+    "cmd /c (for %d in (" + " ".join(c + ":" for c in WINDOWS_SEED_DRIVE_LETTERS) + ") do if exist %d\\" + WINDOWS_SEED_MARKER
+    + " (powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%d\\" + WINDOWS_SEED_SCRIPT
+    + "\" -Mode Apply & exit 0)) & exit 0"
+)
+WINDOWS_SEED_NAMESPACE = "urn:schemas-microsoft-com:unattend"
+
+
+def windows_seed_autounattend(profile):
+    """The autounattend.xml of the EXPERIMENTAL "during setup" Windows seed drive, as bytes.
+
+    UTF-8 (ASCII only) with an XML declaration, CRLF line ends, deterministic. Only the specialize pass is declared
+    (see the block comment above). Empty bytes for HARDENING_NONE; an unknown profile raises ValueError.
+    """
+    if not _windows_hardening_check(profile):
+        return b""
+    command = WINDOWS_SEED_COMMAND
+    if len(command) > WINDOWS_SEED_PATH_MAX:  # a constant today; the check keeps a later edit honest
+        raise ValueError("the seed answer file command is longer than the documented Path limit")
+    lines = (
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<unattend xmlns="' + WINDOWS_SEED_NAMESPACE + '">',
+        '  <settings pass="specialize">',
+        '    <component name="Microsoft-Windows-Deployment" processorArchitecture="amd64"'
+        ' publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS"'
+        ' xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"'
+        ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
+        "      <RunSynchronous>",
+        '        <RunSynchronousCommand wcm:action="add">',
+        "          <Order>1</Order>",
+        "          <Path>" + command.replace("&", "&amp;") + "</Path>",
+        "          <Description>" + WINDOWS_SEED_DESCRIPTION + "</Description>",
+        "        </RunSynchronousCommand>",
+        "      </RunSynchronous>",
+        "    </component>",
+        "  </settings>",
+        "</unattend>",
+    )
+    return ("\r\n".join(lines) + "\r\n").encode("ascii")
+
+
+def describe_windows_seed_during_setup():
+    """Plain English lines (ASCII) for the GUI and the help: what the EXPERIMENTAL "during setup" mode does and does not do.
+
+    Every line has an entry in PT_BR (the GUI shows them through _()).
+    """
+    return [
+        "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.",
+        "The seed drive carries an answer file (autounattend.xml). Windows Setup looks for that file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start.",
+        "The answer file adds one step, early on the first start of the new system: it looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, runs harden.ps1 from that drive in Apply mode.",
+        "Keep both drives plugged in until the first screens of the new Windows (region, keyboard, network) appear. If the seed drive is gone by then, nothing is hardened and the installation goes on normally.",
+        "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.",
+        "If no drive has the marker file, nothing happens and Setup continues as usual.",
+        "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC the answer file does nothing: use the \"run after install\" mode.",
+    ]
+# ===== end hardening2: windows xml =====
 
 
 # ===== hardening: seed content =====
