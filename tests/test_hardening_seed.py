@@ -37,7 +37,7 @@ EXPECTED_FILES = {
     # Windows, "run after install" mode (no answer file); WINDOWS_SETUP_FILES are added by during_setup=True
     "windows": {"harden.cmd", "audit.cmd", "undo.cmd", "harden.ps1", "README.txt"},
 }
-WINDOWS_SETUP_FILES = {"autounattend.xml", "EPMA-SEED.txt"}
+WINDOWS_SETUP_FILES = {"autounattend.xml", "EPMA-SEED.txt", "SetupComplete.cmd"}
 WINDOWS_CMD_FILES = ("harden.cmd", "audit.cmd", "undo.cmd")
 # The big script of each target (not checked as a plain ASCII config file).
 SCRIPT_FILES = {"ubuntu": "harden-linux.sh", "fedora": "harden-linux.sh", "debian": "harden-linux.sh",
@@ -923,7 +923,7 @@ class WindowsSeedTests(SeedTestBase):
                     self.assertEqual(text.count("\r"), text.count("\r\n"), "bare CR")
                     for n, line in enumerate(text.split("\r\n")[:-1], 1):
                         self.assertEqual(line, line.rstrip(), f"{name}:{n} trailing whitespace")
-                        self.assertLessEqual(len(line), 160, f"{name}:{n}")
+                        self.assertLessEqual(len(line), 200, f"{name}:{n}")
                     self.assertTrue(text.startswith("@echo off\r\n"))
 
     def test_launchers_say_what_they_do(self):
@@ -939,11 +939,12 @@ class WindowsSeedTests(SeedTestBase):
                 self.assertTrue(first_echo.startswith("echo EPMA USB CREATOR"), first_echo)
 
     def test_every_launcher_runs_the_script_from_its_own_folder_quoted(self):
+        ps = '"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"'
         for name, mode in (("harden.cmd", "Apply"), ("audit.cmd", "Audit"), ("undo.cmd", "Undo")):
             with self.subTest(name=name):
                 text = self.cmd(name)
-                run = [line for line in text.split("\r\n") if line.startswith("powershell.exe") and '-File "' in line]
-                self.assertEqual(run, [f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File '
+                run = [line for line in text.split("\r\n") if line.startswith(ps) and '-File "' in line]
+                self.assertEqual(run, [f'{ps} -NoProfile -ExecutionPolicy Bypass -File '
                                        f'"%~dp0harden.ps1" -Mode {mode}'])
                 for m in re.finditer(r"%~dp0", text):  # always inside double quotes: paths with spaces work
                     self.assertEqual(text[m.start() - 1], '"', "unquoted %~dp0")
@@ -954,47 +955,87 @@ class WindowsSeedTests(SeedTestBase):
                 others = {"Apply", "Audit", "Undo"} - {mode}
                 self.assertFalse([o for o in others if f"-Mode {o}" in text])
 
+    def test_system_tools_are_called_by_full_path_and_the_current_folder_is_not_searched(self):
+        for name in WINDOWS_CMD_FILES:
+            with self.subTest(name=name):
+                lines = self.cmd(name).split("\r\n")
+                self.assertEqual(lines[:3], ["@echo off", "setlocal", 'set "NoDefaultCurrentDirectoryInExePath=1"'])
+                for tool in ("net.exe session", "fltmc.exe"):
+                    hits = [ln for ln in lines if tool in ln]
+                    self.assertEqual(len(hits), 1, tool)
+                    self.assertTrue(hits[0].startswith("%SystemRoot%\\System32\\"), hits[0])
+                for ln in lines:  # no command is started by its bare name
+                    self.assertNotRegex(ln, r"^(net|fltmc|powershell|choice|certutil|cmd|reg|sc|where|timeout)\b", ln)
+                    self.assertNotRegex(ln, r"^\"?powershell", ln)
+                self.assertEqual(self.cmd(name).lower().count("powershell.exe"),
+                                 self.cmd(name).count("\\WindowsPowerShell\\v1.0\\powershell.exe"))
+
     def test_every_launcher_checks_for_admin_and_elevates_itself(self):
         for name in WINDOWS_CMD_FILES:
             with self.subTest(name=name):
                 text = self.cmd(name)
-                self.assertIn("net session >nul 2>&1", text)
-                self.assertIn("fltmc >nul 2>&1", text)
+                self.assertIn("%SystemRoot%\\System32\\net.exe session >nul 2>&1", text)
+                self.assertIn("%SystemRoot%\\System32\\fltmc.exe >nul 2>&1", text)
                 self.assertIn("Start-Process", text)
                 self.assertIn("-Verb RunAs", text)
                 self.assertIn("-ArgumentList 'elevated'", text)  # the elevated copy must not elevate again
                 self.assertIn('if /i "%~1"=="elevated" goto :noadmin', text)
-                self.assertIn('set "SELF=%~f0"', text)
-                self.assertIn("%SELF:'=''%", text)  # a quote in the path cannot break the PowerShell string
-                self.assertLess(text.index("net session"), text.index("Start-Process"))
+                self.assertLess(text.index("net.exe session"), text.index("Start-Process"))
                 self.assertLess(text.index("Start-Process"), text.index('-File "'))
                 self.assertIn("Administrator rights were not granted. Nothing was changed.", text)
 
+    def test_the_launcher_path_reaches_powershell_through_the_environment_only(self):
+        # A folder name with ' or a typographic apostrophe (U+2018/2019/201A/201B) must not be able to leave a
+        # PowerShell string: the path is never put into the command text, only into an environment variable.
+        for name in WINDOWS_CMD_FILES:
+            with self.subTest(name=name):
+                text = self.cmd(name)
+                self.assertIn('set "EPMA_SELF=%~f0"', text)
+                (start,) = [ln for ln in text.split("\r\n") if "Start-Process" in ln]
+                self.assertIn("-FilePath $env:EPMA_SELF", start)
+                self.assertNotIn("%~f0", start)
+                self.assertNotIn("%EPMA_SELF%", start)
+                self.assertEqual(re.findall(r"%[^%]*%", start), ["%SystemRoot%"])  # no other variable inside it
+                self.assertEqual(start.count("'"), 2)  # only 'elevated', a constant
+                self.assertNotIn("SELF_PS", text)
+                self.assertNotIn("'=''", text)  # the old quote-doubling workaround is gone
+                for quote in "‘’‚‛":
+                    self.assertNotIn(quote, text)
+
     def test_harden_and_undo_ask_for_confirmation_audit_does_not(self):
+        choice = '%SystemRoot%\\System32\\choice.exe /c yn /n /m "Continue? [y/N] "'
         for name in ("harden.cmd", "undo.cmd"):
             with self.subTest(name=name):
                 text = self.cmd(name)
-                self.assertIn('set /p "ANSWER=Continue? [y/N] "', text)
-                self.assertIn('if /i "%ANSWER%"=="y" goto :run', text)
+                self.assertIn(choice, text)
                 self.assertLess(text.index("Continue? [y/N]"), text.index('-File "'))
+                # only the answer "y" (errorlevel 1) leads to the run; 2 (n), 0 (Ctrl+C) and errors cancel
+                self.assertIn("if errorlevel 2 goto :cancel\r\nif errorlevel 1 goto :run\r\n:cancel\r\n", text)
                 self.assertIn("Cancelled. Nothing was changed.", text)
-                # anything but y/yes ends the script before it reaches powershell -File
-                cancel = text.index("Cancelled.")
+                cancel = text.index(":cancel")
                 self.assertLess(cancel, text.index('-File "'))
                 self.assertIn("exit /b 1", text[cancel:text.index("\r\n:run\r\n")])
+                # nothing the user types is ever expanded by cmd: no set /p, no %ANSWER% in an if
+                self.assertNotIn("set /p", text)
+                self.assertNotIn("ANSWER", text)
         audit = self.cmd("audit.cmd")
         self.assertNotIn("Continue?", audit)
-        self.assertNotIn("ANSWER", audit)
+        self.assertNotIn("choice", audit)
+        self.assertNotIn(":cancel", audit)
         self.assertIn("changes nothing", audit)
 
     def test_the_window_stays_open(self):
+        flags = {"harden.cmd": "WARN", "audit.cmd": "DIFF", "undo.cmd": "WARN"}
         for name in WINDOWS_CMD_FILES:
             with self.subTest(name=name):
                 text = self.cmd(name)
                 tail = text.split('-File "')[1]
                 self.assertIn("\r\npause\r\n", tail)
                 self.assertIn("exit /b %RC%", tail)
-                self.assertIn("a WARN line means a", tail)
+                self.assertIn(f"a [{flags[name]}] line means a", tail)
+                other = "DIFF" if flags[name] == "WARN" else "WARN"
+                self.assertNotIn(other, text)
+        self.assertIn("non-zero exit code", self.cmd("undo.cmd"))
 
     def test_launchers_have_no_destructive_or_download_commands(self):
         bad = re.compile(r"\b(del|erase|format|diskpart|rd|rmdir|reg|regedit|mountvol|bcdedit|cipher|shutdown|"
@@ -1011,7 +1052,7 @@ class WindowsSeedTests(SeedTestBase):
                 self.assertNotIn("-WindowStyle Hidden", text)  # nothing runs out of sight
 
     def test_percent_signs_are_only_the_known_safe_forms(self):
-        allowed = re.compile(r"%~dp0|%~f0|%~1|%SELF%|%SELF_PS%|%SELF:'=''%|%ANSWER%|%RC%|%errorlevel%")
+        allowed = re.compile(r"%~dp0|%~f0|%~1|%SystemRoot%|%RC%|%errorlevel%")
         for name in WINDOWS_CMD_FILES:
             with self.subTest(name=name):
                 text = self.cmd(name)
@@ -1104,18 +1145,108 @@ class WindowsSeedTests(SeedTestBase):
     def test_experimental_section_only_with_during_setup(self):
         plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
         setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
-        for needle in ("autounattend.xml", "EPMA-SEED.txt", "specialize", "EXPERIMENTAL: APPLY IT WHILE"):
+        for needle in ("autounattend.xml", "EPMA-SEED.txt", "specialize", "EXPERIMENTAL: APPLY IT WHILE",
+                       "SetupComplete.cmd", "SHA-256", "Panther", "ARM64"):
             self.assertNotIn(needle, plain)
             self.assertIn(needle, setup)
-        for needle in ("next to the Windows installer USB, before you start Setup",
+        for needle in ("next to the Windows installer USB BEFORE you start Setup",
+                       "It must still be plugged in at the first restart of Setup",
+                       "you can unplug it: it is not needed at the end of Setup",
                        "Setup still asks for the language, the disk, the edition and your account",
-                       "If Setup complains about the answer file, unplug this drive and install normally, "
-                       "then use harden.cmd after installing",
+                       "the answer file only copies harden.ps1 and SetupComplete.cmd from this drive into "
+                       "C:\\Windows\\Setup\\Scripts",
+                       "It does not run PowerShell and it never overwrites a SetupComplete.cmd that is already there",
+                       "At the very end of Setup, Windows runs SetupComplete.cmd",
+                       "It checks the SHA-256 of the harden.ps1 next to it and only then runs it in Apply mode",
+                       "It appends to the log C:\\Windows\\Temp\\epma-hardening.log ([SKIP] lines say why nothing ran)",
                        "it is not defined which one Windows uses: use only one of them",
-                       "already has its own autounattend.xml",
-                       "end of the specialize phase", "has not been tried by its authors on a real Windows"):
+                       "already has its own autounattend.xml", "has not been tried by its authors on a real Windows"):
             self.assertIn(needle, setup)
+        self.assertNotIn("Setup then runs harden.ps1 at the end of the specialize phase", setup)  # the old design
         self.assertLess(setup.index("HONEST CAVEATS"), setup.index("EXPERIMENTAL: APPLY IT WHILE"))
+
+    def test_during_setup_readme_says_who_is_trusted_and_what_the_hash_does_not_do(self):
+        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
+        for needle in ("the answer file and SetupComplete.cmd trust any drive that carries EPMA-SEED.txt on its root "
+                       "(the first match from D: to Z:)",
+                       "The SHA-256 check only protects against a harden.ps1 that does not match the "
+                       "SetupComplete.cmd next to it",
+                       "It does NOT protect against someone who controls the seed drive",
+                       "Use only a seed drive that you made yourself"):
+            self.assertIn(needle, setup)
+        for claim in ("tamper-proof", "digitally signed", "verified drive", "trusted drive", "secure drive",
+                      "authenticated drive", "protects the drive"):
+            self.assertNotIn(claim, setup.lower())
+        self.assertIn("This drive is not protected or authenticated in any way", setup)
+
+    def test_during_setup_readme_explains_the_answer_file_error(self):
+        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
+        for needle in ("Windows could not parse or process the unattended answer file",
+                       "unplug this drive and RESTART the installation from the beginning",
+                       "C:\\Windows\\Panther", "unplugging alone is not enough",
+                       "Then use harden.cmd after installing",
+                       "64-bit Intel/AMD PCs (amd64) only. On ARM64 PCs use Way 1"):
+            self.assertIn(needle, setup)
+        plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
+        self.assertNotIn("Windows could not parse", plain)
+
+    def test_readme_audit_and_launcher_sentences_are_accurate(self):
+        for during_setup in (False, True):
+            text = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=during_setup).split())
+            self.assertIn("audit.cmd does not ask you to confirm anything", text)
+            self.assertIn("[DIFF] means NOT in effect", text)
+            self.assertIn("harden.cmd and undo.cmd also ask you to confirm; audit.cmd does not", text)
+            self.assertNotIn("Each launcher only asks for administrator rights, asks you to confirm", text)
+            self.assertNotIn("audit.cmd prints a [WARN]", text)
+
+    def test_readme_explains_the_opt_in_switch_and_the_undo_limits(self):
+        for during_setup in (False, True):
+            raw = self.text(app.SEED_WINDOWS, "README.txt", during_setup=during_setup)
+            text = " ".join(raw.split())
+            self.assertIn("powershell -ExecutionPolicy Bypass -File harden.ps1 -Mode Apply -DisableLegacyNetwork", text)
+            self.assertIn("open PowerShell as administrator", text)
+            self.assertIn("LIMITS OF UNDO.CMD", text)
+            for needle in ("It does not turn SMBv1 or PowerShell 2.0 on again",
+                           "does not lower the Security log size",
+                           "already in the wanted state before harden.cmd ran is not recorded",
+                           "undo.cmd can finish with a non-zero exit code when one of its steps failed"):
+                self.assertIn(needle, text)
+
+    def test_readme_logs_per_mode(self):
+        plain = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=False).split())
+        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
+        for text in (plain, setup):
+            self.assertIn("harden.cmd and undo.cmd write a log to C:\\Windows\\Temp\\epma-hardening.log. "
+                          "audit.cmd only prints in its window", text)
+        self.assertIn("It appends to the log C:\\Windows\\Temp\\epma-hardening.log", setup)
+        self.assertNotIn("SetupComplete.cmd", plain)
+
+    def test_seed_drive_no_longer_has_to_stay_until_the_end(self):
+        setup = " ".join(self.text(app.SEED_WINDOWS, "README.txt", during_setup=True).split())
+        self.assertNotIn("Keep both drives plugged in", setup)
+        self.assertNotIn("until the first screens", setup)
+
+    # ---- SetupComplete.cmd on the seed drive (during setup)
+    def test_setupcomplete_is_on_the_drive_only_in_during_setup_and_holds_the_hash_of_harden_ps1(self):
+        import hashlib
+        self.assertNotIn("SetupComplete.cmd", self.files(False))
+        files = self.files(True)
+        text = files["SetupComplete.cmd"].decode("ascii")
+        self.assertIn('set "EPMA_WANT=' + hashlib.sha256(FAKE_PS1).hexdigest() + '"', text)
+        self.assertEqual(files["SetupComplete.cmd"], app._windows_setupcomplete_cmd(app.HARDENING_BASELINE, FAKE_PS1))
+        # the hash line follows the script
+        self.ps1 = b"\xef\xbb\xbf# second\r\n"
+        other = self.files(True)["SetupComplete.cmd"].decode("ascii")
+        self.assertIn('set "EPMA_WANT=' + hashlib.sha256(self.ps1).hexdigest() + '"', other)
+        self.assertNotEqual(other, text)
+        self.assertEqual([ln for ln in other.split("\r\n") if not ln.startswith('set "EPMA_WANT')],
+                         [ln for ln in text.split("\r\n") if not ln.startswith('set "EPMA_WANT')])
+
+    def test_setupcomplete_on_the_drive_checks_before_it_runs(self):
+        text = self.cmd("SetupComplete.cmd", True)
+        self.assertLess(text.index("-hashfile"), text.index("-File"))
+        self.assertIn("harden.ps1 was NOT run", text)
+        self.assertTrue(text.endswith("exit /b 0\r\n"))
 
     # ---- the marker and the answer file
     def test_marker_file_is_one_short_ascii_line(self):
@@ -1134,6 +1265,8 @@ class WindowsSeedTests(SeedTestBase):
             for name, data in self.files(during_setup).items():
                 if name in ("harden.ps1", "autounattend.xml"):
                     continue  # stand-ins here; the real ones are checked in RealWindowsSeedTests
+                if name == "SetupComplete.cmd":
+                    continue  # holds the public SHA-256 of harden.ps1 (checked in its own test)
                 with self.subTest(name=name, during_setup=during_setup):
                     text = data.decode("ascii")
                     self.assertIsNone(HASH_LIKE.search(text))

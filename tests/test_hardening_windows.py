@@ -3,6 +3,7 @@
 The content is pure text built in memory. PowerShell is not available where these tests run, so the script
 is checked structurally (balanced blocks, markers, banned commands) and never executed.
 """
+import hashlib
 import re
 import unittest
 from unittest import mock
@@ -122,13 +123,25 @@ class FileSetTests(HardeningWindowsBase):
 
 
 class SetupCompleteTests(HardeningWindowsBase):
+    PS = "%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+
+    def lines(self):
+        return self.cmd_text.split("\r\n")[:-1]
+
+    def want(self):
+        m = re.search(r'^set "EPMA_WANT=([0-9a-f]+)"\r?$', self.cmd_text, re.MULTILINE)
+        self.assertIsNotNone(m)
+        return m.group(1)
+
     def test_crlf_only_and_no_bom(self):
         self.assertFalse(self.cmd_bytes.startswith(b"\xef\xbb\xbf"))
         self.assertIn(b"\r\n", self.cmd_bytes)
         self.assertNotRegex(self.cmd_bytes, rb"(?<!\r)\n")
 
-    def test_runs_the_script_the_documented_way(self):
-        self.assertIn('powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1"', self.cmd_text)
+    def test_runs_the_script_the_documented_way_by_full_path(self):
+        self.assertIn(self.PS + ' -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1"', self.cmd_text)
+        for line in self.lines():
+            self.assertFalse(line.lower().startswith("powershell"), line)  # never the bare name
 
     def test_logs_to_the_documented_file(self):
         self.assertIn("%windir%\\Temp\\epma-hardening.log", self.cmd_text)
@@ -145,13 +158,129 @@ class SetupCompleteTests(HardeningWindowsBase):
         self.assertNotIn("reboot", self.cmd_text.lower())
 
     def test_errorlevel_is_not_read_inside_a_block(self):
-        # %errorlevel% inside a parenthesised block is expanded before the command runs.
-        self.assertNotIn("(", self.cmd_text.replace("(ignored)", ""))
+        # %errorlevel% inside a parenthesised block is expanded before the command runs: the only parentheses
+        # are the single-line `for /f` command and the words in two log lines.
+        text = self.cmd_text.replace("(ignored)", "").replace("(certutil failed)", "")
+        text = re.sub(r"in \('[^']*'\)", "", text)
+        self.assertNotIn("(", text)
+        self.assertNotIn(")", text)
 
     def test_does_not_use_the_network(self):
         low = self.cmd_text.lower()
-        for word in ("curl", "wget", "bitsadmin", "http://", "https://", "certutil"):
+        for word in ("curl", "wget", "bitsadmin", "http://", "https://", "invoke-webrequest", "downloadfile"):
             self.assertNotIn(word, low)
+        # certutil is only used with -hashfile, which reads a local file and prints its hash
+        self.assertEqual(re.findall(r"certutil\.exe\s+(\S+)", self.cmd_text), ["-hashfile"])
+
+    # ---- the SHA-256 check of harden.ps1
+    def test_embedded_hash_is_the_sha256_of_the_shipped_script(self):
+        digest = hashlib.sha256(self.ps1_bytes).hexdigest()
+        self.assertEqual(self.want(), digest)
+        self.assertEqual(self.want(), hashlib.sha256(app.windows_hardening_ps1(app.HARDENING_BASELINE)).hexdigest())
+        self.assertEqual(len(self.want()), 64)
+
+    def test_the_hash_line_changes_when_the_script_changes(self):
+        base = app.hardening_files_windows(app.HARDENING_BASELINE)[CMD_PATH]
+        other = b"\xef\xbb\xbf# another harden.ps1\r\n"
+        with mock.patch.object(app, "windows_hardening_ps1", return_value=other), \
+                mock.patch.object(app, "_windows_harden_ps1", return_value=other):
+            changed = app.hardening_files_windows(app.HARDENING_BASELINE)
+        self.assertNotEqual(changed[CMD_PATH], base)
+        self.assertIn(('set "EPMA_WANT=' + hashlib.sha256(other).hexdigest() + '"').encode(), changed[CMD_PATH])
+        self.assertNotIn(self.want().encode(), changed[CMD_PATH])
+        # same shape otherwise: only the hash line differs
+        old = [ln for ln in base.split(b"\r\n") if not ln.startswith(b'set "EPMA_WANT=')]
+        new = [ln for ln in changed[CMD_PATH].split(b"\r\n") if not ln.startswith(b'set "EPMA_WANT=')]
+        self.assertEqual(old, new)
+
+    def test_the_hash_matches_the_bytes_that_are_written_in_both_modes(self):
+        # same-USB mode: the script and SetupComplete.cmd come out of one call
+        script = self.files[PS1_PATH]
+        self.assertEqual(self.want(), hashlib.sha256(script).hexdigest())
+        # seed drive: the file next to it is the same text as the same-USB SetupComplete.cmd
+        _label, seed = app.hardening_files_seed(app.SEED_WINDOWS, app.HARDENING_BASELINE, during_setup=True)
+        self.assertEqual(seed["SetupComplete.cmd"], self.cmd_bytes)
+        self.assertEqual(hashlib.sha256(seed["harden.ps1"]).hexdigest(), self.want())
+
+    def test_none_profile_and_empty_script_are_refused(self):
+        with self.assertRaises(ValueError):
+            app._windows_setupcomplete_cmd(app.HARDENING_NONE)
+        with self.assertRaises(ValueError):
+            app._windows_setupcomplete_cmd(app.HARDENING_BASELINE, b"  \r\n")
+
+    def test_hash_is_read_with_certutil_by_full_path_second_line(self):
+        text = self.cmd_text
+        self.assertIn('for /f "skip=1 delims=" %%H in (\'%SystemRoot%\\System32\\certutil.exe -hashfile '
+                      '"%~dp0harden.ps1" SHA256 2^>nul\') do if not defined EPMA_GOT set "EPMA_GOT=%%H"', text)
+        self.assertIn('set "EPMA_GOT=%EPMA_GOT: =%"', text)  # older Windows prints the bytes separated by spaces
+        self.assertIn('if /i not "%EPMA_GOT%"=="%EPMA_WANT%" goto mismatch', text)  # /i: case-insensitive
+        self.assertLess(text.index("certutil"), text.index("goto mismatch"))
+        self.assertLess(text.index("goto mismatch"), text.index(self.PS))  # the check comes before the run
+        self.assertEqual(text.count("-File"), 1)  # harden.ps1 is started in exactly one place
+
+    def simulate(self, got, exists=True):
+        """Walk the batch file's `goto`/`if ... goto` lines for one scenario; returns the lines that run."""
+        want = self.want()
+        lines = self.lines()
+        labels = {ln[1:]: i for i, ln in enumerate(lines) if ln.startswith(":")}
+        ran, i, steps = [], 0, 0
+        env_got = None
+        while i < len(lines):
+            steps += 1
+            self.assertLess(steps, 200, "loop")
+            ln = lines[i]
+            i += 1
+            if ln.startswith(("@", "rem ", ":", 'set "EPMA_LOG', 'set "EPMA_WANT')):
+                continue
+            if ln == 'set "EPMA_GOT="':
+                env_got = None
+            elif ln.startswith("for /f"):
+                env_got = got
+            elif ln == 'set "EPMA_GOT=%EPMA_GOT: =%"':
+                env_got = env_got.replace(" ", "")
+            elif ln.startswith("if not exist"):
+                if not exists:
+                    i = labels[ln.rsplit("goto ", 1)[1]]
+            elif ln.startswith("if not defined"):
+                if env_got is None:
+                    i = labels[ln.rsplit("goto ", 1)[1]]
+            elif ln.startswith("if /i not"):
+                if env_got.lower() != want.lower():
+                    i = labels[ln.rsplit("goto ", 1)[1]]
+            elif ln.startswith("goto "):
+                i = labels[ln[5:]]
+            elif ln == "exit /b 0":
+                ran.append(ln)
+                break
+            else:
+                ran.append(ln)
+        return ran
+
+    def test_only_a_matching_hash_runs_the_script(self):
+        want = self.want()
+        spaced = " ".join(want[i:i + 2] for i in range(0, 64, 2))
+        for label, got in (("lower case", want), ("upper case", want.upper()), ("bytes separated by spaces", spaced)):
+            with self.subTest(label):
+                ran = self.simulate(got)
+                self.assertTrue(any(self.PS in ln for ln in ran), ran)
+        off_by_one = want[:-1] + ("0" if want[-1] != "0" else "1")
+        for label, got, exists in (("other hash", "0" * 64, True), ("one digit off", off_by_one, True),
+                                   ("certutil gave nothing", None, True), ("script missing", want, False)):
+            with self.subTest(label):
+                ran = self.simulate(got, exists)
+                self.assertFalse(any(self.PS in ln for ln in ran), ran)
+                self.assertEqual(ran[-1], "exit /b 0")
+                self.assertTrue(any("[SKIP]" in ln for ln in ran), ran)  # the log says why
+
+    def test_a_mismatch_is_written_to_the_log_with_both_values(self):
+        ran = self.simulate("0" * 64)
+        text = " ".join(ran)
+        self.assertIn("does not match the SHA-256 recorded in SetupComplete.cmd", text)
+        self.assertIn("harden.ps1 was NOT run", text)
+        self.assertIn("expected %EPMA_WANT% but found %EPMA_GOT%", text)
+        for ln in ran:
+            if ln.startswith("echo"):
+                self.assertTrue(ln.endswith('>> "%EPMA_LOG%"'), ln)
 
 
 class HardenScriptTests(HardeningWindowsBase):

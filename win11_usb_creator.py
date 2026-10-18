@@ -621,12 +621,15 @@ PT_BR = {
     # ===== hardening2: windows xml =====
     # One entry per line of describe_windows_seed_during_setup().
     "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.": "EXPERIMENTAL: este modo não foi testado em uma instalação real do Windows. Se algo parecer errado, use o modo \"executar após a instalação\".",
-    "The seed drive carries an answer file (autounattend.xml). Windows Setup looks for that file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start.": "O pendrive do kit leva um arquivo de resposta (autounattend.xml). A instalação do Windows procura esse arquivo na raiz das unidades removíveis; por isso, conecte o pendrive do kit ao lado do pendrive instalador do Windows antes de começar.",
-    "The answer file adds one step, early on the first start of the new system: it looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, runs harden.ps1 from that drive in Apply mode.": "O arquivo de resposta adiciona uma etapa, logo no primeiro início do sistema novo: procura o arquivo EPMA-SEED.txt nas unidades D: a Z: e, onde o encontrar, executa o harden.ps1 dessa unidade no modo Apply.",
-    "Keep both drives plugged in until the first screens of the new Windows (region, keyboard, network) appear. If the seed drive is gone by then, nothing is hardened and the installation goes on normally.": "Mantenha os dois pendrives conectados até aparecerem as primeiras telas do novo Windows (região, teclado, rede). Se o pendrive do kit já tiver sido retirado, nada é reforçado e a instalação continua normalmente.",
+    "The seed drive carries an answer file (autounattend.xml), SetupComplete.cmd and harden.ps1. Windows Setup looks for the answer file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start Setup.": "O pendrive do kit leva um arquivo de resposta (autounattend.xml), o SetupComplete.cmd e o harden.ps1. A instalação do Windows procura o arquivo de resposta na raiz das unidades removíveis; por isso, conecte o pendrive do kit ao lado do pendrive instalador do Windows antes de começar.",
+    "The answer file adds one step, early on the first start of the new system (the specialize pass): it only copies files. It looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, copies harden.ps1 and SetupComplete.cmd into C:\\Windows\\Setup\\Scripts. A SetupComplete.cmd that already exists there is never overwritten.": "O arquivo de resposta adiciona uma etapa, logo no primeiro início do sistema novo (a fase specialize): ela só copia arquivos. Procura o arquivo EPMA-SEED.txt nas unidades D: a Z: e, onde o encontrar, copia o harden.ps1 e o SetupComplete.cmd para C:\\Windows\\Setup\\Scripts. Um SetupComplete.cmd que já exista ali nunca é sobrescrito.",
+    "Windows runs SetupComplete.cmd at the very end of Setup. It checks the SHA-256 of the harden.ps1 next to it and, if it matches, runs harden.ps1 in Apply mode and writes a log to C:\\Windows\\Temp\\epma-hardening.log. If it does not match, nothing is hardened.": "O Windows executa o SetupComplete.cmd no fim da instalação. Ele confere o SHA-256 do harden.ps1 que está ao lado dele e, se coincidir, executa o harden.ps1 no modo Apply e grava um log em C:\\Windows\\Temp\\epma-hardening.log. Se não coincidir, nada é reforçado.",
+    "The seed drive must be plugged in before Setup starts and still there at the first restart. After the first screens of the new Windows (region, keyboard, network) appear it can be unplugged. If it is gone earlier, nothing is hardened and the installation goes on normally.": "O pendrive do kit precisa estar conectado antes de a instalação começar e ainda presente na primeira reinicialização. Depois que as primeiras telas do novo Windows (região, teclado, rede) aparecerem, ele pode ser retirado. Se tiver sido retirado antes, nada é reforçado e a instalação continua normalmente.",
+    "The SHA-256 check only protects against a harden.ps1 that does not match this SetupComplete.cmd. It does not authenticate the drive: Setup trusts the first drive from D: to Z: that carries EPMA-SEED.txt, so use only a seed drive that you made yourself.": "A conferência do SHA-256 só protege contra um harden.ps1 que não corresponde a este SetupComplete.cmd. Ela não autentica o pendrive: a instalação confia na primeira unidade de D: a Z: que tenha o EPMA-SEED.txt; por isso, use apenas um pendrive do kit que você mesmo criou.",
     "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.": "Ele não escolhe nem apaga um disco, não define chave de produto, não aceita termos de licença, não cria contas, não define idioma nem região, não ignora as verificações de hardware, não baixa nada e não reinicia o PC. A instalação continua interativa.",
     "If no drive has the marker file, nothing happens and Setup continues as usual.": "Se nenhuma unidade tiver o arquivo marcador, nada acontece e a instalação continua como de costume.",
-    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC o arquivo de resposta não faz nada: use o modo \"executar após a instalação\".",
+    "If Setup stops with \"Windows could not parse or process the unattended answer file\", unplug the seed drive and start the installation again from the beginning (Setup keeps a copy of the answer file), then use harden.cmd after installing.": "Se a instalação parar com \"Windows could not parse or process the unattended answer file\" (o Windows não conseguiu analisar ou processar o arquivo de resposta), retire o pendrive do kit e recomece a instalação desde o início (a instalação guarda uma cópia do arquivo de resposta); depois use o harden.cmd após instalar.",
+    "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.": "Apenas PCs Intel/AMD de 64 bits (x64) são atendidos. Em qualquer outro PC, inclusive PCs ARM64, o arquivo de resposta não faz nada: use o modo \"executar após a instalação\".",
     # ===== end hardening2: windows xml =====
 }
 
@@ -5181,21 +5184,47 @@ def describe_hardening_windows_applied(profile):
             if sid not in WINDOWS_HARDENING_OPTIN]
 
 
-def _windows_setupcomplete_cmd():
+def _windows_setupcomplete_cmd(profile=HARDENING_BASELINE, ps1=None):
+    """SetupComplete.cmd (ASCII, CRLF). The SHA-256 of harden.ps1 (windows_hardening_ps1(profile), or the bytes given
+    as `ps1`) is embedded and checked with certutil before the script runs, so a harden.ps1 that does not match this
+    file is never run. That is all the check does: whoever can change both files (or the drive that holds them) is
+    not stopped by it."""
+    if ps1 is None:
+        ps1 = windows_hardening_ps1(profile)
+    if not isinstance(ps1, bytes) or not ps1.strip():
+        raise ValueError("The Windows hardening script is empty")
+    digest = hashlib.sha256(ps1).hexdigest()
     # SetupComplete.cmd runs once as SYSTEM at the very end of Setup (before the first sign-in), from
     # %windir%\Setup\Scripts. It must never make Setup fail, so every path ends in `exit /b 0`. No parenthesised
-    # blocks on purpose: %errorlevel% inside one is expanded too early.
+    # blocks on purpose (%errorlevel% inside one is expanded too early); the only parentheses are the `for /f` command.
+    # `certutil -hashfile` prints a header line, the hash (older Windows versions put a space between the bytes) and a
+    # status line: line 2 is read, the spaces are dropped and the comparison ignores case.
     lines = (
         "@echo off",
-        "rem EPMA USB CREATOR - optional hardened setup. Runs harden.ps1 once, logs, never fails the setup.",
+        "rem EPMA USB CREATOR - optional hardened setup. Checks harden.ps1, runs it once, logs, never fails the setup.",
         'set "EPMA_LOG=' + WINDOWS_HARDENING_LOG + '"',
+        'set "EPMA_WANT=' + digest + '"',
+        'set "EPMA_GOT="',
         'echo [%date% %time%] SetupComplete.cmd: starting >> "%EPMA_LOG%"',
         'if not exist "%~dp0harden.ps1" goto missing',
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1',
+        "for /f \"skip=1 delims=\" %%H in ('%SystemRoot%\\System32\\certutil.exe -hashfile \"%~dp0harden.ps1\" SHA256 2^>nul') "
+        'do if not defined EPMA_GOT set "EPMA_GOT=%%H"',
+        'if not defined EPMA_GOT goto nohash',
+        'set "EPMA_GOT=%EPMA_GOT: =%"',
+        'if /i not "%EPMA_GOT%"=="%EPMA_WANT%" goto mismatch',
+        'echo [%date% %time%] SetupComplete.cmd: harden.ps1 SHA-256 matches >> "%EPMA_LOG%"',
+        '%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" >> "%EPMA_LOG%" 2>&1',
         'echo [%date% %time%] SetupComplete.cmd: harden.ps1 exit code %errorlevel% (ignored) >> "%EPMA_LOG%"',
         "goto done",
         ":missing",
         'echo [SKIP] harden.ps1 not found next to SetupComplete.cmd >> "%EPMA_LOG%"',
+        "goto done",
+        ":nohash",
+        'echo [SKIP] could not compute the SHA-256 of harden.ps1 (certutil failed): harden.ps1 was NOT run >> "%EPMA_LOG%"',
+        "goto done",
+        ":mismatch",
+        'echo [SKIP] harden.ps1 does not match the SHA-256 recorded in SetupComplete.cmd: harden.ps1 was NOT run >> "%EPMA_LOG%"',
+        'echo [SKIP] expected %EPMA_WANT% but found %EPMA_GOT% >> "%EPMA_LOG%"',
         ":done",
         "exit /b 0",
     )
@@ -6673,7 +6702,7 @@ def hardening_files_windows(profile):
     if not _windows_hardening_check(profile):
         return {}
     return {
-        WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(),
+        WINDOWS_HARDENING_CMD: _windows_setupcomplete_cmd(profile),
         WINDOWS_HARDENING_PS1: _windows_harden_ps1(),
     }
 # ===== end hardening: windows content =====
@@ -6684,20 +6713,28 @@ def hardening_files_windows(profile):
 # next to the Windows installer USB: Windows Setup looks for autounattend.xml on the root of removable drives.
 #
 # Design: the smallest file that can work, and nothing that could change how Setup behaves.
-# * ONE pass, `specialize`, ONE component, Microsoft-Windows-Deployment, ONE RunSynchronousCommand. Every other
+# * ONE pass, `specialize`, ONE component, Microsoft-Windows-Deployment, TWO RunSynchronousCommand. Every other
 #   pass and setting is absent on purpose, so Windows Setup stays fully interactive (disk, language, licence,
 #   account). No disk, product key, licence, account, locale, autologon, hardware-check or restart setting is declared.
+# * The commands only STAGE files, with plain cmd and NO PowerShell: RunSynchronous blocks Setup with no timeout, and
+#   the specialize pass is too early for DISM, Defender and the firewall cmdlets (services and servicing are not ready
+#   yet). It copies harden.ps1 and SetupComplete.cmd from the seed drive into %SystemRoot%\Setup\Scripts. Windows runs
+#   %WINDIR%\Setup\Scripts\SetupComplete.cmd at the END of Setup, where the full hardening runs at the proven point (the
+#   same one the same-USB mode uses), so the seed drive does not have to be plugged in at that moment. An existing
+#   SetupComplete.cmd is never overwritten (`if not exist`): then only harden.ps1 is staged and the existing file wins.
 # * The same command works whatever drive letter the seed drive gets: Setup caches the answer file and runs the
 #   specialize pass on the first start of the new system, when the letters can differ from the ones seen in Setup.
-#   So the command looks for the marker file on the drives D: to Z: and only acts where it finds it.
+#   So the command looks for the marker file on the drives D: to Z: and only acts where it finds it (first match).
 # * Path is a command line, not a batch file: nothing is doubled. It is handed to cmd.exe, which is also what makes
 #   `for` and `if exist` available. The text after `/c` starts with `(`, not with a quote, so cmd does not strip any
 #   quote character (it only strips when the first character after /c is a quote). `%d` is the single-percent loop
 #   variable of the command line (a batch file would need `%%d`); it holds `D:` ... `Z:` (with the colon), so
-#   the text never contains `%d:`, which cmd could read as the substring/replace syntax of a variable. The only character that XML must escape is `&`
-#   (written `&amp;` in the file; a parser hands the plain `&` back, and a test re-reads it).
-# * `exit 0` after the script (stops the search: the first drive with the marker wins) and `exit 0` after the loop
-#   (nothing found): the exit code of this step is always 0, so a missing seed or a failing script never makes the
+#   the text never contains `%d:`, which cmd could read as the substring/replace syntax of a variable. Every `if` that
+#   is followed by more commands is wrapped in parentheses (`if c a & b` would make b conditional). The only
+#   character that XML must escape is `&` (written `&amp;` in the file; a parser hands the plain `&` back, and a
+#   test re-reads it).
+# * `exit 0` after the staging (stops the search: the first drive with the marker wins) and `exit 0` after the loop
+#   (nothing found): the exit code of this step is always 0, so a missing seed or a failed copy never makes the
 #   installation fail. Nothing restarts, shuts down or downloads anything.
 # * amd64 only. UNVERIFIED: a processorArchitecture="arm64" component of the same name is probably right for
 #   Windows 11 on ARM, but it could not be confirmed offline, so it is left out: those PCs simply skip this step
@@ -6705,20 +6742,34 @@ def hardening_files_windows(profile):
 # * UNVERIFIED (no Windows, no ADK schema and no web access where this was written; never run on real Windows):
 #   (1) that Setup accepts an answer file with only a specialize pass and stays interactive (published samples and
 #   common practice say yes); (2) that a removable drive already has a letter when the specialize pass runs, i.e.
-#   that the seed drive must stay plugged in until the first screens of the new Windows (region, network) appear;
-#   (3) that Setup does not expand `%d` itself before the command runs; (4) that `if exist` on an empty card reader
-#   or an unready drive is silent (cmd normally is); (5) the order Order/Path/Description (taken from published
-#   Microsoft samples) and whether a non-zero exit would stop Setup (not relied on: the step always exits 0).
+#   that the seed drive must still be plugged in at the first restart; (3) that Setup does not expand `%d` itself
+#   before the command runs, and that cmd (command-line mode) leaves the undefined `%d` alone while it expands
+#   `%SystemRoot%` later in the same line; (4) that `if exist` on an empty card reader or an unready drive is
+#   silent (cmd normally is); (5) the order Order/Path/Description (taken from published Microsoft samples) and whether
+#   a non-zero exit would stop Setup (not relied on: the step always exits 0); (6) that Windows runs a
+#   SetupComplete.cmd that was staged this way (it is the documented location and file name; the same-USB mode
+#   relies on the same fact).
 WINDOWS_SEED_ANSWER_FILE = "autounattend.xml"
 WINDOWS_SEED_MARKER = "EPMA-SEED.txt"  # root of the seed drive; the answer file acts only where it finds this
-WINDOWS_SEED_PS1_FILE = "harden.ps1"  # root of the seed drive; run with -Mode Apply
+WINDOWS_SEED_PS1_FILE = "harden.ps1"  # root of the seed drive; staged next to SetupComplete.cmd
+WINDOWS_SEED_SETUPCOMPLETE_FILE = "SetupComplete.cmd"  # root of the seed drive; staged unless one already exists
+WINDOWS_SEED_STAGE_DIR = "%SystemRoot%\\Setup\\Scripts"  # where Windows looks for SetupComplete.cmd
 WINDOWS_SEED_DRIVE_LETTERS = "DEFGHIJKLMNOPQRSTUVWXYZ"  # C: is the installed system; A: and B: are floppy letters
 WINDOWS_SEED_PATH_MAX = 259  # documented limit of the Path element of RunSynchronousCommand
-WINDOWS_SEED_STEP_TEXT = "EPMA USB CREATOR: run harden.ps1 from the seed drive, if one is plugged in"
-WINDOWS_SEED_COMMAND = (
+WINDOWS_SEED_STEP_TEXTS = (
+    "EPMA USB CREATOR: copy harden.ps1 from the seed drive, if one is plugged in",
+    "EPMA USB CREATOR: copy SetupComplete.cmd from the seed drive, unless one exists",
+)
+_WINDOWS_SEED_FOR = (
     "cmd /c (for %d in (" + " ".join(c + ":" for c in WINDOWS_SEED_DRIVE_LETTERS) + ") do if exist %d\\" + WINDOWS_SEED_MARKER
-    + " (powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"%d\\" + WINDOWS_SEED_PS1_FILE
-    + "\" -Mode Apply & exit 0)) & exit 0"
+    + " ({body} & exit 0)) & exit 0"
+)
+# Two commands, run one after the other, because the whole drive search does not fit twice into one Path (259).
+WINDOWS_SEED_COMMANDS = (
+    _WINDOWS_SEED_FOR.replace("{body}", "md " + WINDOWS_SEED_STAGE_DIR + " & copy /y %d\\" + WINDOWS_SEED_PS1_FILE
+                              + " " + WINDOWS_SEED_STAGE_DIR + "\\"),
+    _WINDOWS_SEED_FOR.replace("{body}", "(if not exist " + WINDOWS_SEED_STAGE_DIR + "\\" + WINDOWS_SEED_SETUPCOMPLETE_FILE
+                              + " copy %d\\" + WINDOWS_SEED_SETUPCOMPLETE_FILE + " " + WINDOWS_SEED_STAGE_DIR + "\\)"),
 )
 WINDOWS_SEED_NAMESPACE = "urn:schemas-microsoft-com:unattend"
 
@@ -6727,13 +6778,23 @@ def windows_seed_autounattend(profile):
     """The autounattend.xml of the EXPERIMENTAL "during setup" Windows seed drive, as bytes.
 
     UTF-8 (ASCII only) with an XML declaration, CRLF line ends, deterministic. Only the specialize pass is declared
-    (see the block comment above). Empty bytes for HARDENING_NONE; an unknown profile raises ValueError.
+    and its two commands only copy harden.ps1 and SetupComplete.cmd (see the block comment above). Empty bytes for
+    HARDENING_NONE; an unknown profile raises ValueError.
     """
     if not _windows_hardening_check(profile):
         return b""
-    command = WINDOWS_SEED_COMMAND
-    if len(command) > WINDOWS_SEED_PATH_MAX:  # a constant today; the check keeps a later edit honest
-        raise ValueError("the seed answer file command is longer than the documented Path limit")
+    for command in WINDOWS_SEED_COMMANDS:
+        if len(command) > WINDOWS_SEED_PATH_MAX:  # a constant today; the check keeps a later edit honest
+            raise ValueError("a seed answer file command is longer than the documented Path limit")
+    steps = []
+    for order, (command, text) in enumerate(zip(WINDOWS_SEED_COMMANDS, WINDOWS_SEED_STEP_TEXTS, strict=True), 1):
+        steps += [
+            '        <RunSynchronousCommand wcm:action="add">',
+            "          <Order>" + str(order) + "</Order>",
+            "          <Path>" + command.replace("&", "&amp;") + "</Path>",
+            "          <Description>" + text + "</Description>",
+            "        </RunSynchronousCommand>",
+        ]
     lines = (
         '<?xml version="1.0" encoding="utf-8"?>',
         '<unattend xmlns="' + WINDOWS_SEED_NAMESPACE + '">',
@@ -6743,11 +6804,7 @@ def windows_seed_autounattend(profile):
         ' xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State"'
         ' xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">',
         "      <RunSynchronous>",
-        '        <RunSynchronousCommand wcm:action="add">',
-        "          <Order>1</Order>",
-        "          <Path>" + command.replace("&", "&amp;") + "</Path>",
-        "          <Description>" + WINDOWS_SEED_STEP_TEXT + "</Description>",
-        "        </RunSynchronousCommand>",
+        *steps,
         "      </RunSynchronous>",
         "    </component>",
         "  </settings>",
@@ -6763,14 +6820,19 @@ def describe_windows_seed_during_setup():
     """
     return [
         "EXPERIMENTAL: this mode has not been tested on a real Windows installation. If anything looks wrong, use the \"run after install\" mode instead.",
-        "The seed drive carries an answer file (autounattend.xml). Windows Setup looks for that file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start.",
-        "The answer file adds one step, early on the first start of the new system: it looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, runs harden.ps1 from that drive in Apply mode.",
-        "Keep both drives plugged in until the first screens of the new Windows (region, keyboard, network) appear. If the seed drive is gone by then, nothing is hardened and the installation goes on normally.",
+        "The seed drive carries an answer file (autounattend.xml), SetupComplete.cmd and harden.ps1. Windows Setup looks for the answer file on the root of removable drives, so plug the seed drive in next to the Windows installer drive before you start Setup.",
+        "The answer file adds one step, early on the first start of the new system (the specialize pass): it only copies files. It looks for the file EPMA-SEED.txt on the drives D: to Z: and, where it finds it, copies harden.ps1 and SetupComplete.cmd into C:\\Windows\\Setup\\Scripts. A SetupComplete.cmd that already exists there is never overwritten.",
+        "Windows runs SetupComplete.cmd at the very end of Setup. It checks the SHA-256 of the harden.ps1 next to it and, if it matches, runs harden.ps1 in Apply mode and writes a log to C:\\Windows\\Temp\\epma-hardening.log. If it does not match, nothing is hardened.",
+        "The seed drive must be plugged in before Setup starts and still there at the first restart. After the first screens of the new Windows (region, keyboard, network) appear it can be unplugged. If it is gone earlier, nothing is hardened and the installation goes on normally.",
+        "The SHA-256 check only protects against a harden.ps1 that does not match this SetupComplete.cmd. It does not authenticate the drive: Setup trusts the first drive from D: to Z: that carries EPMA-SEED.txt, so use only a seed drive that you made yourself.",
         "It does not choose or erase a disk, set a product key, accept licence terms, create accounts, set the language or region, skip the hardware checks, download anything or restart the PC. Setup stays interactive.",
         "If no drive has the marker file, nothing happens and Setup continues as usual.",
-        "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC the answer file does nothing: use the \"run after install\" mode.",
+        "If Setup stops with \"Windows could not parse or process the unattended answer file\", unplug the seed drive and start the installation again from the beginning (Setup keeps a copy of the answer file), then use harden.cmd after installing.",
+        "Only 64-bit Intel/AMD PCs (x64) are covered. On any other PC, including ARM64 PCs, the answer file does nothing: use the \"run after install\" mode.",
     ]
 # ===== end hardening2: windows xml =====
+
+
 
 
 # ===== hardening: seed content =====
@@ -7091,7 +7153,8 @@ def hardening_files_seed(target, profile, during_setup=False):
 # ===== hardening2: win-seed =====
 # The Windows 11 seed drive: a second small USB with harden.cmd / audit.cmd / undo.cmd (double-click launchers that
 # ask for administrator rights), harden.ps1 (windows_hardening_ps1) and a README. With during_setup=True (EXPERIMENTAL)
-# it also carries autounattend.xml (windows_seed_autounattend) and a marker file the answer file looks for. Nothing
+# it also carries autounattend.xml (windows_seed_autounattend), SetupComplete.cmd (the same file as the same-USB mode,
+# the answer file stages it) and a marker file the answer file looks for. Nothing
 # here selects a disk, creates an account or stores a secret. Output is deterministic: same input, same bytes.
 SEED_WINDOWS_LABEL = "EPMA-SEED"
 SEED_LABELS[SEED_WINDOWS] = SEED_WINDOWS_LABEL
@@ -7126,28 +7189,37 @@ def _windows_seed_launcher(name, mode, confirm, banner):
 
     It re-launches itself as administrator when it is not (a UAC prompt), optionally asks `Continue? [y/N]`,
     runs harden.ps1 from its own folder (`%~dp0`, quoted: paths with spaces work) in the given mode and waits
-    for a key so that the window stays open. It never deletes, formats or partitions anything."""
-    ps = f'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" -Mode {mode}'
+    for a key so that the window stays open. It never deletes, formats or partitions anything.
+
+    System tools are called by full path (and the current folder is never searched for programs). The path of the
+    launcher itself reaches PowerShell through an environment variable, never inside a PowerShell string, so a
+    folder name with any quote character (a typographic apostrophe included) cannot break out of it. The
+    confirmation is the system `choice` tool: it answers 1 for y and 2 for n; an error (255) counts as
+    n, Ctrl+C (0) falls through to the cancel lines, and nothing typed is ever parsed by cmd."""
+    system32 = "%SystemRoot%\\System32\\"
+    powershell = system32 + "WindowsPowerShell\\v1.0\\powershell.exe"
+    ps = f'"{powershell}" -NoProfile -ExecutionPolicy Bypass -File "%~dp0harden.ps1" -Mode {mode}'
+    flag = "DIFF" if mode == "Audit" else "WARN"
     lines = [
         "@echo off",
         "setlocal",
+        'set "NoDefaultCurrentDirectoryInExePath=1"',
         f"rem {name}: EPMA hardening seed for Windows 11 (EXPERIMENTAL scripts, see README.txt).",
         f"rem Runs harden.ps1 -Mode {mode} from this folder. Nothing is installed or downloaded.",
         f"title EPMA hardening - {mode}",
-        'set "SELF=%~f0"',
+        'set "EPMA_SELF=%~f0"',
         "echo.",
         *("echo " + text for text in banner),
         "echo.",
-        "net session >nul 2>&1",
+        system32 + "net.exe session >nul 2>&1",
         "if not errorlevel 1 goto :admin",
-        "fltmc >nul 2>&1",
+        system32 + "fltmc.exe >nul 2>&1",
         "if not errorlevel 1 goto :admin",
         'if /i "%~1"=="elevated" goto :noadmin',
         "echo Administrator rights are needed. Windows will now show a prompt:",
         "echo choose Yes to continue. A new window opens for the work.",
-        "set \"SELF_PS=%SELF:'=''%\"",
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command '
-        '"Start-Process -FilePath \'%SELF_PS%\' -ArgumentList \'elevated\' -Verb RunAs"',
+        f'"{powershell}" -NoProfile -ExecutionPolicy Bypass -Command '
+        '"Start-Process -FilePath $env:EPMA_SELF -ArgumentList \'elevated\' -Verb RunAs"',
         "if errorlevel 1 goto :noadmin",
         "exit /b 0",
         "",
@@ -7161,10 +7233,10 @@ def _windows_seed_launcher(name, mode, confirm, banner):
     ]
     if confirm:
         lines += [
-            'set "ANSWER="',
-            'set /p "ANSWER=Continue? [y/N] "',
-            'if /i "%ANSWER%"=="y" goto :run',
-            'if /i "%ANSWER%"=="yes" goto :run',
+            system32 + 'choice.exe /c yn /n /m "Continue? [y/N] "',
+            "if errorlevel 2 goto :cancel",
+            "if errorlevel 1 goto :run",
+            ":cancel",
             "echo.",
             "echo Cancelled. Nothing was changed.",
             "pause",
@@ -7176,8 +7248,9 @@ def _windows_seed_launcher(name, mode, confirm, banner):
         ps,
         'set "RC=%errorlevel%"',
         "echo.",
-        "echo Finished with exit code %RC%. Read the lines above: a WARN line means a",
+        f"echo Finished with exit code %RC%. Read the lines above: a [{flag}] line means a",
         "echo setting is not in effect. A restart may be needed for a few settings.",
+        *(("echo Undo can finish with a non-zero exit code when one of its steps failed.",) if mode == "Undo" else ()),
         "pause",
         "exit /b %RC%",
     ]
@@ -7212,30 +7285,51 @@ def _windows_seed_readme(profile, during_setup):
     for n, text in enumerate((
             "Install Windows 11 as usual, then sign in with an administrator account.",
             "Plug this drive in and open it in File Explorer.",
-            "Right-click audit.cmd and choose Open (or double-click it) FIRST. It only shows a "
-            "report of what is in effect and changes nothing.",
-            "Then double-click harden.cmd. Windows asks for permission (the User Account Control "
-            "prompt): choose Yes. Type y at 'Continue? [y/N]' to apply the settings.",
+            "Right-click audit.cmd and choose Open (or double-click it) FIRST. Windows asks for "
+            "permission (the User Account Control prompt): choose Yes. audit.cmd does not ask "
+            "you to confirm anything: it only shows a report of what is in effect and changes "
+            "nothing. In the report [OK] means in effect, [DIFF] means NOT in effect and [N/A] "
+            "means it does not apply to this PC.",
+            "Then double-click harden.cmd. Windows asks for permission again: choose Yes. "
+            "harden.cmd then asks 'Continue? [y/N]': press y to apply the settings, n to cancel.",
             "Read the lines it prints. A [WARN] line means that a setting is NOT in effect. "
             "Nothing was forced.",
-            "To go back, double-click undo.cmd and type y.",
+            "To go back, double-click undo.cmd (it asks 'Continue? [y/N]' too). Read the limits "
+            "of undo.cmd below.",
     ), 1):
         para(text, f"{n}. ")
     blank()
-    para("A log is written to " + SEED_WINDOWS_LOG_SHOWN + ". A restart may be needed for a few "
-         "settings. Running harden.cmd twice changes nothing more.")
+    para("harden.cmd and undo.cmd write a log to " + SEED_WINDOWS_LOG_SHOWN + ". audit.cmd only "
+         "prints in its window. A restart may be needed for a few settings. Running harden.cmd "
+         "twice changes nothing more.")
+    heading("Limits of undo.cmd")
+    for text in (
+            "undo.cmd puts back the settings that harden.ps1 recorded when it changed them.",
+            "It does not turn SMBv1 or PowerShell 2.0 on again (the log prints the command to do "
+            "it by hand), and it does not lower the Security log size.",
+            "A setting that was already in the wanted state before harden.cmd ran is not "
+            "recorded, so undo.cmd leaves it as it is.",
+            "undo.cmd can finish with a non-zero exit code when one of its steps failed: read the "
+            "lines it prints.",
+    ):
+        para(text, "- ", "  ")
     heading("What the script changes")
     for line in describe_hardening_windows_applied(profile):
         para(line.split(" -- risk:", 1)[0], "- ", "  ")
-    para("Opt-in, never applied by default: run harden.ps1 yourself with -DisableLegacyNetwork to also turn "
-         "off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).", "- ", "  ")
+    para("Opt-in, never applied by default: harden.ps1 can also turn off NetBIOS over TCP/IP and "
+         "WPAD proxy auto-discovery (it can break very old networks). To apply them too, open "
+         "PowerShell as administrator, go to this drive (for example: E:) and run this "
+         "command (type it as one line):", "- ", "  ")
+    out.append("      powershell -ExecutionPolicy Bypass -File harden.ps1 -Mode Apply")
+    out.append("        -DisableLegacyNetwork")
     heading("What it leaves alone")
     for _sid, text, why in WINDOWS_HARDENING_NOT_CHANGED:
         para(text + ". " + why, "- ", "  ")
     heading("Read the files before you run them")
     para("harden.cmd, audit.cmd, undo.cmd and harden.ps1 are plain text files. Open them in "
-         "Notepad (right-click, Open with) and read them first. Each launcher only asks for "
-         "administrator rights, asks you to confirm, and runs harden.ps1 from this drive.")
+         "Notepad (right-click, Open with) and read them first. Each launcher asks for "
+         "administrator rights and runs harden.ps1 from this drive. harden.cmd and undo.cmd "
+         "also ask you to confirm; audit.cmd does not.")
     heading("Honest caveats")
     for text in (
             "These settings are inspired by common security baselines. They are a sensible "
@@ -7246,27 +7340,49 @@ def _windows_seed_readme(profile, during_setup):
             "settings from being changed. The script then prints a [WARN] line.",
             "Nothing here selects a disk, partitions or erases anything, and nothing creates an "
             "account or sets a password.",
+            "This drive is not protected or authenticated in any way: whatever is on it runs "
+            "with administrator rights when you use a launcher. Keep it with you.",
     ):
         para(text, "- ", "  ")
     if during_setup:
         heading("EXPERIMENTAL: apply it while Windows is being installed")
-        para("This drive also holds an answer file, autounattend.xml, and a small marker file, "
-             + SEED_WINDOWS_MARKER + " (the answer file looks for it to find the letter of this "
-             "drive: do not rename or remove it). This way of using the drive is EXPERIMENTAL "
-             "and has not been tried by its authors on a real Windows PC. Way 1 above is the "
-             "safer path.")
+        para("This drive also holds an answer file, autounattend.xml, a SetupComplete.cmd and a "
+             "small marker file, " + SEED_WINDOWS_MARKER + " (the answer file looks for it to "
+             "find the letter of this drive: do not rename or remove it). This way of using the "
+             "drive is EXPERIMENTAL and has not been tried by its authors on a real Windows PC. "
+             "Way 1 above is the safer path.")
         blank()
         for n, text in enumerate((
-                "Plug this drive in next to the Windows installer USB, before you start Setup.",
-                "Start Windows Setup from the installer USB as usual.",
-                "Setup then runs harden.ps1 at the end of the specialize phase. Setup still asks "
-                "for the language, the disk, the edition and your account, as usual.",
+                "Plug this drive in next to the Windows installer USB BEFORE you start Setup. "
+                "It must still be plugged in at the first restart of Setup. After the first "
+                "screens of the new Windows (region, keyboard, network) appear you can unplug "
+                "it: it is not needed at the end of Setup.",
+                "Start Windows Setup from the installer USB as usual. Setup still asks for the "
+                "language, the disk, the edition and your account, as usual.",
+                "Early on the first start of the new system (the specialize phase), the answer "
+                "file only copies harden.ps1 and SetupComplete.cmd from this drive into "
+                "C:\\Windows\\Setup\\Scripts. It does not run PowerShell and it never overwrites "
+                "a SetupComplete.cmd that is already there.",
+                "At the very end of Setup, Windows runs SetupComplete.cmd. It checks the SHA-256 "
+                "of the harden.ps1 next to it and only then runs it in Apply mode. It appends "
+                "to the log " + SEED_WINDOWS_LOG_SHOWN + " ([SKIP] lines say why nothing ran).",
                 "Afterwards, run audit.cmd to see what is in effect.",
         ), 1):
             para(text, f"{n}. ")
         blank()
-        para("If Setup complains about the answer file, unplug this drive and install normally, "
-             "then use harden.cmd after installing.")
+        para("Trust: the answer file and SetupComplete.cmd trust any drive that carries "
+             + SEED_WINDOWS_MARKER + " on its root (the first match from D: to Z:). The SHA-256 "
+             "check only protects against a harden.ps1 that does not match the SetupComplete.cmd "
+             "next to it. It does NOT protect against someone who controls the seed drive. Use "
+             "only a seed drive that you made yourself.")
+        blank()
+        para("If Setup stops with \"Windows could not parse or process the unattended answer "
+             "file\", unplug this drive and RESTART the installation from the beginning: Setup "
+             "keeps a copy of the answer file in C:\\Windows\\Panther, so unplugging alone is not "
+             "enough. Then use harden.cmd after installing.")
+        blank()
+        para("This mode covers 64-bit Intel/AMD PCs (amd64) only. On ARM64 PCs use Way 1 above.")
+        blank()
         para("If the installer USB already has its own autounattend.xml, it is not defined which "
              "one Windows uses: use only one of them.")
     return ("\r\n".join(out) + "\r\n").encode("ascii")
@@ -7282,6 +7398,8 @@ def _windows_seed_files(profile, during_setup):
     files["harden.ps1"] = ps1
     files["README.txt"] = _windows_seed_readme(profile, during_setup)
     if during_setup:
+        # the same SetupComplete.cmd as the same-USB mode, with the SHA-256 of exactly the harden.ps1 written above
+        files[WINDOWS_SEED_SETUPCOMPLETE_FILE] = _windows_setupcomplete_cmd(profile, ps1)
         xml = windows_seed_autounattend(profile)
         if not isinstance(xml, bytes) or not xml.strip():
             raise ValueError("The Windows answer file is empty")
