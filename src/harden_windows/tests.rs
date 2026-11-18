@@ -334,7 +334,6 @@ fn sizes_within_limits() {
 /// `validate_seed_files` is A4's (seed.rs); until that module is merged it is a stub, so this runs with
 /// `cargo test -- --ignored` after the merge.
 #[test]
-#[ignore = "needs seed::validate_seed_files (A4); run with --ignored once the modules are merged"]
 fn shared_validator_accepts_the_files() {
     assert_eq!(crate::seed::validate_seed_files(&base().files).unwrap(), base().files);
 }
@@ -468,7 +467,6 @@ fn cmd_the_hash_matches_the_bytes_that_are_written_in_same_usb_mode() {
 /// Seed drive mode: harden.ps1 of the seed is the same script, and the seed drive has no SetupComplete.cmd. The seed
 /// files are A5's (seed_files.rs); runs with `--ignored` once the modules are merged.
 #[test]
-#[ignore = "needs seed_files::hardening_files_seed (A5); run with --ignored once the modules are merged"]
 fn cmd_the_hash_matches_the_bytes_that_are_written_in_seed_mode() {
     let (_label, seed) =
         crate::seed_files::hardening_files_seed(crate::types::SeedTarget::Windows, Hardening::Baseline).unwrap();

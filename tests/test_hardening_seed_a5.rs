@@ -1312,7 +1312,6 @@ fn windows_files_are_flat_ascii_names_within_the_drive_limits() {
 }
 
 #[test]
-#[ignore = "needs the merged seed module"]
 fn windows_files_pass_the_drive_validator() {
     let files = win_files();
     let validated = epma_usb_creator::seed::validate_seed_files(&files).unwrap();
@@ -1809,7 +1808,6 @@ fn real_windows_pieces_hold_no_secrets_or_claims() {
 }
 
 #[test]
-#[ignore = "needs merged modules (harden_windows)"]
 fn real_windows_seed_through_the_public_entry_point() {
     let ps1 = epma_usb_creator::harden_windows::windows_hardening_ps1(Hardening::Baseline).unwrap();
     let (label, files) = hardening_files_seed(SeedTarget::Windows, Hardening::Baseline).unwrap();

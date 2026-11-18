@@ -5,7 +5,7 @@
 //!
 //! `help_sections()` needs three other modules (the audit log path, the platform name, the Windows hardening
 //! descriptions), so most tests call `help_sections_with`, which takes those pieces as arguments; the tests that
-//! compare with the real modules are `#[ignore]`d until everything is merged.
+//! compare with the real modules need the other modules (all merged now).
 
 use epma_usb_creator::cli::{EXIT_EJECT_FAILED, EXIT_ERROR, EXIT_INTERRUPTED, EXIT_OK, EXIT_USAGE, EXIT_VERIFY_FAILED};
 use epma_usb_creator::constants::*;
@@ -213,7 +213,6 @@ fn the_audit_log_path_is_the_one_given() {
 }
 
 #[test]
-#[ignore = "needs merged modules (audit, proc, harden_windows)"]
 fn the_audit_log_path_is_the_real_one() {
     let real = epma_usb_creator::audit::audit_log_path().display().to_string();
     let text = help_sections().into_iter().find(|(t, _)| t == "Files, logs and settings").unwrap().1;
@@ -306,7 +305,6 @@ fn crate_source(subdir: &str) -> String {
 }
 
 #[test]
-#[ignore = "needs merged modules (the messages live in other agents' files)"]
 fn quoted_messages_exist_in_the_code() {
     // Troubleshooting quotes the exact messages users will see. If one is reworded in the code, the documentation
     // must be reworded too (this test then fails).
@@ -345,7 +343,6 @@ fn chromeos_the_overview_and_command_line_mention_it() {
 }
 
 #[test]
-#[ignore = "needs merged modules (the window texts live in src/gui)"]
 fn chromeos_the_ui_strings_it_quotes_exist() {
     let source = crate_source("");
     for label in [
@@ -377,7 +374,6 @@ fn chromeos_the_cards_it_names_are_in_the_text() {
 }
 
 #[test]
-#[ignore = "needs merged modules (the window texts live in src/gui)"]
 fn chromeos_the_cards_it_names_exist_in_the_window() {
     let source = crate_source("gui");
     for card in ["Google Chrome", "Windows 11", "Linux", "Other ISO"] {
@@ -463,7 +459,6 @@ fn the_deliberate_changes_are_exactly_these() {
 }
 
 #[test]
-#[ignore = "needs merged modules (audit, proc, harden_windows)"]
 fn text_matches_the_python_golden_with_the_real_modules() {
     // The platform-specific pieces (audit log path, platform name) differ between machines: compare the rest.
     let normalise = |s: &str| {
