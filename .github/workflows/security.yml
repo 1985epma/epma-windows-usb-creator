@@ -4,23 +4,30 @@
 # O QUE É ISTO, EM LINGUAGEM SIMPLES
 # ----------------------------------
 # A auditoria de segurança corrigiu 17 problemas. Nada impede que uma alteração
-# futura desfaça uma dessas correções sem ninguém perceber.
+# futura desfaça uma dessas correções sem ninguém perceber, nem que uma
+# biblioteca de terceiros ganhe uma falha conhecida depois de ter sido adotada.
 #
-# Esta esteira é a vigilância permanente: ela repete as análises da auditoria
+# Esta esteira é a vigilância permanente: ela repete as análises
 # automaticamente a cada alteração e uma vez por semana, e barra a alteração se
-# alguma proteção tiver sido desfeita.
+# algo estiver errado.
 #
-# COMO ELA ESTÁ ORGANIZADA (importante entender)
-# ----------------------------------------------
-# CAMADA 1 — "Guarda de regressão" (Python puro, ZERO dependências).
-#   É o coração. Sempre funciona, nunca depende de serviço externo, e BARRA a
-#   alteração. Confere item por item se as correções continuam no lugar.
+# COMO ELA ESTÁ ORGANIZADA
+# ------------------------
+# CAMADA 1 — Dependências e regras do compilador (BLOQUEIA a alteração).
+#   * cargo-audit: confere o Cargo.lock contra o banco de avisos de segurança do
+#     RustSec. Uma biblioteca com falha conhecida barra a alteração.
+#   * clippy com os avisos "de rascunho" do projeto (todo!, unimplemented!, dbg!) como
+#     ERRO: um stub esquecido num caminho que escreve em disco não pode chegar à versão final.
 #
-# CAMADA 2 — Ferramentas externas (Bandit, Semgrep, CodeQL, Gitleaks).
+# CAMADA 2 — Ferramentas externas (CodeQL, Gitleaks).
 #   Segunda opinião, que encontra coisas que ninguém previu. Barram apenas
 #   falhas de gravidade ALTA, para não travar o projeto com alarme falso.
 #
-# Essa divisão é proposital: se o Semgrep sair do ar ou mudar de licença, a
+# As proteções de segurança do próprio programa (nome de dispositivo validado antes
+# de chegar a um comando, senha só por stdin, script que falhou nunca repetido,
+# verificação antes de ejetar...) são conferidas pelos TESTES (job "testes" do ci.yml).
+#
+# Essa divisão é proposital: se um serviço externo sair do ar ou mudar de licença, a
 # vigilância essencial continua funcionando.
 # =============================================================================
 
@@ -46,123 +53,51 @@ concurrency:
 
 jobs:
   # ===========================================================================
-  # CAMADA 1 — Guarda de regressão (BLOQUEIA a alteração)
+  # CAMADA 1 — Dependências de terceiros (BLOQUEIA a alteração)
   # ===========================================================================
-  guarda-regressao:
-    name: 'Camada 1: guarda de regressão'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Baixar o código
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Preparar o Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.15'
-
-      - name: Autoteste do guarda ("quem vigia o vigia?")
-        # Roda ANTES do guarda de propósito: confirma que o guarda realmente
-        # detecta regressões. Um verificador que aprova tudo é pior que nenhum.
-        # Ele quebra o código de propósito numa cópia temporária e confere que
-        # o guarda reclama de cada uma das regressões simuladas.
-        run: python output/auditoria/teste_do_guarda.py
-
-      - name: Guarda de segurança (proteções da auditoria)
-        run: python output/auditoria/guard_seguranca.py
-
-      - name: Verificar dependências de terceiros
-        # O projeto tem ZERO dependências de terceiros — sua melhor propriedade
-        # de segurança. Este passo falha se alguém adicionar alguma sem seguir
-        # o processo (e a mensagem de erro explica qual é o processo).
-        run: python output/auditoria/verifica_dependencias.py
-
-  # ===========================================================================
-  # CAMADA 2 — Bandit: analisador de segurança dedicado para Python
-  # ===========================================================================
-  sast-bandit:
-    name: 'Camada 2: Bandit (SAST)'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Baixar o código
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Preparar o Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-
-      - name: Instalar o Bandit
-        run: pip install --disable-pip-version-check "bandit[toml]==1.9.4"
-
-      - name: Relatório completo (não bloqueia)
-        # Gera o relatório de tudo, inclusive gravidade baixa e média, para
-        # ficar guardado como evidência. As exceções e suas justificativas
-        # estão em pyproject.toml.
-        continue-on-error: true
-        run: |
-          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ \
-                 -f json -o bandit-relatorio.json
-          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ || true
-
-      - name: Barrar falhas de gravidade ALTA
-        # Só falhas de alta gravidade e alta confiança barram a alteração.
-        # As de gravidade média já estão cobertas pelo Ruff na esteira de CI,
-        # com justificativa escrita ao lado de cada linha do código.
-        run: |
-          bandit -c pyproject.toml -r win11_usb_creator.py output/auditoria/ \
-                 --severity-level high --confidence-level high
-
-      - name: Guardar o relatório
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bandit-relatorio
-          path: bandit-relatorio.json
-          retention-days: 90
-
-  # ===========================================================================
-  # CAMADA 2 — Semgrep: regras próprias do projeto + catálogo público
-  # ===========================================================================
-  sast-semgrep:
-    name: 'Camada 2: Semgrep (SAST)'
+  dependencias:
+    name: 'Camada 1: dependências (cargo-audit)'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Preparar o Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.13'
-
-      - name: Instalar o Semgrep
-        run: pip install --disable-pip-version-check semgrep
-
-      - name: Regras próprias deste projeto (BLOQUEIA)
-        # Regras escritas especificamente para as falhas que a auditoria
-        # encontrou aqui. Funcionam sem internet e sem cadastro.
-        run: semgrep --config .semgrep/win11usb.yml --error --metrics=off .
-
-      - name: Catálogo público de regras (não bloqueia)
-        # Depende de baixar as regras do site do Semgrep. Se o site estiver
-        # fora do ar ou mudar de política, isto NÃO derruba a esteira — por
-        # isso a camada 1 existe.
-        continue-on-error: true
+      - name: Preparar o Rust
         run: |
-          semgrep --config=p/python --config=p/security-audit \
-                  --metrics=off --sarif --output=semgrep.sarif . || true
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
-      - name: Guardar o relatório
-        if: always()
-        continue-on-error: true
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: semgrep-relatorio
-          path: semgrep.sarif
-          retention-days: 90
+      - name: Instalar o cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Conferir o Cargo.lock contra o banco de avisos do RustSec
+        # Falha com qualquer VULNERABILIDADE conhecida. Avisos de crates sem
+        # manutenção ("unmaintained") aparecem no log, mas não barram.
+        run: cargo audit
+
+  # ===========================================================================
+  # CAMADA 1 — Clippy com as regras de segurança do projeto (BLOQUEIA)
+  # ===========================================================================
+  clippy-seguranca:
+    name: 'Camada 1: clippy (regras de segurança)'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Preparar o Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Clippy sem todo!/unimplemented!/dbg! no código de produção
+        # --lib --bins: só o código do programa. Os `unwrap` que restam compilam
+        # expressões regulares fixas (verificadas pelos testes), nunca dados externos.
+        run: |
+          cargo clippy --no-default-features --lib --bins --locked -- \
+            -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro
 
   # ===========================================================================
   # CAMADA 2 — CodeQL: o analisador de segurança do próprio GitHub
@@ -170,7 +105,7 @@ jobs:
   codeql:
     name: 'Camada 2: CodeQL (SAST)'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 45
     permissions:
       contents: read
       security-events: write   # necessário para publicar os alertas na aba Security
@@ -179,16 +114,23 @@ jobs:
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Instalar as bibliotecas gráficas
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev
+
       - name: Preparar o CodeQL
         uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
-          languages: python
+          languages: rust
           queries: security-extended
 
       - name: Analisar
         uses: github/codeql-action/analyze@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
         with:
-          category: '/language:python'
+          category: '/language:rust'
 
   # ===========================================================================
   # CAMADA 2 — Segredos: senhas e chaves acidentalmente publicadas
@@ -206,8 +148,7 @@ jobs:
           fetch-depth: 0
 
       - name: Varrer o histórico com Gitleaks
-        # Não bloqueia por si só: o guarda da camada 1 já barra segredos no
-        # código atual (regra G07), e o GitHub tem varredura nativa de segredos
+        # Não bloqueia por si só: o GitHub tem varredura nativa de segredos
         # (ative em Settings > Code security). Este passo cobre o HISTÓRICO.
         continue-on-error: true
         run: |
@@ -222,30 +163,26 @@ jobs:
   seguranca-aprovada:
     name: Segurança aprovada
     if: always()
-    needs: [guarda-regressao, sast-bandit, sast-semgrep, codeql]
+    needs: [dependencias, clippy-seguranca, codeql]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verificar o resultado das etapas anteriores
         run: |
-          echo "guarda de regressão: ${{ needs.guarda-regressao.result }}"
-          echo "bandit:              ${{ needs.sast-bandit.result }}"
-          echo "semgrep:             ${{ needs.sast-semgrep.result }}"
-          echo "codeql:              ${{ needs.codeql.result }}"
+          echo "dependências:      ${{ needs.dependencias.result }}"
+          echo "clippy segurança:  ${{ needs.clippy-seguranca.result }}"
+          echo "codeql:            ${{ needs.codeql.result }}"
           echo ""
-          # O guarda da camada 1 é ABSOLUTO: se ele falhar, uma correção da
-          # auditoria foi desfeita e a alteração não pode entrar.
-          if [ "${{ needs.guarda-regressao.result }}" != "success" ]; then
-            echo "::error::Uma proteção da auditoria de segurança foi desfeita."
-            echo "::error::Consulte output/relatorio-consolidado-seguranca.md."
-            exit 1
-          fi
-          for r in "${{ needs.sast-bandit.result }}" \
-                   "${{ needs.sast-semgrep.result }}" \
-                   "${{ needs.codeql.result }}"; do
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::Uma análise de segurança falhou. Veja os detalhes acima."
+          for r in "${{ needs.dependencias.result }}" \
+                   "${{ needs.clippy-seguranca.result }}"; do
+            if [ "$r" != "success" ]; then
+              echo "::error::Uma conferência de segurança da camada 1 falhou. Veja os detalhes acima."
               exit 1
             fi
           done
+          r="${{ needs.codeql.result }}"
+          if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+            echo "::error::A análise do CodeQL falhou. Veja os detalhes acima."
+            exit 1
+          fi
           echo "Todas as conferências de segurança passaram."

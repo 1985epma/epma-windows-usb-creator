@@ -11,6 +11,16 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ## [Unreleased]
 
+### Changed
+
+- **The whole program was rewritten in Rust.** The engine, the command line and the window (now built with egui)
+  are a single `epma-usb-creator` binary: no Python, no Tkinter, nothing to install besides the tools the program
+  already used (`wimlib`, `parted`, `rsync`... on Linux and macOS; PowerShell and DISM on Windows). Behaviour,
+  messages, exit codes, the generated hardening files (byte for byte) and every safety check are unchanged; the
+  Python implementation stays in the repository as the reference until the port has been verified on real drives.
+  The program now links a small set of third-party Rust crates (see `Cargo.toml`; versions and hashes are pinned in
+  `Cargo.lock`), where the Python version used only the standard library.
+
 ### Added
 
 - **Windows 11 support and an MSI package.** The program now runs on Windows 11 (window and command line) and

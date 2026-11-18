@@ -1,0 +1,1992 @@
+{
+ "files": [
+  {
+   "files": [
+    [
+     "user-data",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "a/b/c.txt",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "sources/$OEM$/$$/Setup/Scripts/SetupComplete.cmd",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "l\u00e9ame-a\u00e7\u00e3o.txt",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "..",
+     1
+    ]
+   ],
+   "error": "Seed file path '..' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "../etc/passwd",
+     1
+    ]
+   ],
+   "error": "Seed file path '../etc/passwd' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "a/../../b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a/../../b' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "a/..",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a/..' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "a/../b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a/../b' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "/etc/passwd",
+     1
+    ]
+   ],
+   "error": "Seed file path '/etc/passwd' is absolute; it must be relative to the root of the drive."
+  },
+  {
+   "files": [
+    [
+     "/user-data",
+     1
+    ]
+   ],
+   "error": "Seed file path '/user-data' is absolute; it must be relative to the root of the drive."
+  },
+  {
+   "files": [
+    [
+     "//server/share",
+     1
+    ]
+   ],
+   "error": "Seed file path '//server/share' is absolute; it must be relative to the root of the drive."
+  },
+  {
+   "files": [
+    [
+     "C:/Windows/x",
+     1
+    ]
+   ],
+   "error": "Seed file path 'C:/Windows/x' contains ':', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a:b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a:b' contains ':', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a\\b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\\\b' contains a backslash; use '/' to separate folders."
+  },
+  {
+   "files": [
+    [
+     "..\\x",
+     1
+    ]
+   ],
+   "error": "Seed file path '..\\\\x' contains a backslash; use '/' to separate folders."
+  },
+  {
+   "files": [
+    [
+     "\\abs",
+     1
+    ]
+   ],
+   "error": "Seed file path '\\\\abs' contains a backslash; use '/' to separate folders."
+  },
+  {
+   "files": [
+    [
+     "a\u0000b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\x00b' contains a NUL character."
+  },
+  {
+   "files": [
+    [
+     "a\nb",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\nb' contains a control character."
+  },
+  {
+   "files": [
+    [
+     "a\tb",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\tb' contains a control character."
+  },
+  {
+   "files": [
+    [
+     "a\u007fb",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\x7fb' contains a control character."
+  },
+  {
+   "files": [
+    [
+     "a\u001fb",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\\x1fb' contains a control character."
+  },
+  {
+   "files": [
+    [
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     1
+    ]
+   ],
+   "error": "Seed file path 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa...' is longer than 240 characters."
+  },
+  {
+   "files": [
+    [
+     "d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/ab",
+     1
+    ]
+   ],
+   "error": "Seed file path 'd/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d/d...' is longer than 240 characters."
+  },
+  {
+   "files": [
+    [
+     "",
+     1
+    ]
+   ],
+   "error": "A seed file has an empty path."
+  },
+  {
+   "files": [
+    [
+     "a//b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a//b' has an empty or '.' component."
+  },
+  {
+   "files": [
+    [
+     "a/",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a/' has an empty or '.' component."
+  },
+  {
+   "files": [
+    [
+     "./a",
+     1
+    ]
+   ],
+   "error": "Seed file path './a' has an empty or '.' component."
+  },
+  {
+   "files": [
+    [
+     "a/./b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a/./b' has an empty or '.' component."
+  },
+  {
+   "files": [
+    [
+     ".",
+     1
+    ]
+   ],
+   "error": "Seed file path '.' has an empty or '.' component."
+  },
+  {
+   "files": [
+    [
+     "a?",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a?' contains '?', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a*b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a*b' contains '*', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a<b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a<b' contains '<', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a\"b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a\"b' contains '\"', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "a|b",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a|b' contains '|', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "name.",
+     1
+    ]
+   ],
+   "error": "Seed file path 'name.' has a name ending in a space or a dot."
+  },
+  {
+   "files": [
+    [
+     "name ",
+     1
+    ]
+   ],
+   "error": "Seed file path 'name ' has a name ending in a space or a dot."
+  },
+  {
+   "files": [
+    [
+     "dir /x",
+     1
+    ]
+   ],
+   "error": "Seed file path 'dir /x' has a name ending in a space or a dot."
+  },
+  {
+   "files": [
+    [
+     "CON",
+     1
+    ]
+   ],
+   "error": "Seed file path 'CON' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "nul.txt",
+     1
+    ]
+   ],
+   "error": "Seed file path 'nul.txt' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "COM1",
+     1
+    ]
+   ],
+   "error": "Seed file path 'COM1' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "lpt9.cfg",
+     1
+    ]
+   ],
+   "error": "Seed file path 'lpt9.cfg' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "a?*|",
+     1
+    ]
+   ],
+   "error": "Seed file path 'a?*|' contains '*?|', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\",
+     1
+    ]
+   ],
+   "error": "Seed file path 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...' contains a backslash; use '/' to separate folders."
+  },
+  {
+   "files": [
+    [
+     "it's",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "it's \"quoted\"",
+     1
+    ]
+   ],
+   "error": "Seed file path 'it\\'s \"quoted\"' contains '\"', which FAT32 cannot store."
+  },
+  {
+   "files": [
+    [
+     "tab\there",
+     1
+    ]
+   ],
+   "error": "Seed file path 'tab\\there' contains a control character."
+  },
+  {
+   "files": [
+    [
+     "\u00e9\u00a0x",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "zero\u200bwidth",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "caf\u00e9/\u4e2d\u6587.txt",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "a b/c d",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "name.with.dots",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "aux.txt.bak",
+     1
+    ]
+   ],
+   "error": "Seed file path 'aux.txt.bak' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "Nul .txt",
+     1
+    ]
+   ],
+   "error": "Seed file path 'Nul .txt' uses a reserved device name."
+  },
+  {
+   "files": [
+    [
+     "com0",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "COM10",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "README.txt",
+     1
+    ],
+    [
+     "readme.TXT",
+     1
+    ]
+   ],
+   "error": "Seed file 'readme.TXT' has the same name as 'README.txt' (FAT32 ignores letter case)."
+  },
+  {
+   "files": [
+    [
+     "A/b",
+     1
+    ],
+    [
+     "a/B",
+     1
+    ]
+   ],
+   "error": "Seed file 'a/B' has the same name as 'A/b' (FAT32 ignores letter case)."
+  },
+  {
+   "files": [
+    [
+     "a",
+     1
+    ],
+    [
+     "a/b",
+     1
+    ]
+   ],
+   "error": "Seed file 'a/b' is inside 'a', which is a file."
+  },
+  {
+   "files": [
+    [
+     "A",
+     1
+    ],
+    [
+     "a/b",
+     1
+    ]
+   ],
+   "error": "Seed file 'a/b' is inside 'A', which is a file."
+  },
+  {
+   "files": [
+    [
+     "a/b",
+     1
+    ],
+    [
+     "a",
+     1
+    ]
+   ],
+   "error": "Seed file 'a/b' is inside 'a', which is a file."
+  },
+  {
+   "files": [
+    [
+     "a/b/c",
+     1
+    ],
+    [
+     "A/B",
+     1
+    ]
+   ],
+   "error": "Seed file 'a/b/c' is inside 'A/B', which is a file."
+  },
+  {
+   "files": [
+    [
+     "a/x",
+     1
+    ],
+    [
+     "b/x",
+     1
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "ok",
+     1
+    ],
+    [
+     "../bad",
+     1
+    ],
+    [
+     "a\\b",
+     1
+    ]
+   ],
+   "error": "Seed file path '../bad' contains '..'."
+  },
+  {
+   "files": [
+    [
+     "big",
+     262144
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "big",
+     262145
+    ]
+   ],
+   "error": "Seed file 'big' is 256.0 KB; the limit is 256.0 KB per file."
+  },
+  {
+   "files": [
+    [
+     "f0",
+     262144
+    ],
+    [
+     "f1",
+     262144
+    ],
+    [
+     "f2",
+     262144
+    ],
+    [
+     "f3",
+     262144
+    ],
+    [
+     "f4",
+     262144
+    ],
+    [
+     "f5",
+     262144
+    ],
+    [
+     "f6",
+     262144
+    ],
+    [
+     "f7",
+     262144
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "f0",
+     262144
+    ],
+    [
+     "f1",
+     262144
+    ],
+    [
+     "f2",
+     262144
+    ],
+    [
+     "f3",
+     262144
+    ],
+    [
+     "f4",
+     262144
+    ],
+    [
+     "f5",
+     262144
+    ],
+    [
+     "f6",
+     262144
+    ],
+    [
+     "f7",
+     262144
+    ],
+    [
+     "f8",
+     262144
+    ]
+   ],
+   "error": "The seed files are larger than 2.0 MB together."
+  },
+  {
+   "files": [
+    [
+     "f0",
+     0
+    ],
+    [
+     "f1",
+     0
+    ],
+    [
+     "f2",
+     0
+    ],
+    [
+     "f3",
+     0
+    ],
+    [
+     "f4",
+     0
+    ],
+    [
+     "f5",
+     0
+    ],
+    [
+     "f6",
+     0
+    ],
+    [
+     "f7",
+     0
+    ],
+    [
+     "f8",
+     0
+    ],
+    [
+     "f9",
+     0
+    ],
+    [
+     "f10",
+     0
+    ],
+    [
+     "f11",
+     0
+    ],
+    [
+     "f12",
+     0
+    ],
+    [
+     "f13",
+     0
+    ],
+    [
+     "f14",
+     0
+    ],
+    [
+     "f15",
+     0
+    ],
+    [
+     "f16",
+     0
+    ],
+    [
+     "f17",
+     0
+    ],
+    [
+     "f18",
+     0
+    ],
+    [
+     "f19",
+     0
+    ],
+    [
+     "f20",
+     0
+    ],
+    [
+     "f21",
+     0
+    ],
+    [
+     "f22",
+     0
+    ],
+    [
+     "f23",
+     0
+    ],
+    [
+     "f24",
+     0
+    ],
+    [
+     "f25",
+     0
+    ],
+    [
+     "f26",
+     0
+    ],
+    [
+     "f27",
+     0
+    ],
+    [
+     "f28",
+     0
+    ],
+    [
+     "f29",
+     0
+    ],
+    [
+     "f30",
+     0
+    ],
+    [
+     "f31",
+     0
+    ],
+    [
+     "f32",
+     0
+    ],
+    [
+     "f33",
+     0
+    ],
+    [
+     "f34",
+     0
+    ],
+    [
+     "f35",
+     0
+    ],
+    [
+     "f36",
+     0
+    ],
+    [
+     "f37",
+     0
+    ],
+    [
+     "f38",
+     0
+    ],
+    [
+     "f39",
+     0
+    ],
+    [
+     "f40",
+     0
+    ],
+    [
+     "f41",
+     0
+    ],
+    [
+     "f42",
+     0
+    ],
+    [
+     "f43",
+     0
+    ],
+    [
+     "f44",
+     0
+    ],
+    [
+     "f45",
+     0
+    ],
+    [
+     "f46",
+     0
+    ],
+    [
+     "f47",
+     0
+    ],
+    [
+     "f48",
+     0
+    ],
+    [
+     "f49",
+     0
+    ],
+    [
+     "f50",
+     0
+    ],
+    [
+     "f51",
+     0
+    ],
+    [
+     "f52",
+     0
+    ],
+    [
+     "f53",
+     0
+    ],
+    [
+     "f54",
+     0
+    ],
+    [
+     "f55",
+     0
+    ],
+    [
+     "f56",
+     0
+    ],
+    [
+     "f57",
+     0
+    ],
+    [
+     "f58",
+     0
+    ],
+    [
+     "f59",
+     0
+    ],
+    [
+     "f60",
+     0
+    ],
+    [
+     "f61",
+     0
+    ],
+    [
+     "f62",
+     0
+    ],
+    [
+     "f63",
+     0
+    ],
+    [
+     "f64",
+     0
+    ],
+    [
+     "f65",
+     0
+    ],
+    [
+     "f66",
+     0
+    ],
+    [
+     "f67",
+     0
+    ],
+    [
+     "f68",
+     0
+    ],
+    [
+     "f69",
+     0
+    ],
+    [
+     "f70",
+     0
+    ],
+    [
+     "f71",
+     0
+    ],
+    [
+     "f72",
+     0
+    ],
+    [
+     "f73",
+     0
+    ],
+    [
+     "f74",
+     0
+    ],
+    [
+     "f75",
+     0
+    ],
+    [
+     "f76",
+     0
+    ],
+    [
+     "f77",
+     0
+    ],
+    [
+     "f78",
+     0
+    ],
+    [
+     "f79",
+     0
+    ],
+    [
+     "f80",
+     0
+    ],
+    [
+     "f81",
+     0
+    ],
+    [
+     "f82",
+     0
+    ],
+    [
+     "f83",
+     0
+    ],
+    [
+     "f84",
+     0
+    ],
+    [
+     "f85",
+     0
+    ],
+    [
+     "f86",
+     0
+    ],
+    [
+     "f87",
+     0
+    ],
+    [
+     "f88",
+     0
+    ],
+    [
+     "f89",
+     0
+    ],
+    [
+     "f90",
+     0
+    ],
+    [
+     "f91",
+     0
+    ],
+    [
+     "f92",
+     0
+    ],
+    [
+     "f93",
+     0
+    ],
+    [
+     "f94",
+     0
+    ],
+    [
+     "f95",
+     0
+    ],
+    [
+     "f96",
+     0
+    ],
+    [
+     "f97",
+     0
+    ],
+    [
+     "f98",
+     0
+    ],
+    [
+     "f99",
+     0
+    ],
+    [
+     "f100",
+     0
+    ],
+    [
+     "f101",
+     0
+    ],
+    [
+     "f102",
+     0
+    ],
+    [
+     "f103",
+     0
+    ],
+    [
+     "f104",
+     0
+    ],
+    [
+     "f105",
+     0
+    ],
+    [
+     "f106",
+     0
+    ],
+    [
+     "f107",
+     0
+    ],
+    [
+     "f108",
+     0
+    ],
+    [
+     "f109",
+     0
+    ],
+    [
+     "f110",
+     0
+    ],
+    [
+     "f111",
+     0
+    ],
+    [
+     "f112",
+     0
+    ],
+    [
+     "f113",
+     0
+    ],
+    [
+     "f114",
+     0
+    ],
+    [
+     "f115",
+     0
+    ],
+    [
+     "f116",
+     0
+    ],
+    [
+     "f117",
+     0
+    ],
+    [
+     "f118",
+     0
+    ],
+    [
+     "f119",
+     0
+    ],
+    [
+     "f120",
+     0
+    ],
+    [
+     "f121",
+     0
+    ],
+    [
+     "f122",
+     0
+    ],
+    [
+     "f123",
+     0
+    ],
+    [
+     "f124",
+     0
+    ],
+    [
+     "f125",
+     0
+    ],
+    [
+     "f126",
+     0
+    ],
+    [
+     "f127",
+     0
+    ]
+   ],
+   "ok": true
+  },
+  {
+   "files": [
+    [
+     "f0",
+     0
+    ],
+    [
+     "f1",
+     0
+    ],
+    [
+     "f2",
+     0
+    ],
+    [
+     "f3",
+     0
+    ],
+    [
+     "f4",
+     0
+    ],
+    [
+     "f5",
+     0
+    ],
+    [
+     "f6",
+     0
+    ],
+    [
+     "f7",
+     0
+    ],
+    [
+     "f8",
+     0
+    ],
+    [
+     "f9",
+     0
+    ],
+    [
+     "f10",
+     0
+    ],
+    [
+     "f11",
+     0
+    ],
+    [
+     "f12",
+     0
+    ],
+    [
+     "f13",
+     0
+    ],
+    [
+     "f14",
+     0
+    ],
+    [
+     "f15",
+     0
+    ],
+    [
+     "f16",
+     0
+    ],
+    [
+     "f17",
+     0
+    ],
+    [
+     "f18",
+     0
+    ],
+    [
+     "f19",
+     0
+    ],
+    [
+     "f20",
+     0
+    ],
+    [
+     "f21",
+     0
+    ],
+    [
+     "f22",
+     0
+    ],
+    [
+     "f23",
+     0
+    ],
+    [
+     "f24",
+     0
+    ],
+    [
+     "f25",
+     0
+    ],
+    [
+     "f26",
+     0
+    ],
+    [
+     "f27",
+     0
+    ],
+    [
+     "f28",
+     0
+    ],
+    [
+     "f29",
+     0
+    ],
+    [
+     "f30",
+     0
+    ],
+    [
+     "f31",
+     0
+    ],
+    [
+     "f32",
+     0
+    ],
+    [
+     "f33",
+     0
+    ],
+    [
+     "f34",
+     0
+    ],
+    [
+     "f35",
+     0
+    ],
+    [
+     "f36",
+     0
+    ],
+    [
+     "f37",
+     0
+    ],
+    [
+     "f38",
+     0
+    ],
+    [
+     "f39",
+     0
+    ],
+    [
+     "f40",
+     0
+    ],
+    [
+     "f41",
+     0
+    ],
+    [
+     "f42",
+     0
+    ],
+    [
+     "f43",
+     0
+    ],
+    [
+     "f44",
+     0
+    ],
+    [
+     "f45",
+     0
+    ],
+    [
+     "f46",
+     0
+    ],
+    [
+     "f47",
+     0
+    ],
+    [
+     "f48",
+     0
+    ],
+    [
+     "f49",
+     0
+    ],
+    [
+     "f50",
+     0
+    ],
+    [
+     "f51",
+     0
+    ],
+    [
+     "f52",
+     0
+    ],
+    [
+     "f53",
+     0
+    ],
+    [
+     "f54",
+     0
+    ],
+    [
+     "f55",
+     0
+    ],
+    [
+     "f56",
+     0
+    ],
+    [
+     "f57",
+     0
+    ],
+    [
+     "f58",
+     0
+    ],
+    [
+     "f59",
+     0
+    ],
+    [
+     "f60",
+     0
+    ],
+    [
+     "f61",
+     0
+    ],
+    [
+     "f62",
+     0
+    ],
+    [
+     "f63",
+     0
+    ],
+    [
+     "f64",
+     0
+    ],
+    [
+     "f65",
+     0
+    ],
+    [
+     "f66",
+     0
+    ],
+    [
+     "f67",
+     0
+    ],
+    [
+     "f68",
+     0
+    ],
+    [
+     "f69",
+     0
+    ],
+    [
+     "f70",
+     0
+    ],
+    [
+     "f71",
+     0
+    ],
+    [
+     "f72",
+     0
+    ],
+    [
+     "f73",
+     0
+    ],
+    [
+     "f74",
+     0
+    ],
+    [
+     "f75",
+     0
+    ],
+    [
+     "f76",
+     0
+    ],
+    [
+     "f77",
+     0
+    ],
+    [
+     "f78",
+     0
+    ],
+    [
+     "f79",
+     0
+    ],
+    [
+     "f80",
+     0
+    ],
+    [
+     "f81",
+     0
+    ],
+    [
+     "f82",
+     0
+    ],
+    [
+     "f83",
+     0
+    ],
+    [
+     "f84",
+     0
+    ],
+    [
+     "f85",
+     0
+    ],
+    [
+     "f86",
+     0
+    ],
+    [
+     "f87",
+     0
+    ],
+    [
+     "f88",
+     0
+    ],
+    [
+     "f89",
+     0
+    ],
+    [
+     "f90",
+     0
+    ],
+    [
+     "f91",
+     0
+    ],
+    [
+     "f92",
+     0
+    ],
+    [
+     "f93",
+     0
+    ],
+    [
+     "f94",
+     0
+    ],
+    [
+     "f95",
+     0
+    ],
+    [
+     "f96",
+     0
+    ],
+    [
+     "f97",
+     0
+    ],
+    [
+     "f98",
+     0
+    ],
+    [
+     "f99",
+     0
+    ],
+    [
+     "f100",
+     0
+    ],
+    [
+     "f101",
+     0
+    ],
+    [
+     "f102",
+     0
+    ],
+    [
+     "f103",
+     0
+    ],
+    [
+     "f104",
+     0
+    ],
+    [
+     "f105",
+     0
+    ],
+    [
+     "f106",
+     0
+    ],
+    [
+     "f107",
+     0
+    ],
+    [
+     "f108",
+     0
+    ],
+    [
+     "f109",
+     0
+    ],
+    [
+     "f110",
+     0
+    ],
+    [
+     "f111",
+     0
+    ],
+    [
+     "f112",
+     0
+    ],
+    [
+     "f113",
+     0
+    ],
+    [
+     "f114",
+     0
+    ],
+    [
+     "f115",
+     0
+    ],
+    [
+     "f116",
+     0
+    ],
+    [
+     "f117",
+     0
+    ],
+    [
+     "f118",
+     0
+    ],
+    [
+     "f119",
+     0
+    ],
+    [
+     "f120",
+     0
+    ],
+    [
+     "f121",
+     0
+    ],
+    [
+     "f122",
+     0
+    ],
+    [
+     "f123",
+     0
+    ],
+    [
+     "f124",
+     0
+    ],
+    [
+     "f125",
+     0
+    ],
+    [
+     "f126",
+     0
+    ],
+    [
+     "f127",
+     0
+    ],
+    [
+     "f128",
+     0
+    ]
+   ],
+   "error": "Too many seed files (129); the limit is 128."
+  },
+  {
+   "files": [
+    [
+     "stra\u00dfe",
+     1
+    ],
+    [
+     "STRASSE",
+     1
+    ]
+   ],
+   "error": "Seed file 'STRASSE' has the same name as 'stra\u00dfe' (FAT32 ignores letter case)."
+  },
+  {
+   "files": [
+    [
+     "\u00c9",
+     1
+    ],
+    [
+     "\u00e9",
+     1
+    ]
+   ],
+   "error": "Seed file '\u00e9' has the same name as '\u00c9' (FAT32 ignores letter case)."
+  },
+  {
+   "files": [],
+   "error": "There are no seed files to write."
+  }
+ ],
+ "labels": [
+  {
+   "label": "CIDATA",
+   "ok": true
+  },
+  {
+   "label": "OEMDRV",
+   "ok": true
+  },
+  {
+   "label": "EPMA-SEED",
+   "ok": true
+  },
+  {
+   "label": "A",
+   "ok": true
+  },
+  {
+   "label": "AAAAAAAAAAA",
+   "ok": true
+  },
+  {
+   "label": "_X",
+   "ok": true
+  },
+  {
+   "label": "0-9_",
+   "ok": true
+  },
+  {
+   "label": "",
+   "error": "Invalid seed drive label '': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "AAAAAAAAAAAA",
+   "error": "Invalid seed drive label 'AAAAAAAAAAAA': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "cidata",
+   "error": "Invalid seed drive label 'cidata': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "CI DATA",
+   "error": "Invalid seed drive label 'CI DATA': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "CI.DATA",
+   "error": "Invalid seed drive label 'CI.DATA': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "CIDATA\n",
+   "error": "Invalid seed drive label 'CIDATA\\n': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "-X",
+   "error": "Invalid seed drive label '-X': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "A;B",
+   "error": "Invalid seed drive label 'A;B': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "$(id)",
+   "error": "Invalid seed drive label '$(id)': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "A/B",
+   "error": "Invalid seed drive label 'A/B': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "\u00c1",
+   "error": "Invalid seed drive label '\u00c1': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "A\u0000",
+   "error": "Invalid seed drive label 'A\\x00': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "CIDATA ",
+   "error": "Invalid seed drive label 'CIDATA ': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": " CIDATA",
+   "error": "Invalid seed drive label ' CIDATA': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "'",
+   "error": "Invalid seed drive label \"'\": use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "a\"b",
+   "error": "Invalid seed drive label 'a\"b': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  },
+  {
+   "label": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "error": "Invalid seed drive label 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...': use 1 to 11 characters from A-Z, 0-9, '_' and '-' (not starting with '-')."
+  }
+ ],
+ "sizes": [
+  {
+   "size": null,
+   "ok": true
+  },
+  {
+   "size": 0,
+   "ok": true
+  },
+  {
+   "size": 1,
+   "error": "The drive (1.0 B) is too small for a seed drive (at least 64.0 MB). Nothing was changed."
+  },
+  {
+   "size": 10485760,
+   "error": "The drive (10.0 MB) is too small for a seed drive (at least 64.0 MB). Nothing was changed."
+  },
+  {
+   "size": 67108863,
+   "error": "The drive (64.0 MB) is too small for a seed drive (at least 64.0 MB). Nothing was changed."
+  },
+  {
+   "size": 67108864,
+   "ok": true
+  },
+  {
+   "size": 17179869184,
+   "ok": true
+  }
+ ],
+ "manifests": [
+  {
+   "files": [
+    [
+     "x",
+     [
+      49
+     ]
+    ],
+    [
+     "y",
+     [
+      50
+     ]
+    ]
+   ],
+   "sha256": "71e077ee36a15aae0b492b6b3f05e40dd0e3efd16ab6575e4abfdaaa114ba6fe"
+  },
+  {
+   "files": [
+    [
+     "ab",
+     [
+      99
+     ]
+    ]
+   ],
+   "sha256": "7a4656db1a35d8c77966a2f857d214fd789a65d0f77ea56a4fdae2f8554c305a"
+  },
+  {
+   "files": [
+    [
+     "a",
+     [
+      98,
+      99
+     ]
+    ]
+   ],
+   "sha256": "e1cf9898d1e966a32f8611f05aa624936397e7ac6b6ccd73eaa62dab582c747f"
+  },
+  {
+   "files": [
+    [
+     "b",
+     [
+      50
+     ]
+    ],
+    [
+     "a",
+     [
+      49
+     ]
+    ]
+   ],
+   "sha256": "a8eca051b64510e4f82137f9f52c62dddab848d342c5f128657243481396f973"
+  },
+  {
+   "files": [
+    [
+     "l\u00e9",
+     [
+      0,
+      255
+     ]
+    ],
+    [
+     "Z",
+     []
+    ]
+   ],
+   "sha256": "657ad09deea5400d660de828a077b9a5f47c0140b7ed9bf12f9ea3306876e464"
+  }
+ ]
+}

@@ -81,8 +81,9 @@ absolute path (never found through `PATH` or the current folder). A disk is hidd
 set, when it holds the system drive letter, or when that flag cannot be read; the wipe scripts check "USB and not
 the boot disk" once more right before `Clear-Disk`. Raw writes open `\\.\PhysicalDriveN` with the Win32 API
 (unbuffered, write-through) only for a disk that passed the same re-verification as on the other systems.
-The MSI is built in CI from pinned build tools (hash-checked `pip` requirements, a pinned WiX version), carries
-a SHA-256 and a GitHub build-provenance attestation, and is **not code-signed**; Windows SmartScreen may warn.
+The Windows program is a single `.exe` built in CI from the dependency versions pinned (with their registry
+checksums) in `Cargo.lock`; it carries a SHA-256 and a GitHub build-provenance attestation, and is **not
+code-signed**; Windows SmartScreen may warn.
 
 ### 4. Re-verification before destruction
 
@@ -243,7 +244,7 @@ How to set one (macOS/Linux, in a terminal):
 
 ```bash
 export WIN11USB_AUDIT_LOG="$HOME/my-logs/usb-creator.log"
-python3 win11_usb_creator.py
+epma-usb-creator
 ```
 
 To make it permanent, add the `export ...` line to `~/.zshrc` (macOS) or

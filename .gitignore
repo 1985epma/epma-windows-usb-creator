@@ -37,3 +37,6 @@ semgrep.sarif
 
 # Local agent worktrees
 .claude/
+
+# Rust
+/target/

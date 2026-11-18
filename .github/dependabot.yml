@@ -1,11 +1,10 @@
 # =============================================================================
 # Dependabot — atualização automática de dependências
 #
-# "MAS O PROJETO NÃO TEM DEPENDÊNCIAS!"
-# -------------------------------------
-# Correto: o programa em si não usa nenhuma biblioteca de terceiros.
-#
-# Mas a ESTEIRA DE CI usa. Cada `uses: actions/checkout@v4` no workflow é código
+# DUAS FONTES DE CÓDIGO DE TERCEIROS
+# ----------------------------------
+# 1. As bibliotecas Rust (crates) do programa, em Cargo.toml / Cargo.lock.
+# 2. A ESTEIRA DE CI. Cada `uses: actions/checkout@v4` no workflow é código
 # de terceiros que roda com acesso ao seu repositório. Se uma dessas ações for
 # comprometida ou ficar desatualizada, ela vira uma porta de entrada — e é uma
 # porta que passa despercebida justamente porque ninguém pensa nela como
@@ -38,11 +37,22 @@ updates:
       - dependencias
       - seguranca
 
-  # Se um dia o projeto passar a ter dependências Python, descomente o bloco
-  # abaixo. Antes disso ele não tem o que monitorar.
-  #
-  # - package-ecosystem: pip
-  #   directory: /
-  #   schedule:
-  #     interval: weekly
-  #   open-pull-requests-limit: 5
+  # O programa é escrito em Rust e usa um punhado de bibliotecas (crates) de terceiros, todas
+  # listadas em Cargo.toml e fixadas por versão e hash em Cargo.lock. O Dependabot propõe as
+  # atualizações num único PR semanal; o CI (testes, clippy) e o cargo-audit do security.yml
+  # decidem se elas podem entrar.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: 'deps'
+    groups:
+      cargo:
+        patterns:
+          - '*'
+    labels:
+      - dependencias
+      - seguranca

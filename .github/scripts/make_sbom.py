@@ -1,32 +1,35 @@
 #!/usr/bin/env python3
-"""Generate a CycloneDX 1.5 (JSON) SBOM for epma-usb-creator, standard library only.
+"""Generate a CycloneDX 1.5 (JSON) SBOM for epma-usb-creator, standard library only (Python 3.11+).
 
-The project has ZERO Python dependencies (see requirements.txt), so the interesting
-part of its bill of materials is what the program asks the operating system for at
-run time: the disk and file tools it launches (parted, mkfs.vfat, wipefs, rsync,
-wimlib-imagex, ...). Those are listed as components flagged with
-`epma:runtime-system-dependency = true`. They are resolved from the host at run time,
-so they carry no version here.
+The program is written in Rust. Its bill of materials has two parts:
 
-The tool list is cross-checked against LINUX_REQUIRED_TOOLS in win11_usb_creator.py
-(read with `ast`, never imported): if the program starts requiring a tool that is not
-described below, this script FAILS, so the SBOM cannot silently go stale.
+* the Rust crates it is built from, read from Cargo.lock (name, version and the registry checksum of
+  every package, as `pkg:cargo/...` components);
+* what the program asks the operating system for at run time: the disk and file tools it launches
+  (parted, mkfs.vfat, wipefs, rsync, wimlib-imagex, ...). Those are flagged with
+  `epma:runtime-system-dependency = true`. They are resolved from the host at run time, so they carry
+  no version here.
+
+The tool list is cross-checked against LINUX_REQUIRED_TOOLS in src/constants.rs (read as text, never
+compiled): if the program starts requiring a tool that is not described below, this script FAILS, so
+the SBOM cannot silently go stale.
 
 Usage:
     python .github/scripts/make_sbom.py --version v1.1.0 --out sbom.cdx.json \
-        [--source win11_usb_creator.py] [--artifact pacote/win11_usb_creator.py] \
+        [--source src/constants.rs] [--lock Cargo.lock] [--artifact pacote/epma-usb-creator-...] \
         [--repo 1985epma/epma-windows-usb-creator] [--commit SHA]
 
 Environment: SOURCE_DATE_EPOCH, when set, fixes the timestamp (reproducible output).
 """
 
 import argparse
-import ast
 import datetime
 import hashlib
 import json
 import os
+import re
 import sys
+import tomllib
 import uuid
 
 DEFAULT_REPO = "1985epma/epma-windows-usb-creator"
@@ -49,13 +52,6 @@ SYSTEM_DEPENDENCIES = {
     "macos-disk-tools": ("diskutil and hdiutil, shipped with macOS", ["diskutil", "hdiutil"], "macos"),
 }
 
-PYTHON_RUNTIME = {
-    "name": "python",
-    "description": "Python interpreter with Tkinter (graphical interface); standard library only",
-    "min": "3.10",
-}
-
-
 def sha256_file(path):
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -65,27 +61,34 @@ def sha256_file(path):
 
 
 def required_tools_from_source(path):
-    """LINUX_REQUIRED_TOOLS as written in the program, without importing it."""
+    """LINUX_REQUIRED_TOOLS as written in the program (a Rust `&[&str]` constant), without compiling it."""
     with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read(), filename=path)
-    for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "LINUX_REQUIRED_TOOLS"
-                                                for t in node.targets):
-            return list(ast.literal_eval(node.value))
-    raise SystemExit(f"ERROR: LINUX_REQUIRED_TOOLS not found in {path}")
+        text = fh.read()
+    match = re.search(r"LINUX_REQUIRED_TOOLS\s*:\s*&\[&str\]\s*=\s*&\[(.*?)\]\s*;", text, re.S)
+    if not match:
+        raise SystemExit(f"ERROR: LINUX_REQUIRED_TOOLS not found in {path}")
+    return re.findall(r'"([^"]+)"', match.group(1))
+
+
+def crates_from_lock(path, main_name="epma-usb-creator"):
+    """Every package of Cargo.lock except the program itself: (name, version, checksum or None)."""
+    with open(path, "rb") as fh:
+        lock = tomllib.load(fh)
+    return sorted((p["name"], p["version"], p.get("checksum")) for p in lock.get("package", [])
+                  if p["name"] != main_name)
 
 
 def prop(name, value):
     return {"name": name, "value": value}
 
 
-def build_bom(version, repo, source, artifact, commit, now):
+def build_bom(version, repo, source, lock, artifact, commit, now):
     clean = version[1:] if version.startswith("v") else version
     covered = {tool for _d, tools, _p in SYSTEM_DEPENDENCIES.values() for tool in tools}
     uncovered = [t for t in required_tools_from_source(source) if t not in covered]
     if uncovered:
         raise SystemExit(
-            "ERROR: win11_usb_creator.py requires tools that SYSTEM_DEPENDENCIES in "
+            f"ERROR: {source} requires tools that SYSTEM_DEPENDENCIES in "
             f"{os.path.basename(__file__)} does not describe: {', '.join(uncovered)}. Add them.")
 
     base = f"https://github.com/{repo}"
@@ -95,7 +98,7 @@ def build_bom(version, repo, source, artifact, commit, now):
         "bom-ref": main_ref,
         "name": "epma-usb-creator",
         "version": clean,
-        "description": "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex, on macOS or Linux",
+        "description": "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex",
         "licenses": [{"license": {"id": LICENSE_ID}}],
         "purl": main_ref,
         "externalReferences": [
@@ -105,7 +108,7 @@ def build_bom(version, repo, source, artifact, commit, now):
             {"type": "distribution", "url": f"{base}/releases/tag/{version}"},
             {"type": "documentation", "url": f"{base}/blob/{version}/SECURITY.md"},
         ],
-        "properties": [prop("epma:python-dependencies", "none (standard library only)")],
+        "properties": [prop("epma:language", "Rust"), prop("epma:rust-crates", "see components (pkg:cargo)")],
     }
     if artifact:
         main["hashes"] = [{"alg": "SHA-256", "content": sha256_file(artifact)}]
@@ -128,14 +131,23 @@ def build_bom(version, repo, source, artifact, commit, now):
                            prop("epma:version-resolution", "host operating system, at run time")] + props,
         })
 
-    add(PYTHON_RUNTIME["name"], PYTHON_RUNTIME["description"],
-        [prop("epma:minimum-version", PYTHON_RUNTIME["min"]), prop("epma:platforms", "linux, macos")])
     for name, (description, tools, platforms) in SYSTEM_DEPENDENCIES.items():
         add(name, description, [prop("epma:provides", ", ".join(tools)), prop("epma:platforms", platforms)])
 
+    crates = crates_from_lock(lock)
+    for name, crate_version, checksum in crates:
+        ref = f"pkg:cargo/{name}@{crate_version}"
+        refs.append(ref)
+        comp = {"type": "library", "bom-ref": ref, "name": name, "version": crate_version, "scope": "required",
+                "purl": ref}
+        if checksum:
+            comp["hashes"] = [{"alg": "SHA-256", "content": checksum}]
+        components.append(comp)
+
     metadata_props = [
-        prop("epma:sbom-scope", "Python packages: none. System tools are listed without versions because "
-                                "they are resolved from the host at run time."),
+        prop("epma:sbom-scope", f"{len(crates)} Rust crates from Cargo.lock (versions and checksums pinned). "
+                                "System tools are listed without versions because they are resolved from the "
+                                "host at run time."),
     ]
     if commit:
         metadata_props.append(prop("epma:source-commit", commit))
@@ -149,7 +161,7 @@ def build_bom(version, repo, source, artifact, commit, now):
             "timestamp": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "lifecycles": [{"phase": "build"}],
             "tools": {"components": [{"type": "application", "name": "make_sbom.py",
-                                      "description": "stdlib-only CycloneDX generator of this repository"}]},
+                                      "description": "CycloneDX generator of this repository (Python standard library only)"}]},
             "component": main,
             "properties": metadata_props,
         },
@@ -182,7 +194,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--version", required=True, help="release tag, e.g. v1.1.0")
     parser.add_argument("--out", required=True, help="output file")
-    parser.add_argument("--source", default="win11_usb_creator.py", help="program source (for the tool cross-check)")
+    parser.add_argument("--source", default="src/constants.rs", help="constants file (for the tool cross-check)")
+    parser.add_argument("--lock", default="Cargo.lock", help="Cargo.lock to read the crates from")
     parser.add_argument("--artifact", help="file whose SHA-256 is recorded on the main component")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY") or DEFAULT_REPO)
     parser.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
@@ -191,7 +204,7 @@ def main(argv=None):
     epoch = os.environ.get("SOURCE_DATE_EPOCH")
     now = (datetime.datetime.fromtimestamp(int(epoch), datetime.timezone.utc) if epoch
            else datetime.datetime.now(datetime.timezone.utc))
-    bom = build_bom(args.version, args.repo, args.source, args.artifact, args.commit, now)
+    bom = build_bom(args.version, args.repo, args.source, args.lock, args.artifact, args.commit, now)
     with open(args.out, "w", encoding="utf-8") as fh:
         json.dump(bom, fh, indent=2, sort_keys=False)
         fh.write("\n")

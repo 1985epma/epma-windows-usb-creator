@@ -29,28 +29,21 @@ class EpmaWindowsUsbCreator < Formula
   license "GPL-3.0-or-later"
   head "https://github.com/1985epma/epma-windows-usb-creator.git", branch: "main"
 
-  # Tkinter is required for the graphical interface. On macOS, Homebrew ships it
-  # as a separate formula from Python itself.
-  depends_on "python-tk@3.15"
-  depends_on "python@3.15"
+  # The program is written in Rust and built from source with the toolchain Homebrew provides.
+  depends_on "rust" => :build
 
   # Required to split install.wim/install.esd when it exceeds the FAT32 4 GB
   # single-file limit, which is the case for every current Windows 11 image.
   depends_on "wimlib"
 
   def install
-    libexec.install "win11_usb_creator.py"
+    # `--locked`: build exactly the dependency versions recorded in Cargo.lock.
+    system "cargo", "install", "--locked", *std_cargo_args
     libexec.install "SECURITY.md", "README.md", "LICENSE"
 
-    # A wrapper is used instead of a symlink so the application always runs
-    # under the Python that Homebrew installed Tkinter for.
-    (bin/"epma-windows-usb-creator").write <<~SHELL
-      #!/bin/bash
-      exec "#{formula_opt_bin("python@3.15")}/python3.15" "#{libexec}/win11_usb_creator.py" "$@"
-    SHELL
-    chmod 0755, bin/"epma-windows-usb-creator"
-    # Short name that matches the application name shown in the macOS menu bar.
-    bin.install_symlink "epma-windows-usb-creator" => "epma-usb-creator"
+    # Long name used by the Homebrew formula; the binary itself is epma-usb-creator,
+    # the name shown in the macOS menu bar.
+    bin.install_symlink "epma-usb-creator" => "epma-windows-usb-creator"
   end
 
   def caveats
@@ -99,19 +92,10 @@ class EpmaWindowsUsbCreator < Formula
   end
 
   test do
-    # A GUI application cannot be launched in a test environment, so verify the
-    # installed script is syntactically valid and that its wrapper is executable.
-    #
-    # `compile()` is used instead of `py_compile` because the latter writes a
-    # __pycache__ directory next to the source, and the Cellar is read-only here.
-    system formula_opt_bin("python@3.15")/"python3.15", "-c",
-           "import sys, pathlib; p = pathlib.Path(sys.argv[1]); " \
-           "compile(p.read_text(encoding='utf-8'), str(p), 'exec')",
-           libexec/"win11_usb_creator.py"
+    # A GUI application cannot be launched in a test environment, so check the
+    # command line: it must start, name itself and list its commands.
+    assert_match "write", shell_output("#{bin}/epma-usb-creator --help")
+    assert_match(/\d+\.\d+\.\d+/, shell_output("#{bin}/epma-usb-creator --version"))
     assert_predicate bin/"epma-windows-usb-creator", :executable?
-
-    # Confirm Tkinter is importable under the Python this formula depends on --
-    # this is the single most common installation failure for the application.
-    system formula_opt_bin("python@3.15")/"python3.15", "-c", "import tkinter"
   end
 end
