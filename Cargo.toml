@@ -1,0 +1,66 @@
+[package]
+name = "epma-usb-creator"
+version = "1.1.0"
+edition = "2021"
+rust-version = "1.80"
+description = "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/1985epma/epma-windows-usb-creator"
+readme = "README.md"
+default-run = "epma-usb-creator"
+
+[lib]
+name = "epma_usb_creator"
+path = "src/lib.rs"
+
+[[bin]]
+name = "epma-usb-creator"
+path = "src/main.rs"
+
+[features]
+default = ["gui"]
+# The window (egui). Without it the crate is the engine plus the command line only.
+gui = ["dep:eframe", "dep:rfd"]
+
+[dependencies]
+sha2 = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+regex = "1"
+indexmap = "2"
+zip = "9"
+ureq = "3"
+clap = { version = "4", features = ["derive", "wrap_help"] }
+tempfile = "3"
+plist = "1"
+webbrowser = "1"
+eframe = { version = "0.37", optional = true }
+rfd = { version = "0.18", optional = true }
+# --- extra dependencies added by the porting agents (one line each, say which agent in a comment) ---
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_Ioctl",
+    "Win32_System_Power",
+    "Win32_System_Threading",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "unwind"
