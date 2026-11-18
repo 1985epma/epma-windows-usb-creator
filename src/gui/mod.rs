@@ -1,11 +1,44 @@
-#![allow(unused)] // STUB: delete this line when the module is implemented
-//! The window (egui / eframe). OWNER: A8. Port of win11_usb_creator.py lines 1747-1885 (dialogs), 9148-12040
-//! (macOS app name, widgets, help window, the `App` class). Split into submodules as needed (files under src/gui/).
+//! The window (egui / eframe). OWNER: A8. Port of win11_usb_creator.py lines 1747-1885 (dialogs), 9148-12040 (macOS app
+//! name, widgets, help window, the `App` class).
+//!
+//! Layers:
+//! * always compiled and unit-tested without a display: `model` (the window's state and logic: `AppState`),
+//!   `widgets` (the state of the widgets), `dialogs`, `flows` (the worker threads), `texts`, `backend` (the one trait
+//!   through which the window reaches the rest of the program), `tx` (translation helpers);
+//! * behind feature `gui`: `view` (the egui drawing and `run`).
 
-/// Open the window and block until it closes. Returns the process exit code. Must exist with and without feature
-/// `gui` (without it: print a hint that this build has no window, return EXIT_ERROR). Put everything that needs
-/// egui/eframe in submodules behind `#[cfg(feature = "gui")]`; keep the window's state and logic (testable without a
-/// display) always compiled.
+pub mod backend;
+pub mod dialogs;
+pub mod flows;
+pub mod model;
+pub mod shared;
+pub mod texts;
+pub mod tx;
+pub mod widgets;
+
+#[cfg(feature = "gui")]
+mod view;
+
+#[cfg(test)]
+mod testkit;
+#[cfg(test)]
+mod tests;
+
+pub use dialogs::{normalize_typed_identifier, Dialogs, HubDialogs};
+pub use model::{set_macos_app_name, AppState};
+
+/// Open the window and block until it closes. Returns the process exit code.
+#[cfg(feature = "gui")]
 pub fn run() -> i32 {
-    todo!()
+    view::run()
+}
+
+/// Built without the window: print a hint and return the error exit code.
+#[cfg(not(feature = "gui"))]
+pub fn run() -> i32 {
+    eprintln!(
+        "This build of EPMA USB CREATOR has no window (it was compiled without the `gui` feature).\n\
+         Use the command line instead: run it with --help to see the commands."
+    );
+    crate::cli::EXIT_ERROR
 }
