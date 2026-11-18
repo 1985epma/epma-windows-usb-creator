@@ -2,7 +2,7 @@
 //! ChromeOS Flex, on Windows 11, macOS and Linux (window and command line).
 //!
 //! This crate is a Rust port of `win11_usb_creator.py` (kept in the repository as the reference while the port is
-//! verified). Read `RUST_PORT.md` for the conventions. Module map (Python line ranges in each module's header):
+//! verified). Read `docs/RUST_PORT.md` for the conventions. Module map (Python line ranges in each module's header):
 //!
 //! * foundations: `constants`, `types`, `i18n`, `util`, `audit`, `validate`, `isoinfo`, `hash`, `proc`
 //! * engine: `copyverify`, `privilege`, `diskrisk`, `engine`
