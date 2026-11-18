@@ -1,0 +1,5 @@
+# The embedded scripts are data: LF everywhere, never converted on checkout (a Windows checkout with
+# core.autocrlf=true would otherwise corrupt them and the byte-exact goldens).
+assets/** text eol=lf
+tests/golden/** -text
+*.rs text eol=lf
