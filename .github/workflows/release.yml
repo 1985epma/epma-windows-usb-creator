@@ -15,9 +15,11 @@
 # administrador normalmente").
 #
 # O QUE CADA VERSÃO RECEBE
+#   * os programas já compilados    Linux (x86_64), macOS (Apple silicon) e Windows 11 (x86_64)
 #   * SHA256SUMS.txt                impressão digital de cada arquivo
 #   * comprovante de origem         attestation SLSA emitida pelo GitHub
-#   * sbom.cdx.json                 lista de componentes (CycloneDX 1.5), também
+#   * sbom.cdx.json                 lista de componentes (CycloneDX 1.5: as bibliotecas Rust
+#                                   do Cargo.lock e as ferramentas do sistema), também
 #                                   assinada como attestation
 #   * notas da versão               a seção correspondente do CHANGELOG.md
 #   * atualização do Homebrew       PR automático no tap (homebrew-tap.yml)
@@ -59,67 +61,124 @@ jobs:
   conferencias:
     name: Conferências obrigatórias
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 45
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Preparar o Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.15'
+      - name: Preparar o Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
 
-      - name: Instalar bibliotecas gráficas e ferramentas de disco
-        # python3-tk e xvfb: interface gráfica. As demais: o teste com loop
-        # devices (mesmas ferramentas que o programa usa no Linux).
+      - name: Instalar as bibliotecas gráficas e as ferramentas de disco
+        # As ferramentas de disco são as mesmas que o programa usa no Linux
+        # (os testes que exercitam os scripts reais precisam delas).
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            python3-tk xvfb parted dosfstools rsync wimtools xorriso util-linux
+            pkg-config libgtk-3-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev \
+            parted dosfstools rsync wimtools xorriso util-linux shellcheck
 
-      - name: Autoteste do guarda de segurança
-        run: python output/auditoria/teste_do_guarda.py
-
-      - name: Guarda de segurança (proteções da auditoria)
-        run: python output/auditoria/guard_seguranca.py
-
-      - name: Dependências de terceiros
-        run: python output/auditoria/verifica_dependencias.py
-
-      - name: Testes de validação
-        run: python output/auditoria/testes_validacao.py
-
-      - name: Testes unitários
-        if: hashFiles('tests/test_*.py', 'tests/**/test_*.py') != ''
-        run: python -m unittest discover -s tests -t . -v
-
-      - name: Teste de fumaça da interface
-        run: xvfb-run -a python output/auditoria/smoke_ui.py
-
-      - name: ShellCheck nos scripts embutidos no programa
+      - name: Formatação e clippy
         run: |
-          python .github/scripts/extract_shell.py "$RUNNER_TEMP/shell"
-          shellcheck --shell=bash --severity=warning --format=gcc "$RUNNER_TEMP"/shell/*.sh
-          shellcheck --shell=bash --severity=warning Formula/update-formula.sh
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --locked -- -D warnings
 
-      - name: Teste end-to-end com loop devices
-        # Usa o Python do sistema (/usr/bin/python3), que tem o Tkinter do apt.
-        env:
-          E2E_REQUIRE: '1'
-        run: /usr/bin/python3 tests/e2e/loopback_e2e.py
+      - name: Testes
+        run: |
+          cargo test --no-default-features --locked
+          cargo test --locked
 
-      - name: Desanexar loop devices que sobraram
-        if: always()
-        run: sudo losetup -D || true
+      - name: Dependências de terceiros (cargo-audit)
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
 
   # ---------------------------------------------------------------------------
-  # 2. Publicar a versão com impressão digital, SBOM e comprovante de origem
+  # 2. Compilar o programa em cada sistema
+  # ---------------------------------------------------------------------------
+  compilar:
+    name: Compilar (${{ matrix.alvo }})
+    needs: conferencias
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            alvo: x86_64-unknown-linux-gnu
+            extensao: ''
+            formato: tar.gz
+          - os: macos-latest
+            alvo: aarch64-apple-darwin
+            extensao: ''
+            formato: tar.gz
+          - os: windows-latest
+            alvo: x86_64-pc-windows-msvc
+            extensao: .exe
+            formato: zip
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Preparar o Rust
+        shell: bash
+        run: |
+          rustup toolchain install stable --profile minimal --target ${{ matrix.alvo }}
+          rustup default stable
+
+      - name: Instalar as bibliotecas gráficas (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libgtk-3-dev libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev \
+            libxrandr-dev libxi-dev libgl1-mesa-dev
+
+      - name: Compilar
+        # --locked: exatamente as versões do Cargo.lock.
+        run: cargo build --release --locked --target ${{ matrix.alvo }}
+
+      - name: Empacotar
+        shell: bash
+        env:
+          ALVO: ${{ matrix.alvo }}
+          EXT: ${{ matrix.extensao }}
+          FORMATO: ${{ matrix.formato }}
+        run: |
+          # O nome inclui o alvo; a versão vai no nome do pacote final (job "publicar").
+          mkdir -p pacote
+          cp "target/$ALVO/release/epma-usb-creator$EXT" "pacote/epma-usb-creator-$ALVO$EXT"
+          cd pacote
+          if [ "$FORMATO" = "zip" ]; then
+            7z a "epma-usb-creator-$ALVO.zip" "epma-usb-creator-$ALVO$EXT" > /dev/null
+          else
+            chmod +x "epma-usb-creator-$ALVO"
+            tar -czf "epma-usb-creator-$ALVO.tar.gz" "epma-usb-creator-$ALVO"
+          fi
+          rm "epma-usb-creator-$ALVO$EXT"
+          ls -l
+
+      - name: Guardar o pacote
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pacote-${{ matrix.alvo }}
+          path: pacote/*
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3. Publicar a versão com impressão digital, SBOM e comprovante de origem
   # ---------------------------------------------------------------------------
   publicar:
     name: Publicar no GitHub
-    needs: conferencias
+    needs: compilar
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     outputs:
       versao: ${{ steps.versao.outputs.valor }}
       prerelease: ${{ steps.versao.outputs.prerelease }}
@@ -153,34 +212,57 @@ jobs:
           echo "prerelease=$PRE" >> "$GITHUB_OUTPUT"
           echo "Publicando versão: $V (pré-lançamento: $PRE)"
 
+      - name: Conferir que a versão da tag é a do Cargo.toml
+        env:
+          VERSAO: ${{ steps.versao.outputs.valor }}
+        run: |
+          CARGO_V=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$CARGO_V" != "$VERSAO" ]; then
+            echo "::error::A tag é $VERSAO, mas o Cargo.toml diz $CARGO_V."
+            exit 1
+          fi
+
+      - name: Baixar os programas compilados
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: pacote-*
+          path: compilados
+          merge-multiple: true
+
       - name: Montar o pacote da versão
+        env:
+          VERSAO: ${{ steps.versao.outputs.valor }}
         run: |
           mkdir -p pacote
-          cp win11_usb_creator.py pacote/
-          cp README.md README.pt-BR.md SECURITY.md LICENSE CHANGELOG.md requirements.txt pacote/
+          # epma-usb-creator-<alvo>.tar.gz -> epma-usb-creator-<versão>-<alvo>.tar.gz
+          for f in compilados/epma-usb-creator-*; do
+            nome=$(basename "$f")
+            novo="epma-usb-creator-${VERSAO}-${nome#epma-usb-creator-}"
+            cp "$f" "pacote/$novo"
+          done
+          cp README.md README.pt-BR.md SECURITY.md LICENSE CHANGELOG.md Cargo.lock pacote/
           mkdir -p pacote/relatorios
           cp output/*.md pacote/relatorios/
+          ls -l pacote
 
       - name: Gerar o SBOM (CycloneDX 1.5)
-        # Lista o programa (sem dependências Python) e as ferramentas do sistema
-        # que ele executa (rsync, wimlib, parted, dosfstools, util-linux...).
+        # Lista as bibliotecas Rust do Cargo.lock e as ferramentas do sistema
+        # que o programa executa (rsync, wimlib, parted, dosfstools, util-linux...).
         env:
           VERSAO: ${{ steps.versao.outputs.valor }}
         run: |
           python3 .github/scripts/make_sbom.py \
             --version "$VERSAO" \
             --out pacote/sbom.cdx.json \
-            --artifact pacote/win11_usb_creator.py \
             --commit "$GITHUB_SHA"
 
       - name: Calcular as impressões digitais
         run: |
           cd pacote
           # A impressão digital de cada arquivo: permite conferir que nada foi
-          # alterado entre a publicação e o download. O programa vem SEMPRE na
-          # primeira linha (o texto da Release depende disso).
-          sha256sum win11_usb_creator.py > SHA256SUMS.txt
-          sha256sum sbom.cdx.json README.md SECURITY.md LICENSE CHANGELOG.md >> SHA256SUMS.txt
+          # alterado entre a publicação e o download.
+          sha256sum epma-usb-creator-v* > SHA256SUMS.txt
+          sha256sum sbom.cdx.json Cargo.lock README.md SECURITY.md LICENSE CHANGELOG.md >> SHA256SUMS.txt
           echo "--- Conteúdo de SHA256SUMS.txt ---"
           cat SHA256SUMS.txt
 
@@ -192,18 +274,9 @@ jobs:
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            pacote/win11_usb_creator.py
+            pacote/epma-usb-creator-v*
             pacote/sbom.cdx.json
             pacote/SHA256SUMS.txt
-
-      - name: Anexar o SBOM ao comprovante do programa
-        # Attestation assinada que liga o programa ao seu SBOM. Verificável com:
-        #   gh attestation verify win11_usb_creator.py --repo OWNER/REPO \
-        #     --predicate-type https://cyclonedx.org/bom
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-path: 'pacote/win11_usb_creator.py'
-          sbom-path: 'pacote/sbom.cdx.json'
 
       - name: Criar a Release no GitHub
         env:
@@ -211,8 +284,6 @@ jobs:
           VERSAO: ${{ steps.versao.outputs.valor }}
           PRE: ${{ steps.versao.outputs.prerelease }}
         run: |
-          SHA=$(awk '{print $1}' pacote/SHA256SUMS.txt | head -1)
-
           # O que mudou: a seção do CHANGELOG.md desta versão, se existir.
           if python3 .github/scripts/changelog_section.py "$VERSAO" > mudancas.md; then
             { echo "## EPMA USB Creator — $VERSAO"; echo; echo "### O que mudou"; echo; cat mudancas.md; echo; } > notas.md
@@ -222,48 +293,37 @@ jobs:
           fi
 
           cat >> notas.md <<EOF
-          ### Como conferir que este arquivo é autêntico
+          ### Como conferir que o arquivo é autêntico
 
-          Antes de executar, confira a impressão digital do arquivo baixado:
+          Antes de executar, confira a impressão digital do arquivo baixado com o
+          \`SHA256SUMS.txt\` desta versão:
 
           \`\`\`bash
-          shasum -a 256 win11_usb_creator.py
+          shasum -a 256 -c SHA256SUMS.txt --ignore-missing
           \`\`\`
 
-          O resultado deve ser exatamente:
-
-          \`\`\`
-          $SHA
-          \`\`\`
-
-          Se for diferente, **não execute o arquivo** — ele foi alterado.
-          Isso importa porque o programa pede sua senha de administrador.
+          Cada linha do seu arquivo deve imprimir \`OK\`. Se alguma falhar, **não execute o
+          programa** — ele foi alterado. Isso importa porque o programa pede sua senha
+          de administrador.
 
           Você também pode verificar o comprovante de origem emitido pelo GitHub:
 
           \`\`\`bash
-          gh attestation verify win11_usb_creator.py --repo $GITHUB_REPOSITORY
+          gh attestation verify <arquivo baixado> --repo $GITHUB_REPOSITORY
           \`\`\`
 
           ### Lista de componentes (SBOM)
 
-          \`sbom.cdx.json\` (CycloneDX 1.5) descreve o programa — sem dependências
-          Python, só a biblioteca padrão — e as ferramentas do sistema que ele
-          executa. Ele também está assinado:
-
-          \`\`\`bash
-          gh attestation verify win11_usb_creator.py --repo $GITHUB_REPOSITORY \\
-            --predicate-type https://cyclonedx.org/bom
-          \`\`\`
+          \`sbom.cdx.json\` (CycloneDX 1.5) descreve as bibliotecas Rust de que o programa
+          é feito (versões e somas de verificação do \`Cargo.lock\`) e as ferramentas do
+          sistema que ele executa. Ele também está assinado como attestation.
 
           ### Segurança
 
           Esta versão passou por todas as conferências obrigatórias da esteira de
-          publicação: autoteste e guarda de regressão da auditoria, testes de
-          validação, testes unitários, ShellCheck nos scripts que rodam como root,
-          teste da interface gráfica e teste end-to-end com loop devices (gravação
-          e verificação de verdade). A esteira de segurança (Bandit, Semgrep,
-          CodeQL, Gitleaks) roda a cada alteração e toda semana.
+          publicação: formatação, clippy sem avisos, testes unitários e de integração
+          (inclusive os que executam os scripts de shell de verdade) e o cargo-audit das
+          dependências. A esteira de segurança roda a cada alteração e toda semana.
 
           Documentação: \`SECURITY.md\` · Relatórios completos: pasta \`relatorios/\`
           EOF
@@ -275,13 +335,13 @@ jobs:
             --title "EPMA USB CREATOR $VERSAO" \
             --notes-file notas.md \
             "${FLAGS[@]}" \
-            pacote/win11_usb_creator.py \
+            pacote/epma-usb-creator-v* \
             pacote/SHA256SUMS.txt \
             pacote/SECURITY.md \
             pacote/sbom.cdx.json
 
   # ---------------------------------------------------------------------------
-  # 3. Atualizar o Homebrew (só versões estáveis)
+  # 4. Atualizar o Homebrew (só versões estáveis)
   # ---------------------------------------------------------------------------
   # Abre um PR no tap 1985epma/homebrew-tap. Se o segredo TAP_GITHUB_TOKEN não
   # existir, o job termina com um aviso claro e a publicação NÃO é afetada.
