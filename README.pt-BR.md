@@ -9,11 +9,11 @@ Aplicação multiplataforma (**Windows 11**, **macOS** e **qualquer distribuiç�
 
 Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
-Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python externas**.
+Escrita em **Rust** — um único programa autossuficiente (janela e linha de comando): sem Python, nada para instalar além das ferramentas de disco do sistema.
 
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-GPLv3-blue)
 ![Plataformas](https://img.shields.io/badge/plataformas-macOS%20%7C%20Linux-lightgrey)
-![Python](https://img.shields.io/badge/python-3.10%2B-green)
+![Rust](https://img.shields.io/badge/rust-1.95%2B-orange)
 [![Release](https://img.shields.io/github/v/release/1985epma/epma-windows-usb-creator)](https://github.com/1985epma/epma-windows-usb-creator/releases/latest)
 [![CI](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml/badge.svg)](https://github.com/1985epma/epma-windows-usb-creator/actions/workflows/ci.yml)
 
@@ -70,7 +70,6 @@ Escrita em Python puro com Tkinter — **sem dependências de bibliotecas Python
 - **Modo linha de comando** com `--dry-run`, saída JSON e códigos de saída documentados.
 - **Mais proteção contra apagar o disco errado**: modelo e volumes exibidos, confirmação digitada para discos de risco, reconferência do número de série, dependências checadas antes de apagar qualquer coisa.
 - **Ajuda integrada** (**F1**) e botão **Cancel** para a operação inteira.
-- Funciona em Python até a versão **3.15**.
 
 Todas as mudanças estão no [CHANGELOG](CHANGELOG.md); os downloads ficam na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases).
 
@@ -87,19 +86,19 @@ Todas as mudanças estão no [CHANGELOG](CHANGELOG.md); os downloads ficam na p�
 
 ### Windows 11
 
-Nada a instalar com o **pacote MSI** (veja [Instalação](#windows-11-pacote-msi)): ele leva o Python e o Tkinter junto, e o programa usa o que já vem no Windows — PowerShell (cmdlets de Storage) e DISM, que também divide o `install.wim` quando passa de 4 GB. Para rodar a partir do código-fonte: Python **3.10 ou mais novo** com Tkinter (o instalador do python.org inclui).
+Nada a instalar: o programa é um único `.exe` (veja [Instalação](#windows-11-arquivo-da-release)) e usa o que já vem no Windows — PowerShell (cmdlets de Storage) e DISM, que também divide o `install.wim` quando passa de 4 GB.
 
-O programa precisa rodar como **Administrador**: o atalho instalado pede isso ao Windows (aviso do UAC) e `python win11_usb_creator.py` se relança elevado. Na linha de comando, abra o Windows Terminal ou o PowerShell com *Executar como administrador*. No Windows não há pedido de senha.
+O programa precisa rodar como **Administrador**: ele pede isso ao Windows (aviso do UAC) ao iniciar. Na linha de comando, abra o Windows Terminal ou o PowerShell com *Executar como administrador*. No Windows não há pedido de senha.
 
 O Windows só formata volumes FAT32 de até 32 GB; por isso, num pendrive maior, o cartão *Windows 11* cria uma partição de 30 GiB e deixa o resto sem alocar (os cartões de gravação direta usam o pendrive inteiro).
 
 ### macOS
 
 ```bash
-brew install python-tk@3.15 wimlib
+brew install wimlib
 ```
 
-> É necessário Python **3.10 ou mais novo**. Use a fórmula `python-tk` que corresponde à versão do seu Python (por exemplo `python-tk@3.15` para o Python 3.15). No modo Windows o macOS não precisa de `sudo` (as operações de disco passam por `diskutil` e `hdiutil`); o modo Linux, que grava o dispositivo bruto, pede a sua senha de administrador.
+> No modo Windows o macOS não precisa de `sudo` (as operações de disco passam por `diskutil` e `hdiutil`); o modo Linux, que grava o dispositivo bruto, pede a sua senha de administrador.
 
 ### Linux
 
@@ -112,13 +111,14 @@ Os nomes dos pacotes variam por distribuição. Ferramentas necessárias:
 | `wipefs` | `util-linux` | `util-linux` | `util-linux` | `util-linux` |
 | `rsync` | `rsync` | `rsync` | `rsync` | `rsync` |
 | `wimlib-imagex` | `wimtools` | `wimlib-utils` | `wimlib` | `wimlib` |
-| GUI (Tkinter) | `python3-tk` | `python3-tkinter` | `tk` | `python3-tk` |
 
 Exemplo em Debian/Ubuntu:
 
 ```bash
-sudo apt install python3-tk parted dosfstools util-linux rsync wimtools
+sudo apt install parted dosfstools util-linux rsync wimtools
 ```
+
+A janela precisa de uma sessão gráfica (X11 ou Wayland) e de um driver gráfico com OpenGL ou Vulkan (toda distribuição de desktop tem); a linha de comando funciona em qualquer lugar, inclusive por SSH.
 
 Você também pode simplesmente abrir a aplicação e usar o botão **"Install missing dependencies"** acima do botão Create — ela monta e executa o comando certo para o seu gerenciador de pacotes.
 
@@ -126,16 +126,17 @@ No Linux, particionar/formatar/montar um dispositivo de bloco exige privilégios
 
 ## Instalação
 
-### Windows 11 (pacote MSI)
+### Windows 11 (arquivo da release)
 
-Baixe `epma-usb-creator-<versão>-x64.msi` na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases), confira e instale:
+Baixe `epma-usb-creator-<versão>-x86_64-pc-windows-msvc.zip` na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases), confira e descompacte:
 
 ```powershell
-Get-FileHash .\epma-usb-creator-1.2.0-x64.msi -Algorithm SHA256   # compare com o SHA256SUMS.txt
-msiexec /i epma-usb-creator-1.2.0-x64.msi /qb                      # ou dê dois cliques
+Get-FileHash .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256   # compare com o SHA256SUMS.txt
+Expand-Archive .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+.\epma-usb-creator-x86_64-pc-windows-msvc\epma-usb-creator.exe   # abre a janela (pede Administrador: aviso do UAC)
 ```
 
-Ele instala em `C:\Program Files\EPMA USB Creator` com um atalho no menu Iniciar (**EPMA USB Creator**, sempre iniciado como Administrador) e, opcionalmente, a ferramenta de linha de comando `epma-usb-creator-cli.exe` no `PATH`. Atualizações substituem a versão antiga; desinstale em *Configurações → Aplicativos*. O pacote **não é assinado digitalmente**, então o SmartScreen do Windows pode avisar: escolha *Mais informações → Executar assim mesmo* depois de conferir o SHA-256 (e a atestação do GitHub, com `gh attestation verify`). O [installer/README.md](installer/README.md) traz os comandos exatos, a instalação silenciosa e como gerar o MSI você mesmo.
+O programa é um único `.exe` autossuficiente: não há instalador. Coloque-o onde quiser (para a linha de comando, numa pasta do `PATH`). Ele **não é assinado digitalmente**, então o SmartScreen do Windows pode avisar: escolha *Mais informações → Executar assim mesmo* depois de conferir o SHA-256 (e a atestação do GitHub, com `gh attestation verify`).
 
 ### Homebrew (macOS — recomendado)
 
@@ -147,22 +148,24 @@ brew install epma-windows-usb-creator
 
 Depois execute com `epma-windows-usb-creator`.
 
-O Homebrew instala sozinho o `wimlib` e um Python com Tkinter, então não há
+O Homebrew compila o programa com o Rust e instala sozinho o `wimlib`, então não há
 mais nada para instalar. O `brew trust` é exigido pelo Homebrew para qualquer
 tap de terceiros — é uma confirmação única de que você aceita código deste
 tap.
 
 ### A partir de um release
 
-Cada [release](https://github.com/1985epma/epma-windows-usb-creator/releases) traz o programa, os checksums e a lista de componentes (SBOM). Baixe, confira e execute:
+Cada [release](https://github.com/1985epma/epma-windows-usb-creator/releases) traz o programa para Linux (`x86_64`), macOS (Apple silicon) e Windows 11 (`x86_64`), os checksums e a lista de componentes (SBOM). Baixe, confira e execute (Linux e macOS):
 
 ```bash
 V=v1.1.0
-curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/win11_usb_creator.py
+T=x86_64-unknown-linux-gnu        # macOS (Apple silicon): aarch64-apple-darwin
+curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/epma-usb-creator-$V-$T.tar.gz
 curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/SHA256SUMS.txt
-grep ' win11_usb_creator.py$' SHA256SUMS.txt | shasum -a 256 -c -          # deve imprimir: OK
-gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator   # prova que o GitHub o gerou a partir deste repositório
-python3 win11_usb_creator.py
+grep " epma-usb-creator-$V-$T.tar.gz\$" SHA256SUMS.txt | shasum -a 256 -c -     # deve imprimir: OK
+gh attestation verify epma-usb-creator-$V-$T.tar.gz --repo 1985epma/epma-windows-usb-creator   # prova que o GitHub o gerou a partir deste repositório
+tar -xzf epma-usb-creator-$V-$T.tar.gz
+./epma-usb-creator-$T/epma-usb-creator
 ```
 
 ### A partir do código-fonte
@@ -170,25 +173,23 @@ python3 win11_usb_creator.py
 ```bash
 git clone https://github.com/1985epma/epma-windows-usb-creator.git
 cd epma-windows-usb-creator
-chmod +x win11_usb_creator.py
+cargo build --release --locked      # Rust 1.95 ou mais novo (https://rustup.rs)
+./target/release/epma-usb-creator
 ```
 
-**Verifique o arquivo antes de executá-lo.** Esta aplicação pede a sua senha de administrador, o que faz de uma cópia adulterada um alvo valioso para um atacante:
+`--locked` compila exatamente as versões de dependências registradas em `Cargo.lock`. Para só o motor e a linha de comando (sem bibliotecas gráficas), acrescente `--no-default-features`.
+
+**Verifique o que você executa.** Esta aplicação pede a sua senha de administrador, o que faz de uma cópia adulterada um alvo valioso para um atacante. Para arquivos baixados de uma [release](https://github.com/1985epma/epma-windows-usb-creator/releases), compare o SHA-256 com o `SHA256SUMS.txt` publicado (como acima), ou verifique a atestação de procedência da build emitida pelo GitHub:
 
 ```bash
-shasum -a 256 win11_usb_creator.py
-```
-
-Para arquivos baixados de uma [release](https://github.com/1985epma/epma-windows-usb-creator/releases), compare o resultado com o `SHA256SUMS.txt` publicado, ou verifique a atestação de procedência da build emitida pelo GitHub:
-
-```bash
-gh attestation verify win11_usb_creator.py --repo 1985epma/epma-windows-usb-creator
+shasum -a 256 epma-usb-creator-$V-$T.tar.gz
+gh attestation verify epma-usb-creator-$V-$T.tar.gz --repo 1985epma/epma-windows-usb-creator
 ```
 
 ## Uso
 
 ```bash
-python3 win11_usb_creator.py
+epma-usb-creator
 ```
 
 ### A janela
@@ -244,26 +245,26 @@ Arquivos opcionais para que uma instalação nova comece com configurações mai
 - **O script Linux** (`harden-linux.sh`) é texto puro, aceita `--dry-run`, `--yes`, `--undo` e `--help`, guarda cópia de cada arquivo que altera (`.epma-bak`), mostra cada mudança e grava em `/var/log/epma-hardening.log`. É idempotente e tenta não trancar você para fora: login de root ou por senha no SSH só é desligado quando existe uma conta de administrador com chave, e o firewall não é ligado num computador com Docker, libvirt ou LXD, a não ser que você use `--yes`.
 
 ```bash
-python3 win11_usb_creator.py harden-files --target ubuntu --out ./ubuntu-seed          # só os arquivos, sem pendrive
-python3 win11_usb_creator.py harden-seed --target fedora --disk disk4 --dry-run        # plano de um pendrive de kit
-python3 win11_usb_creator.py harden-seed --target windows --disk disk4                 # kit do Windows 11
-python3 win11_usb_creator.py harden-files --target windows-seed --out ./win-seed        # arquivos do kit Windows, sem pendrive
-python3 win11_usb_creator.py write --iso Win11.iso --disk disk4 --hardened             # Windows + arquivos de reforço
+epma-usb-creator harden-files --target ubuntu --out ./ubuntu-seed          # só os arquivos, sem pendrive
+epma-usb-creator harden-seed --target fedora --disk disk4 --dry-run        # plano de um pendrive de kit
+epma-usb-creator harden-seed --target windows --disk disk4                 # kit do Windows 11
+epma-usb-creator harden-files --target windows-seed --out ./win-seed        # arquivos do kit Windows, sem pendrive
+epma-usb-creator write --iso Win11.iso --disk disk4 --hardened             # Windows + arquivos de reforço
 ```
 
 ### Linha de comando
 
-O mesmo motor está disponível sem a janela (não precisa de Tkinter):
+O mesmo motor está disponível sem a janela:
 
 ```bash
 epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
-python3 win11_usb_creator.py list                       # pendrives USB utilizáveis (--json disponível)
-python3 win11_usb_creator.py detect ubuntu.iso          # windows | linux | chromeos | unknown
-python3 win11_usb_creator.py sha256 ubuntu.iso --expected <hash>
-python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4 --dry-run   # mostra o plano, não altera nada
-python3 win11_usb_creator.py write --iso ubuntu.iso --disk disk4             # pede para digitar o id do disco
-python3 win11_usb_creator.py fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: baixar + extrair
-python3 win11_usb_creator.py write --iso ~/Downloads/<imagem>.bin --disk disk4 --mode chromeos
+epma-usb-creator list                       # pendrives USB utilizáveis (--json disponível)
+epma-usb-creator detect ubuntu.iso          # windows | linux | chromeos | unknown
+epma-usb-creator sha256 ubuntu.iso --expected <hash>
+epma-usb-creator write --iso ubuntu.iso --disk disk4 --dry-run   # mostra o plano, não altera nada
+epma-usb-creator write --iso ubuntu.iso --disk disk4             # pede para digitar o id do disco
+epma-usb-creator fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: baixar + extrair
+epma-usb-creator write --iso ~/Downloads/<imagem>.bin --disk disk4 --mode chromeos
 ```
 
 Os comandos de reforço (`harden-files`, `harden-seed`, `write --hardened`) estão em [Reforço da instalação](#reforço-da-instalação-opcional).
@@ -319,13 +320,15 @@ Os relatórios completos da auditoria (SCA, SAST, STRIDE, OWASP Top 10 e DAST) e
 
 ### Rodando as verificações localmente
 
-Antes de enviar uma alteração, rode as mesmas verificações que a esteira de CI roda:
+Antes de enviar uma alteração, rode as mesmas verificações que a esteira de CI roda (Rust 1.95 ou mais novo; no Linux a janela também precisa dos pacotes de desenvolvimento de GTK 3, xkbcommon, Wayland, X11 e OpenGL):
 
 ```bash
-python3 verificar.py
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 ```
 
-É seguro: nada toca em disco, formata ou exige privilégios de administrador. Os testes unitários rodam sozinhos com `python3 -m unittest discover -s tests -t .` (não precisa de Tkinter).
+É seguro: nada toca em disco, formata, usa a rede ou exige privilégios de administrador. `cargo test --no-default-features` compila e testa o motor e a linha de comando sem a janela (não precisa de bibliotecas gráficas).
 
 ### Integração contínua
 
@@ -333,22 +336,21 @@ Cada alteração é verificada automaticamente pelo GitHub Actions (todas as act
 
 | Workflow | Finalidade |
 |---|---|
-| [`ci.yml`](.github/workflows/ci.yml) | Lint, testes unitários (Python 3.10–3.15, Linux e macOS), ShellCheck dos scripts embutidos, testes de ponta a ponta em loop devices, sondas de distribuições Linux |
-| [`security.yml`](.github/workflows/security.yml) | Guarda de regressão de segurança, Bandit, Semgrep, CodeQL, busca de segredos |
-| [`windows.yml`](.github/workflows/windows.yml) | Gera o MSI do Windows, instala e desinstala em modo silencioso, roda os testes unitários no Windows e o teste ponta a ponta em disco virtual (VHD) |
-| [`release.yml`](.github/workflows/release.yml) | Publica releases com checksums SHA-256, procedência da build e SBOM; atualiza o tap do Homebrew |
+| [`ci.yml`](.github/workflows/ci.yml) | Formatação (rustfmt), clippy sem avisos, testes em Linux, macOS e Windows, ShellCheck dos scripts embutidos |
+| [`security.yml`](.github/workflows/security.yml) | Auditoria de dependências (cargo-audit), regras de segurança do clippy, CodeQL, busca de segredos |
+| [`release.yml`](.github/workflows/release.yml) | Compila os binários para Linux, macOS e Windows e publica releases com checksums SHA-256, procedência da build e SBOM; atualiza o tap do Homebrew |
 | [`scorecard.yml`](.github/workflows/scorecard.yml) | Avaliação de cadeia de suprimentos do OpenSSF Scorecard |
 
-A esteira de segurança tem duas camadas: um guarda de regressão sem dependências, que verifica que cada correção da auditoria continua no lugar, e analisadores externos como segunda opinião. Cada arquivo de workflow é amplamente comentado, explicando o que cada passo faz e por quê.
+A esteira de segurança tem duas camadas: uma auditoria de dependências e regras estritas do compilador, que barram a alteração, e analisadores externos como segunda opinião. Cada arquivo de workflow é amplamente comentado, explicando o que cada passo faz e por quê.
 
 ### Contribuindo
 
-Dependências de terceiros são evitadas de propósito — isso elimina a superfície de ataque de cadeia de suprimentos mais comum do software moderno, e a CI faz cumprir essa regra. Se uma dependência se tornar realmente necessária, a verificação que falhar explica o processo a seguir.
+Bibliotecas (crates) de terceiros são mantidas no mínimo: cada uma é um risco de cadeia de suprimentos, por isso todas ficam fixadas no `Cargo.lock` (e auditadas pelo `cargo audit` na CI), e uma nova precisa de justificativa no pull request. Prefira a biblioteca padrão.
 
 ## Solução de problemas
 
-**"Tkinter is not available for this Python installation"**
-Instale o Tkinter para a sua versão do Python (veja [Requisitos](#requisitos)).
+**A janela não abre (Linux)**
+Ela precisa de uma sessão gráfica (X11 ou Wayland) e de um driver gráfico com OpenGL ou Vulkan. Por SSH ou num servidor, use a [linha de comando](#linha-de-comando).
 
 **"wimlib-imagex not found"**
 Instale o `wimlib` (macOS: `brew install wimlib`; Linux: veja a tabela acima) ou use o botão de instalar dependências.
@@ -379,7 +381,8 @@ Certifique-se de que a máquina está em modo **UEFI** (não Legacy/CSM). O pend
 
 ## Limitações
 
-- **O suporte ao Windows é novo e foi escrito sem uma máquina Windows à mão**: os testes unitários simulam as etapas de PowerShell/DISM/disco bruto, e o teste ponta a ponta em disco virtual (VHD) roda só na CI. Teste primeiro com um pendrive sobressalente. O MSI não é assinado digitalmente. Arquivos `install.esd` acima de 4 GB não podem ser divididos no Windows (o DISM divide só `.wim`); a ISO da página de download da Microsoft traz `install.wim`.
+- **O suporte ao Windows é novo e foi escrito sem uma máquina Windows à mão**: os testes automatizados simulam as etapas de PowerShell/DISM/disco bruto, e o código só do Windows é compilado e testado na CI num executor Windows. Teste primeiro com um pendrive sobressalente. O programa não é assinado digitalmente. Arquivos `install.esd` acima de 4 GB não podem ser divididos no Windows (o DISM divide só `.wim`); a ISO da página de download da Microsoft traz `install.wim`.
+- **A reescrita em Rust é nova**: ela substitui uma implementação em Python (mantida no repositório como referência) e passa pelos mesmos testes automatizados, mas ainda não foi exercitada em pendrives reais em todas as plataformas. Teste primeiro com um pendrive sobressalente.
 - Gera apenas mídia **UEFI/GPT** — sem suporte a boot BIOS legado.
 - Não faz bypass dos requisitos do Windows 11 (TPM 2.0 / Secure Boot).
 - Um download cancelado ou interrompido mantém o arquivo parcial e retoma quando o servidor permite; uma falha de integridade o descarta.

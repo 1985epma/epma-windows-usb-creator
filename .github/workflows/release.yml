@@ -151,18 +151,19 @@ jobs:
           EXT: ${{ matrix.extensao }}
           FORMATO: ${{ matrix.formato }}
         run: |
-          # O nome inclui o alvo; a versão vai no nome do pacote final (job "publicar").
-          mkdir -p pacote
-          cp "target/$ALVO/release/epma-usb-creator$EXT" "pacote/epma-usb-creator-$ALVO$EXT"
-          cd pacote
+          # Um diretório por alvo, com o programa e a licença. A versão vai no nome do
+          # arquivo final (job "publicar"). O nome do programa dentro dele não muda.
+          dir="epma-usb-creator-$ALVO"
+          mkdir -p "stage/$dir" pacote
+          cp "target/$ALVO/release/epma-usb-creator$EXT" "stage/$dir/"
+          cp LICENSE README.md "stage/$dir/"
+          cd stage
           if [ "$FORMATO" = "zip" ]; then
-            7z a "epma-usb-creator-$ALVO.zip" "epma-usb-creator-$ALVO$EXT" > /dev/null
+            7z a "../pacote/$dir.zip" "$dir" > /dev/null
           else
-            chmod +x "epma-usb-creator-$ALVO"
-            tar -czf "epma-usb-creator-$ALVO.tar.gz" "epma-usb-creator-$ALVO"
+            tar -czf "../pacote/$dir.tar.gz" "$dir"
           fi
-          rm "epma-usb-creator-$ALVO$EXT"
-          ls -l
+          ls -l ../pacote
 
       - name: Guardar o pacote
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
