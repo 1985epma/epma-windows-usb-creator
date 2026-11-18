@@ -626,7 +626,7 @@ fn download_and_image_sizes_match_the_measured_constants() {
     // both files are on disk at once, so the warning threshold must cover their sum
     assert!(free_gb >= zip_gb + image_gb);
     assert!(free_gb <= (zip_gb + image_gb) * 1.5, "the free-space threshold is far too generous");
-    assert!(CHROMEOS_FLEX_FREE_BYTES < DISK_IMAGE_MAX_BYTES);
+    const { assert!(CHROMEOS_FLEX_FREE_BYTES < DISK_IMAGE_MAX_BYTES) };
     assert!(image_gb * 1e9 < DISK_IMAGE_MAX_BYTES as f64);
     // every "about X GB" the program or the help states is one of the two measured sizes
     let texts = [("help", squash(&help_section("ChromeOS Flex"))), ("source", SOURCE.clone())];

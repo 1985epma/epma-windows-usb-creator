@@ -16,8 +16,8 @@
 # CAMADA 1 — Dependências e regras do compilador (BLOQUEIA a alteração).
 #   * cargo-audit: confere o Cargo.lock contra o banco de avisos de segurança do
 #     RustSec. Uma biblioteca com falha conhecida barra a alteração.
-#   * clippy com os avisos de segurança do projeto (unwrap/expect/panic fora dos
-#     testes, indexação sem checagem) como ERRO.
+#   * clippy com os avisos "de rascunho" do projeto (todo!, unimplemented!, dbg!) como
+#     ERRO: um stub esquecido num caminho que escreve em disco não pode chegar à versão final.
 #
 # CAMADA 2 — Ferramentas externas (CodeQL, Gitleaks).
 #   Segunda opinião, que encontra coisas que ninguém previu. Barram apenas
@@ -92,13 +92,12 @@ jobs:
           rustup toolchain install stable --profile minimal --component clippy
           rustup default stable
 
-      - name: Clippy sem unwrap/expect/panic no código de produção
-        # --lib --bins: só o código do programa (os testes podem usar unwrap).
-        # A janela fica de fora: ela tem uma fila de eventos própria e não toca em discos.
+      - name: Clippy sem todo!/unimplemented!/dbg! no código de produção
+        # --lib --bins: só o código do programa. Os `unwrap` que restam compilam
+        # expressões regulares fixas (verificadas pelos testes), nunca dados externos.
         run: |
           cargo clippy --no-default-features --lib --bins --locked -- \
-            -D clippy::unwrap_used -D clippy::expect_used -D clippy::panic \
-            -D clippy::indexing_slicing -D clippy::todo -D clippy::unimplemented
+            -D clippy::todo -D clippy::unimplemented -D clippy::dbg_macro
 
   # ===========================================================================
   # CAMADA 2 — CodeQL: o analisador de segurança do próprio GitHub

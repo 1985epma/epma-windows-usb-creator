@@ -190,7 +190,7 @@ fn is_chromeos_disk_image(head: &[u8]) -> bool {
             continue; // unused slot (its partition type GUID is all zeros)
         }
         // The name: UTF-16LE in bytes 56..128, ended by a NUL; undecodable units are dropped ("ignore").
-        let units: Vec<u16> = slice(entry, 56, 72).chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = slice(entry, 56, 72).as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         let name: String = char::decode_utf16(units).filter_map(|r| r.ok()).collect();
         names.insert(name.split('\0').next().unwrap_or("").to_uppercase());
     }
