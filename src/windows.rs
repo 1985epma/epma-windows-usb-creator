@@ -15,6 +15,7 @@
 
 use crate::audit::AuditLevel;
 use crate::constants::{PROGRESS_UI_INTERVAL, QUERY_TIMEOUT, VERIFY_PROGRESS_INTERVAL, VOL_NAME, WINDOWS_DEVICE_RE};
+use crate::macos::report_eject;
 use crate::types::{CancelToken, Ctx, Disk, Error, Files, Identity, Log, Privilege, Result, Volume};
 use serde_json::Value;
 use std::ffi::OsString;
@@ -819,17 +820,6 @@ pub fn with_mounted_iso_env<T>(
 /// dismount it afterwards (only if we mounted it).
 pub fn with_mounted_iso<T>(iso_path: &Path, log: Log, f: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
     with_mounted_iso_env(&RealWinEnv, iso_path, log, f)
-}
-
-/// `report_eject(ejected, log, skipped)`.
-fn report_eject(ejected: bool, log: Log, skipped: bool) {
-    if skipped {
-        log("The drive was left connected, as requested. Eject it before unplugging.");
-    } else if ejected {
-        log("Drive ejected \u{2014} you can unplug it now.");
-    } else {
-        log("Could not eject automatically. Eject the drive from the file manager before unplugging it.");
-    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -936,8 +936,7 @@ pub fn chromeos_drive_too_small(mode: Mode, drive_size: u64) -> bool {
     mode == Mode::ChromeOs && drive_size != 0 && drive_size < CHROMEOS_MIN_USB_BYTES
 }
 
-/// The tools the seed drive needs on Linux (`LINUX_SEED_TOOLS`): the partitioning tools only, no rsync, no wimlib.
-const LINUX_SEED_TOOLS: [&str; 4] = ["parted", "mkfs.vfat", "wipefs", "partprobe"];
+use crate::seed::LINUX_SEED_TOOLS; // the partitioning tools only: no rsync, no wimlib
 
 /// The Windows tools this mode needs and this machine lacks (they ship with Windows, so normally none).
 pub fn windows_missing_tools(mode: Mode) -> Vec<String> {

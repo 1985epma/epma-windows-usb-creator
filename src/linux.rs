@@ -34,9 +34,9 @@ pub const LINUX_SEED_PREP_SCRIPT: &str = include_str!("../assets/linux_seed_prep
 /// Remount the partition read-only so the check reads from the device and not from the cache.
 pub const LINUX_SEED_REMOUNT_SCRIPT: &str = include_str!("../assets/linux_seed_remount.sh");
 pub const LINUX_SEED_CLEANUP_SCRIPT: &str = include_str!("../assets/linux_seed_cleanup.sh");
-/// Printed by `LINUX_SEED_PREP_SCRIPT` when it stops on request before touching the drive / after wiping it.
-pub const SEED_UNTOUCHED_MARKER: &str = "SEED_NOT_TOUCHED";
-pub const SEED_CANCELED_MARKER: &str = "SEED_CANCELED";
+/// Printed by `LINUX_SEED_PREP_SCRIPT` when it stops on request before touching the drive / after wiping it
+/// (defined once, in `seed`).
+pub use crate::seed::{SEED_CANCELED_MARKER, SEED_UNTOUCHED_MARKER};
 
 /// The Windows-mode prep script (erase, GPT + FAT32 labelled WIN11USB, mount the ISO and the drive).
 const WINDOWS_PREP_SCRIPT: &str = include_str!("../assets/linux_win_prep.sh");
