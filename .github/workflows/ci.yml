@@ -156,9 +156,8 @@ jobs:
   # 3. ShellCheck: os scripts de shell que o programa roda como ROOT
   # ---------------------------------------------------------------------------
   # O programa executa trechos de shell com privilégio de administrador
-  # (sudo bash -c ...). Eles vivem dentro do código Rust (em arquivos de
-  # assets/ ou em textos literais), onde nenhum verificador de shell enxerga.
-  # O extrator os tira de lá e o ShellCheck os analisa. Só falha com achados de
+  # (sudo bash -c ...). Eles ficam em assets/*.sh e são embutidos no programa com
+  # include_str!; o teste tests/shellcheck.rs passa o ShellCheck em cada um. Só falha com achados de
   # gravidade "warning" ou maior.
   shellcheck:
     name: Scripts de shell (ShellCheck)
@@ -168,18 +167,23 @@ jobs:
       - name: Baixar o código
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Extrair os scripts embutidos no programa
-        # Falha se encontrar menos de 5 scripts: significaria que o extrator
-        # parou de reconhecer o código, e a análise passaria "em branco".
-        run: python3 .github/scripts/extract_shell.py "$RUNNER_TEMP/shell" | tee "$RUNNER_TEMP/shell-list.txt"
+      - name: Preparar o Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
 
-      - name: ShellCheck nos scripts extraídos
+      - name: ShellCheck nos scripts embutidos (assets/*.sh) e nos comandos de instalação
+        # Falha se encontrar menos de 10 scripts (o teste confere): significaria que os
+        # scripts mudaram de lugar e a análise passaria "em branco". Sem ShellCheck
+        # instalado o teste FALHA (REQUIRE_SHELLCHECK=1), nunca "passa em branco".
+        env:
+          REQUIRE_SHELLCHECK: '1'
         run: |
           shellcheck --version
-          shellcheck --shell=bash --severity=warning --format=gcc "$RUNNER_TEMP"/shell/*.sh
+          cargo test --no-default-features --locked --test shellcheck
 
       - name: ShellCheck nos scripts do repositório
-        run: shellcheck --shell=bash --severity=warning Formula/update-formula.sh assets/*.sh
+        run: shellcheck --shell=bash --severity=warning Formula/update-formula.sh
 
   # ---------------------------------------------------------------------------
   # 4. Resultado final consolidado
