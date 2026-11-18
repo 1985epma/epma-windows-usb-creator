@@ -90,13 +90,13 @@ pub const START_WINDOW_SIZE: (f32, f32) = (780.0, 700.0);
 pub fn fit_window_height(last: f32, shown: f32, required: f32, screen_height: f32) -> Option<f32> {
     let shown = if shown <= 1.0 { last } else { shown };
     let needed = MIN_WINDOW_HEIGHT.max(required).min((screen_height - 120.0).max(MIN_WINDOW_HEIGHT));
-    let height = if needed > shown {
-        needed
-    } else if (shown - last).abs() <= 2.0 && needed < last {
-        needed // still the size we set: settle back
-    } else {
-        return None; // the user made it taller than needed: leave it alone
-    };
+    // grow when the content needs more room than the window has; or, while the window is still the size we set,
+    // settle back; otherwise the user made it taller than needed: leave it alone
+    let settle_back = (shown - last).abs() <= 2.0 && needed < last;
+    if needed <= shown && !settle_back {
+        return None;
+    }
+    let height = needed;
     if (height - last).abs() > f32::EPSILON {
         Some(height)
     } else {
@@ -138,10 +138,7 @@ pub fn drive_row_texts(disk: &Disk) -> (String, String, String) {
                 names.push("…".to_string());
             }
             let template = if list.len() == 1 { tr("1 volume ({names})") } else { tr("{count} volumes ({names})") };
-            super::tx::format_template(
-                &template,
-                &[("count", list.len().into()), ("names", names.join(", ").into())],
-            )
+            super::tx::format_template(&template, &[("count", list.len().into()), ("names", names.join(", ").into())])
         }
     };
     let parts: Vec<String> = [if model.is_empty() { String::new() } else { dev.clone() }, summary]
@@ -629,7 +626,10 @@ mod tests {
     #[test]
     fn row_several_volumes_are_summarised() {
         let vols: Vec<Volume> = ["A", "B", "C", "D"].iter().map(|n| vol(n, None)).collect();
-        assert_eq!(drive_row_texts(&drive("sdb", "SanDisk Ultra", 32 * GB, vols)).2, "/dev/sdb · 4 volumes (A, B, C, …)");
+        assert_eq!(
+            drive_row_texts(&drive("sdb", "SanDisk Ultra", 32 * GB, vols)).2,
+            "/dev/sdb · 4 volumes (A, B, C, …)"
+        );
     }
 
     #[test]
@@ -812,7 +812,9 @@ mod tests {
     #[test]
     fn download_widgets_sync_locks_the_button_while_something_runs() {
         let mut w = DownloadWidgets::default();
-        for (running, creating, enabled) in [(false, false, true), (true, false, false), (false, true, false), (true, true, false)] {
+        for (running, creating, enabled) in
+            [(false, false, true), (true, false, false), (false, true, false), (true, true, false)]
+        {
             w.sync(running, creating);
             assert_eq!(w.btn_enabled, enabled);
         }
@@ -923,7 +925,7 @@ mod tests {
     fn a_long_title_shrinks_to_fit_then_is_cut_with_an_ellipsis() {
         let m: &dyn Fn(f32, &str) -> f32 = &mono;
         let (size, shown) = fit_title(m, 14.0, "Hardening seed", 96.0 - 16.0);
-        assert!(size < 14.0 && size >= 8.0, "{size}");
+        assert!((8.0..14.0).contains(&size), "{size}");
         assert_eq!(shown, "Hardening seed");
         let (size, shown) = fit_title(m, 14.0, "Hardening seed", 300.0);
         assert_eq!(size, 14.0);

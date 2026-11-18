@@ -53,39 +53,95 @@ pub enum UiMsg {
     Dialog(DialogRequest),
 
     // ---- the drive list ----
-    ListingFinished { job: u64, result: std::result::Result<Vec<Disk>, String>, quiet: bool },
+    ListingFinished {
+        job: u64,
+        result: std::result::Result<Vec<Disk>, String>,
+        quiet: bool,
+    },
 
     // ---- Windows ISO download ----
-    DownloadApproved { url: String, dest: PathBuf, expected_sha: String },
-    DownloadProgress { done: u64, total: u64, speed: f64 },
-    DownloadDone { path: PathBuf, sha256: String, verified: bool },
+    DownloadApproved {
+        url: String,
+        dest: PathBuf,
+        expected_sha: String,
+    },
+    DownloadProgress {
+        done: u64,
+        total: u64,
+        speed: f64,
+    },
+    DownloadDone {
+        path: PathBuf,
+        sha256: String,
+        verified: bool,
+    },
     DownloadError(String),
 
     // ---- ChromeOS Flex ----
-    FlexApproved { dest: PathBuf },
-    FlexProgress { done: u64, total: u64, speed: f64, stage: String },
-    FlexDownloaded { path: PathBuf, sha256: String },
-    FlexExtracted { image: PathBuf, zip: PathBuf, delete_zip: bool },
+    FlexApproved {
+        dest: PathBuf,
+    },
+    FlexProgress {
+        done: u64,
+        total: u64,
+        speed: f64,
+        stage: String,
+    },
+    FlexDownloaded {
+        path: PathBuf,
+        sha256: String,
+    },
+    FlexExtracted {
+        image: PathBuf,
+        zip: PathBuf,
+        delete_zip: bool,
+    },
     FlexError(String),
     /// The file dialog of "Select existing ISO file..." returned a file.
     ImagePicked(PathBuf),
 
     // ---- SHA-256 of the selected image ----
-    ShaProgress { job: u64, done: u64, total: u64 },
-    ShaDone { job: u64, path: PathBuf, digest: String, expected: Option<String> },
-    ShaError { job: u64, reason: String },
+    ShaProgress {
+        job: u64,
+        done: u64,
+        total: u64,
+    },
+    ShaDone {
+        job: u64,
+        path: PathBuf,
+        digest: String,
+        expected: Option<String>,
+    },
+    ShaError {
+        job: u64,
+        reason: String,
+    },
 
     // ---- writing a drive ----
     /// The confirmations were declined or refused: nothing was started.
     CreateRefused,
     /// Everything was confirmed: the write begins (the UI shows the bar, Cancel...).
     CreateGo,
-    CreateProgress { done: u64, total: u64, text: String },
-    CreateFinish { ok: bool, canceled: bool },
-    CreateSuccess { ejected: bool, mode: Mode, hardening: Hardening, target: Option<SeedTarget> },
+    CreateProgress {
+        done: u64,
+        total: u64,
+        text: String,
+    },
+    CreateFinish {
+        ok: bool,
+        canceled: bool,
+    },
+    CreateSuccess {
+        ejected: bool,
+        mode: Mode,
+        hardening: Hardening,
+        target: Option<SeedTarget>,
+    },
     CreationEnded,
     /// The user (or closing the window) asked the write to stop: update the window (`audit` goes to the audit log).
-    CancelRequested { audit: String },
+    CancelRequested {
+        audit: String,
+    },
     /// The user confirmed quitting: close the window now.
     CloseConfirmed,
     /// A dialog flow ended (whatever the user answered): a new one of that kind may start.
@@ -93,9 +149,22 @@ pub enum UiMsg {
 
     // ---- results ----
     Log(String),
-    Notify { info: bool, title: String, body: String },
-    ShowError { title: String, message: String },
-    ReportError { title: String, message: Option<String>, exc: Option<ExcInfo>, modal: bool, retry: Option<Retry> },
+    Notify {
+        info: bool,
+        title: String,
+        body: String,
+    },
+    ShowError {
+        title: String,
+        message: String,
+    },
+    ReportError {
+        title: String,
+        message: Option<String>,
+        exc: Option<ExcInfo>,
+        modal: bool,
+        retry: Option<Retry>,
+    },
     InstallEnded,
 }
 

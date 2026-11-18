@@ -170,6 +170,18 @@ pub fn tr(text: &str) -> String {
     }
 }
 
+/// True when the window is in Portuguese (the few texts that are not in the table, such as Yes / No).
+pub fn is_portuguese() -> bool {
+    #[cfg(test)]
+    {
+        TEST_LANG.with(|l| l.get()) == "pt"
+    }
+    #[cfg(not(test))]
+    {
+        crate::i18n::active_language() == crate::constants::LANG_PT
+    }
+}
+
 /// `_("text").format(name=value, ...)`: translate, then substitute the placeholders.
 pub fn trf(text: &str, args: &[(&str, Arg)]) -> String {
     format_template(&tr(text), args)
@@ -323,7 +335,10 @@ mod tests {
             ],
         );
         assert_eq!(s, "1.0 KB / 2.0 KB (50.0%) — 3 B/s — x");
-        assert_eq!(format_template("~{minutes}m{seconds:02d}s left", &[("minutes", 1u64.into()), ("seconds", 5u64.into())]), "~1m05s left");
+        assert_eq!(
+            format_template("~{minutes}m{seconds:02d}s left", &[("minutes", 1u64.into()), ("seconds", 5u64.into())]),
+            "~1m05s left"
+        );
         assert_eq!(format_template("{pct:.0f}%", &[("pct", 49.6f64.into())]), "50%");
         assert_eq!(format_template("{{a}} {x}", &[("x", "b".into())]), "{a} b");
         assert_eq!(format_template("{unknown}", &[]), "{unknown}");

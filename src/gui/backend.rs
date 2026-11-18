@@ -4,7 +4,10 @@
 use crate::audit::AuditLevel;
 use crate::diskrisk::RiskLevel;
 use crate::download::{DoneCb, ErrorCb, ProgressCb};
-use crate::types::{BuildOptions, CancelToken, Ctx, Disk, Hardening, Identity, IsoKind, Log, Mode, Privilege, Progress2, Result, SeedTarget};
+use crate::types::{
+    BuildOptions, CancelToken, Ctx, Disk, Hardening, Identity, IsoKind, Log, Mode, Privilege, Progress2, Result,
+    SeedTarget,
+};
 use std::path::{Path, PathBuf};
 
 /// The operating system the window is running on (the Python `IS_MAC` / `IS_WINDOWS` flags; a value so tests can
@@ -286,7 +289,12 @@ pub fn disk_free(dir: &Path) -> Option<u64> {
     let (mut available, mut total, mut free) = (0u64, 0u64, 0u64);
     // SAFETY: `wide` is NUL-terminated and the three out-pointers are valid for the duration of the call.
     let ok = unsafe {
-        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(wide.as_ptr(), &mut available, &mut total, &mut free)
+        windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW(
+            wide.as_ptr(),
+            &mut available,
+            &mut total,
+            &mut free,
+        )
     };
     if ok != 0 {
         Some(available)

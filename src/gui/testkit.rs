@@ -57,6 +57,9 @@ type BuildFn = Arc<dyn Fn(&BuildCall, &Ctx) -> Result<bool> + Send + Sync>;
 type SeedFn = Arc<dyn Fn(&SeedCall, &Ctx) -> Result<bool> + Send + Sync>;
 type ExtractFn = Arc<dyn Fn(&Path, Option<Progress2>, Option<&CancelToken>) -> Result<PathBuf> + Send + Sync>;
 type ListFn = Arc<dyn Fn() -> Result<Vec<Disk>> + Send + Sync>;
+type UrlCheck = std::result::Result<(String, String, bool), String>;
+/// `(title, message, expected, reasons)` of a typed-confirmation dialog.
+pub type TypedCall = (String, String, String, Vec<String>);
 
 #[derive(Clone, Debug)]
 pub struct BuildCall {
@@ -104,7 +107,7 @@ pub struct FakeBackend {
     pub free_bytes: Mutex<Option<u64>>,
     pub hardening_lines: Mutex<Vec<String>>,
     pub hardening_describe_calls: AtomicUsize,
-    pub validate_url: Mutex<Option<std::result::Result<(String, String, bool), String>>>,
+    pub validate_url: Mutex<Option<UrlCheck>>,
     pub run_cmd_calls: Mutex<Vec<Vec<String>>>,
     pub audit_dir: Mutex<PathBuf>,
     /// The next `get_missing_dependencies` call panics (a failure inside a flow).
@@ -358,7 +361,7 @@ pub struct FakeDialogs {
     /// Answers consumed first by the yes / no questions (then `yes`).
     pub answers: Mutex<VecDeque<bool>>,
     pub typed_ok: AtomicBool,
-    pub typed_calls: Mutex<Vec<(String, String, String, Vec<String>)>>,
+    pub typed_calls: Mutex<Vec<TypedCall>>,
     pub save_path: Mutex<Option<PathBuf>>,
     pub open_path: Mutex<Option<PathBuf>>,
     pub password: Mutex<Option<String>>,
@@ -386,13 +389,7 @@ impl FakeDialogs {
     }
     /// The titles of the dialogs of one kind (`box.titles(kind)`); `None` for all.
     pub fn titles(&self, kind: Option<&str>) -> Vec<String> {
-        self.calls
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|c| kind.is_none_or(|k| c.0 == k))
-            .map(|c| c.1.clone())
-            .collect()
+        self.calls.lock().unwrap().iter().filter(|c| kind.is_none_or(|k| c.0 == k)).map(|c| c.1.clone()).collect()
     }
     pub fn count(&self) -> usize {
         self.calls.lock().unwrap().len()
@@ -425,7 +422,12 @@ impl Dialogs for FakeDialogs {
     }
     fn ask_typed_confirmation(&self, title: &str, message: &str, expected: &str, reasons: &[String]) -> bool {
         self.record("typed", title, message);
-        self.typed_calls.lock().unwrap().push((title.to_string(), message.to_string(), expected.to_string(), reasons.to_vec()));
+        self.typed_calls.lock().unwrap().push((
+            title.to_string(),
+            message.to_string(),
+            expected.to_string(),
+            reasons.to_vec(),
+        ));
         self.events.lock().unwrap().push("confirm".to_string());
         self.typed_ok.load(Ordering::SeqCst)
     }

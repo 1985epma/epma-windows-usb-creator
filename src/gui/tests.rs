@@ -889,7 +889,10 @@ mod sha_panel {
             assert!(log.contains(&format!("SHA-256 of ubuntu.iso: {}", "ab".repeat(32))));
             let audits = h.be.audits.lock().unwrap().clone();
             let (_, level) = audits.iter().find(|(m, _)| m == &format!("ISO SHA-256 check result={outcome}")).unwrap();
-            assert_eq!(*level, if outcome == "mismatch" { crate::audit::AuditLevel::Warning } else { crate::audit::AuditLevel::Info });
+            assert_eq!(
+                *level,
+                if outcome == "mismatch" { crate::audit::AuditLevel::Warning } else { crate::audit::AuditLevel::Info }
+            );
             if outcome == "mismatch" {
                 assert!(log.contains(&format!("Expected SHA-256: {}", "cd".repeat(32))));
                 assert!(log.contains("Checksum comparison: MISMATCH"));
@@ -1129,7 +1132,13 @@ mod flex_and_downloads {
         h.state.pump();
         assert_eq!(h.dialogs.titles(Some("question")), vec!["Unrecognised download server"]);
         assert!(h.dialogs.last().unwrap().2.contains("'mirror.example'"));
-        assert!(h.be.audits.lock().unwrap().iter().any(|(m, _)| m == "User declined download from untrusted host: mirror.example"));
+        assert!(h
+            .be
+            .audits
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, _)| m == "User declined download from untrusted host: mirror.example"));
         assert!(!h.state.download_running);
         assert_eq!(h.be.downloads.lock().unwrap().len(), 0);
         // accepted, but the save dialog is canceled: nothing starts
@@ -1142,7 +1151,13 @@ mod flex_and_downloads {
         h.state.start_download();
         h.state.pump();
         assert!(h.state.download_running);
-        assert!(h.be.audits.lock().unwrap().iter().any(|(m, _)| m == "Download started from host=mirror.example trusted=False checksum_supplied=False"));
+        assert!(h
+            .be
+            .audits
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, _)| m == "Download started from host=mirror.example trusted=False checksum_supplied=False"));
     }
 
     #[test]
@@ -1413,7 +1428,10 @@ mod inline_feedback {
         *h.be.platform.lock().unwrap() = Platform::Mac;
         h.state.install_dependencies();
         assert!(h.pump(|s| !s.installing));
-        assert_eq!(h.be.run_cmd_calls.lock().unwrap().clone(), vec![vec!["brew".to_string(), "install".into(), "wimlib".into()]]);
+        assert_eq!(
+            h.be.run_cmd_calls.lock().unwrap().clone(),
+            vec![vec!["brew".to_string(), "install".into(), "wimlib".into()]]
+        );
         *h.be.platform.lock().unwrap() = Platform::Windows;
         h.state.install_dependencies();
         assert!(h.pump(|s| s.error_banner.shown && !s.installing));
@@ -1448,7 +1466,13 @@ mod inline_feedback {
         assert!(shown.contains("audit.log"));
         assert!(!shown.contains("x\n"), "the detail goes to the log, not to the dialog");
         assert!(h.log().contains("ERROR [ValueError]: x"));
-        assert!(h.be.audits.lock().unwrap().iter().any(|(m, l)| m == "Unexpected error: ValueError" && *l == crate::audit::AuditLevel::Error));
+        assert!(h
+            .be
+            .audits
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, l)| m == "Unexpected error: ValueError" && *l == crate::audit::AuditLevel::Error));
     }
 
     #[test]
@@ -1494,7 +1518,10 @@ mod inline_feedback {
         assert!(!h.state.success_panel.shown);
         run_write(&mut h, true, None);
         let questions = h.dialogs.titles(Some("question"));
-        assert!(h.dialogs.titles(Some("info")).is_empty() && h.dialogs.titles(Some("error")).is_empty(), "{questions:?}");
+        assert!(
+            h.dialogs.titles(Some("info")).is_empty() && h.dialogs.titles(Some("error")).is_empty(),
+            "{questions:?}"
+        );
         let panel = &h.state.success_panel;
         assert!(panel.shown);
         assert_eq!(panel.kind, super::super::widgets::BannerKind::Success);
@@ -1606,7 +1633,10 @@ mod inline_feedback {
         h.state.open_project_page();
         h.state.open_ms_page();
         let urls = h.be.urls.lock().unwrap().clone();
-        assert_eq!(urls, vec![crate::constants::PROJECT_URL.to_string(), crate::constants::MS_DOWNLOAD_PAGE.to_string()]);
+        assert_eq!(
+            urls,
+            vec![crate::constants::PROJECT_URL.to_string(), crate::constants::MS_DOWNLOAD_PAGE.to_string()]
+        );
     }
 
     #[test]
@@ -1810,7 +1840,8 @@ mod write_flow {
         h.state.select_card(Card::Windows);
         h.state.hardening = true;
         h.write();
-        let questions: Vec<_> = h.dialogs.calls.lock().unwrap().iter().filter(|c| c.1 == "Final confirmation").cloned().collect();
+        let questions: Vec<_> =
+            h.dialogs.calls.lock().unwrap().iter().filter(|c| c.1 == "Final confirmation").cloned().collect();
         assert_eq!(questions.len(), 1);
         assert!(questions[0].2.contains("write Windows 11 and add the hardening files to it"));
         assert!(questions[0].2.contains("PERMANENTLY ERASE all data on /dev/disk9"));
@@ -1876,7 +1907,8 @@ mod write_flow {
             h.dialogs.clear();
             h.state.set_seed_choice(choice);
             h.write();
-            let questions: Vec<_> = h.dialogs.calls.lock().unwrap().iter().filter(|c| c.1 == "Final confirmation").cloned().collect();
+            let questions: Vec<_> =
+                h.dialogs.calls.lock().unwrap().iter().filter(|c| c.1 == "Final confirmation").cloned().collect();
             assert_eq!(questions.len(), 1, "{choice}");
             assert!(questions[0].2.contains("write the hardening seed files to it"));
             assert!(!questions[0].2.to_lowercase().contains("experimental"));
@@ -1902,7 +1934,13 @@ mod write_flow {
         assert_eq!(typed[0].0, "Confirm erasing this drive");
         assert!(h.be.seed_calls.lock().unwrap().is_empty());
         assert!(h.dialogs.titles(Some("question")).is_empty(), "the typed identifier decides, not the yes/no question");
-        assert!(h.be.audits.lock().unwrap().iter().any(|(m, _)| m == "Erase confirmation shown for /dev/disk9 risk=high"));
+        assert!(h
+            .be
+            .audits
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(m, _)| m == "Erase confirmation shown for /dev/disk9 risk=high"));
         assert!(h.be.audits.lock().unwrap().iter().any(|(m, _)| m == "Erase of /dev/disk9 declined by the user"));
     }
 
@@ -2056,7 +2094,7 @@ mod write_flow {
         h.state.select_card(Card::Windows);
         h.state.hardening = true;
         h.state.start_create_usb(); // everything is read here, once
-        // a finished download: new image, and the Linux card; the tick is cleared too
+                                    // a finished download: new image, and the Linux card; the tick is cleared too
         *h.be.iso_kind.lock().unwrap() = IsoKind::Linux;
         h.state.set_iso("/tmp/outra.iso");
         h.state.hardening = false;
@@ -2479,8 +2517,18 @@ mod dialog_queue {
             message: "a".into(),
             reply: Some(tx1),
         }));
-        h.state.apply(UiMsg::Dialog(DialogRequest { kind: DialogKind::Password, title: "B".into(), message: "b".into(), reply: Some(tx2) }));
-        h.state.apply(UiMsg::Dialog(DialogRequest { kind: DialogKind::Info, title: "C".into(), message: "c".into(), reply: None }));
+        h.state.apply(UiMsg::Dialog(DialogRequest {
+            kind: DialogKind::Password,
+            title: "B".into(),
+            message: "b".into(),
+            reply: Some(tx2),
+        }));
+        h.state.apply(UiMsg::Dialog(DialogRequest {
+            kind: DialogKind::Info,
+            title: "C".into(),
+            message: "c".into(),
+            reply: None,
+        }));
         assert_eq!(h.state.dialog_queue.len(), 3);
         assert_eq!(h.state.dialog_queue.front().unwrap().title, "A");
         h.state.answer_dialog(DialogReply::Yes(true));
@@ -2501,7 +2549,10 @@ mod dialog_queue {
         assert_eq!(state.card, Card::Windows);
         assert_eq!(state.mode, Mode::Windows);
         assert!(!state.controls.create_enabled);
-        assert_eq!(state.create_hint, "Choose the image file first (\"Select existing ISO file...\" or the download above).");
+        assert_eq!(
+            state.create_hint,
+            "Choose the image file first (\"Select existing ISO file...\" or the download above)."
+        );
         assert!(state.log_text().is_empty());
     }
 

@@ -19,12 +19,23 @@ pub enum DialogKind {
     Info,
     Error,
     /// A yes / no question (`warning`: the exclamation icon).
-    Question { warning: bool },
+    Question {
+        warning: bool,
+    },
     /// "Type the drive identifier": Erase stays disabled until the text matches `expected`.
-    Typed { expected: String, reasons: Vec<String> },
+    Typed {
+        expected: String,
+        reasons: Vec<String>,
+    },
     Password,
-    OpenFile { filters: Vec<FileFilter> },
-    SaveFile { initial_name: String, extension: String, filters: Vec<FileFilter> },
+    OpenFile {
+        filters: Vec<FileFilter>,
+    },
+    SaveFile {
+        initial_name: String,
+        extension: String,
+        filters: Vec<FileFilter>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -75,7 +86,13 @@ pub trait Dialogs: Send + Sync {
     /// `filedialog.askopenfilename`.
     fn pick_open_file(&self, title: &str, filters: &[FileFilter]) -> Option<PathBuf>;
     /// `filedialog.asksaveasfilename`.
-    fn pick_save_file(&self, title: &str, initial_name: &str, extension: &str, filters: &[FileFilter]) -> Option<PathBuf>;
+    fn pick_save_file(
+        &self,
+        title: &str,
+        initial_name: &str,
+        extension: &str,
+        filters: &[FileFilter],
+    ) -> Option<PathBuf>;
 }
 
 /// The real dialogs: requests go to the window (through `post`, which queues them for the UI thread and wakes it).
@@ -129,7 +146,13 @@ impl Dialogs for HubDialogs {
             _ => None,
         }
     }
-    fn pick_save_file(&self, title: &str, initial_name: &str, extension: &str, filters: &[FileFilter]) -> Option<PathBuf> {
+    fn pick_save_file(
+        &self,
+        title: &str,
+        initial_name: &str,
+        extension: &str,
+        filters: &[FileFilter],
+    ) -> Option<PathBuf> {
         let kind = DialogKind::SaveFile {
             initial_name: initial_name.to_string(),
             extension: extension.to_string(),
@@ -191,7 +214,12 @@ pub struct TypedConfirm {
 
 impl TypedConfirm {
     pub fn new(expected: &str) -> Self {
-        TypedConfirm { typed: String::new(), expected: expected.to_string(), windows: crate::constants::IS_WINDOWS, ok: false }
+        TypedConfirm {
+            typed: String::new(),
+            expected: expected.to_string(),
+            windows: crate::constants::IS_WINDOWS,
+            ok: false,
+        }
     }
     pub fn matches(&self) -> bool {
         normalize_typed_identifier_for(&self.typed, self.windows) == self.expected
@@ -233,13 +261,9 @@ mod tests {
     // ---- tests/test_refactor_helpers.py: test_normalize_typed_identifier ----
     #[test]
     fn normalize_on_unix() {
-        for (text, expected) in [
-            ("disk4", "disk4"),
-            ("  /dev/disk4 \n", "disk4"),
-            ("/dev/sdb", "sdb"),
-            ("", ""),
-            ("dev/sdb", "dev/sdb"),
-        ] {
+        for (text, expected) in
+            [("disk4", "disk4"), ("  /dev/disk4 \n", "disk4"), ("/dev/sdb", "sdb"), ("", ""), ("dev/sdb", "dev/sdb")]
+        {
             assert_eq!(normalize_typed_identifier_for(text, false), expected, "{text:?}");
         }
     }
@@ -247,7 +271,9 @@ mod tests {
     // ---- tests/test_windows_backend.py: the typed identifier on Windows ----
     #[test]
     fn normalize_on_windows() {
-        for typed in ["3", "disk 3", "Disk3", "DISK  3", "\\\\.\\PhysicalDrive3", " 3 ", "03", "\\\\.\\3", "PhysicalDrive3"] {
+        for typed in
+            ["3", "disk 3", "Disk3", "DISK  3", "\\\\.\\PhysicalDrive3", " 3 ", "03", "\\\\.\\3", "PhysicalDrive3"]
+        {
             assert_eq!(normalize_typed_identifier_for(typed, true), "PhysicalDrive3", "{typed:?}");
         }
         assert_eq!(normalize_typed_identifier_for("/dev/sdb", true), "/dev/sdb");
@@ -261,7 +287,9 @@ mod tests {
         let mut dialog = TypedConfirm::new("disk9");
         dialog.windows = false;
         assert!(!dialog.erase_enabled());
-        for (typed, enabled) in [("disk9", true), ("", false), ("/dev/disk9", true), ("disk90", false), ("  disk9  ", true)] {
+        for (typed, enabled) in
+            [("disk9", true), ("", false), ("/dev/disk9", true), ("disk90", false), ("  disk9  ", true)]
+        {
             dialog.typed = typed.to_string();
             assert_eq!(dialog.erase_enabled(), enabled, "{typed:?}");
         }

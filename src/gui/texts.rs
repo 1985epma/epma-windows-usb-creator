@@ -144,11 +144,8 @@ pub fn seed_success_texts(ejected: bool) -> (String, String) {
 /// `App._hardening_details_text()`: the list of settings the Windows option applies, from the engine's own
 /// description (`lines`), each translated and bulleted, then the footer.
 pub fn hardening_details_text(lines: &[String]) -> String {
-    let mut out: Vec<String> = lines
-        .iter()
-        .map(|l| tr(l))
-        .map(|l| if l.starts_with('•') { l } else { format!("• {l}") })
-        .collect();
+    let mut out: Vec<String> =
+        lines.iter().map(|l| tr(l)).map(|l| if l.starts_with('•') { l } else { format!("• {l}") }).collect();
     out.push(String::new());
     out.push(trf(
         "The settings are applied at the end of Windows setup by a script, and every change is written \
@@ -255,7 +252,12 @@ mod tests {
         let texts: Vec<String> = seed_target_texts().into_iter().map(|(_, t)| t).collect();
         assert_eq!(
             texts,
-            vec!["Ubuntu (autoinstall)", "Fedora / RHEL (kickstart)", "Debian (script + preseed)", "Windows 11 (run after install)"]
+            vec![
+                "Ubuntu (autoinstall)",
+                "Fedora / RHEL (kickstart)",
+                "Debian (script + preseed)",
+                "Windows 11 (run after install)"
+            ]
         );
     }
 

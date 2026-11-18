@@ -13,12 +13,12 @@ use super::shared::{guarded, ExcInfo, FlowKind, LogSink, Shared, Spawner, UiMsg}
 use super::texts::{self, seed_step_heading, seed_target_note};
 use super::tx::{human_size, rate_tail, tr, trf};
 use super::widgets::{
-    card_texts, fit_window_height, image_label, Banner, BannerKind, Bar, BarMode, Disclosure, DownloadWidgets, DriveList,
-    FileCard, LinkAction, Retry, ShaPanel, Tone, START_WINDOW_SIZE,
+    card_texts, fit_window_height, image_label, Banner, BannerKind, Bar, BarMode, Disclosure, DownloadWidgets,
+    DriveList, FileCard, LinkAction, Retry, ShaPanel, Tone, START_WINDOW_SIZE,
 };
 use crate::audit::AuditLevel;
 use crate::constants::{
-    AUTO_REFRESH_MIN_SECONDS, ENV_EXPECTED_SHA256, LOG_MAX_LINES, MS_DOWNLOAD_PAGE, PROJECT_URL, PROGRESS_UI_INTERVAL,
+    AUTO_REFRESH_MIN_SECONDS, ENV_EXPECTED_SHA256, LOG_MAX_LINES, MS_DOWNLOAD_PAGE, PROGRESS_UI_INTERVAL, PROJECT_URL,
 };
 use crate::types::{Card, Disk, Hardening, IsoKind, Mode, Privilege, SeedTarget};
 use std::collections::VecDeque;
@@ -199,7 +199,10 @@ impl AppState {
             hardening_toggle: Disclosure::new(&tr("What does it change?"), &tr("Hide the list")),
             hardening_details: String::new(),
             seed_choice: "ubuntu".to_string(),
-            sha_toggle: Disclosure::new(&tr("Verify the selected ISO (SHA-256)"), &tr("Verify the selected ISO (SHA-256)")),
+            sha_toggle: Disclosure::new(
+                &tr("Verify the selected ISO (SHA-256)"),
+                &tr("Verify the selected ISO (SHA-256)"),
+            ),
             sha: ShaPanel::default(),
             dep_missing: Vec::new(),
             controls: Controls::default(),
@@ -350,7 +353,9 @@ impl AppState {
             UiMsg::FlexError(msg) => self.on_flex_error(&msg),
             UiMsg::ImagePicked(path) => self.image_picked(&path),
             UiMsg::ShaProgress { job, done, total } => self.on_iso_sha_progress(job, done, total),
-            UiMsg::ShaDone { job, path, digest, expected } => self.on_iso_sha_done(job, &path, &digest, expected.as_deref()),
+            UiMsg::ShaDone { job, path, digest, expected } => {
+                self.on_iso_sha_done(job, &path, &digest, expected.as_deref())
+            }
             UiMsg::ShaError { job, reason } => self.on_iso_sha_error(job, &reason),
             UiMsg::CreateRefused => self.create_refused(),
             UiMsg::CreateGo => self.create_go(),
@@ -464,7 +469,14 @@ impl AppState {
     /// dialog. `title` is the English text (it also goes to the audit log); the dialog shows it translated. A
     /// `message` given by the caller (an engine error) is shown as it is. The red banner always shows it (with "Try
     /// again" when `retry` is given); the modal dialog too unless `modal` is false.
-    pub fn report_error(&mut self, title: &str, message: Option<&str>, exc: Option<&ExcInfo>, modal: bool, retry: Option<Retry>) {
+    pub fn report_error(
+        &mut self,
+        title: &str,
+        message: Option<&str>,
+        exc: Option<&ExcInfo>,
+        modal: bool,
+        retry: Option<Retry>,
+    ) {
         if self.closing() {
             // no dialog while the window is going away; the log and the audit trail keep it
             let line = match exc {
@@ -644,7 +656,7 @@ impl AppState {
         if self.creating || self.flex_busy {
             return; // the button is disabled meanwhile; this is the safety net for other callers
         }
-        self.spawn_flow(FlowKind::PickImage, |sh| flows::flow_pick_image(sh));
+        self.spawn_flow(FlowKind::PickImage, flows::flow_pick_image);
     }
     /// The file dialog returned a file.
     fn image_picked(&mut self, path: &Path) {
@@ -910,7 +922,7 @@ impl AppState {
         if self.creating || self.flex_busy {
             return;
         }
-        self.spawn_flow(FlowKind::FlexDownload, |sh| flows::flow_flex_download(sh));
+        self.spawn_flow(FlowKind::FlexDownload, flows::flow_flex_download);
     }
 
     fn flex_approved(&mut self, dest: PathBuf) {
@@ -1152,7 +1164,7 @@ impl AppState {
     pub fn update_create_button_state(&mut self) {
         let disk_present = self.selected_disk().is_some();
         let has_image = !self.iso_path.is_empty() || self.mode == Mode::Seed; // the seed card needs no image
-        // The tools the chosen mode needs: without them the drive would be erased and the copy would then fail.
+                                                                              // The tools the chosen mode needs: without them the drive would be erased and the copy would then fail.
         let missing = if self.creating { Vec::new() } else { self.sh.backend.get_missing_dependencies(self.mode) };
         let downloading = self.download_running || self.flex_busy; // the image (and the card) may still change
         let ok = has_image
@@ -1253,7 +1265,7 @@ impl AppState {
         if self.sh.cancel_create.is_set() || !self.controls.cancel_enabled {
             return;
         }
-        self.spawn_flow(FlowKind::CancelWrite, |sh| flows::flow_cancel_write(sh));
+        self.spawn_flow(FlowKind::CancelWrite, flows::flow_cancel_write);
     }
 
     /// The cancel was confirmed (the token is already set).
@@ -1319,8 +1331,7 @@ impl AppState {
         if tail.is_empty() {
             tail = tr(" — calculating...");
         }
-        self.create_progress_label =
-            format!("{text}  {pct:.1}% — {} / {}{tail}", human_size(done), human_size(total));
+        self.create_progress_label = format!("{text}  {pct:.1}% — {} / {}{tail}", human_size(done), human_size(total));
     }
 
     pub fn finish_create_progress(&mut self, ok: bool, canceled: bool) {

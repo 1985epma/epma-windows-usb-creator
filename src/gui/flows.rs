@@ -175,7 +175,8 @@ pub fn create_preflight(sh: &Shared, inputs: &CreateInputs) -> Option<CreatePlan
     }
     if seed && target.is_none() {
         // the radio buttons only give valid values; never trust the variable
-        dialogs.show_error(&tr("Hardening seed"), &tr("Choose which system the seed drive is for. Nothing was changed."));
+        dialogs
+            .show_error(&tr("Hardening seed"), &tr("Choose which system the seed drive is for. Nothing was changed."));
         return None;
     }
     if seed {
@@ -415,7 +416,8 @@ pub fn flow_download(sh: &Shared, url_text: String, expected_sha: String) {
         be.audit(&format!("User declined download from untrusted host: {host}"), AuditLevel::Info);
         return;
     }
-    let Some(dest) = dialogs.pick_save_file(&tr("Save ISO as"), "Win11.iso", ".iso", &iso_filter(&tr("ISO image"), "iso"))
+    let Some(dest) =
+        dialogs.pick_save_file(&tr("Save ISO as"), "Win11.iso", ".iso", &iso_filter(&tr("ISO image"), "iso"))
     else {
         return;
     };
@@ -669,7 +671,9 @@ pub fn flow_close_while_writing(sh: &Shared, wait_seconds: f64) {
     if sh.write_alive.load(Ordering::SeqCst) {
         // it may have finished while the question was open
         sh.cancel_create.set();
-        sh.post(UiMsg::CancelRequested { audit: "User closed the window during the USB creation: canceling it".into() });
+        sh.post(UiMsg::CancelRequested {
+            audit: "User closed the window during the USB creation: canceling it".into(),
+        });
         if !wait_for_write(sh, wait_seconds)
             && !dialogs.ask_yes_no(
                 &tr("Still stopping"),
