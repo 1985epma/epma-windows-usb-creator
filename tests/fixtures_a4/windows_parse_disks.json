@@ -1,0 +1,480 @@
+{
+ "cases": [
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "",
+   "disks": []
+  },
+  {
+   "text": "  \n",
+   "disks": []
+  },
+  {
+   "text": "[]",
+   "disks": []
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"SATA\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 4, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"usb\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 5, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": null, \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive4",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": true, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 4, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": null, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 5, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": 0, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": []
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 0, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": \"x\"}, {\"BusType\": \"USB\"}, {\"Number\": 6, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": -5, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": []
+  },
+  {
+   "text": "[{\"Number\": \"7\", \"Model\": \"\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": \"1000\", \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive7",
+     "size": 1000,
+     "model": null,
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 12345, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": -1, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 7.9, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": true, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive7",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    },
+    {
+     "id": "PhysicalDrive1",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"\", \"Label\": \"\", \"FileSystem\": \"\", \"Size\": 100, \"Free\": -1}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "",
+       "filesystem": "",
+       "size": 100,
+       "used": null,
+       "mountpoint": null
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"F\", \"Label\": \"\", \"FileSystem\": \"NTFS\", \"Size\": 100, \"Free\": 200}, {\"Letter\": \"G\", \"Label\": \"DATA\", \"FileSystem\": \"exFAT\", \"Size\": 100, \"Free\": 100}, {\"Letter\": null, \"Label\": null, \"FileSystem\": null, \"Size\": null, \"Free\": null}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "F:",
+       "filesystem": "NTFS",
+       "size": 100,
+       "used": null,
+       "mountpoint": "F:\\"
+      },
+      {
+       "name": "DATA",
+       "filesystem": "exFAT",
+       "size": 100,
+       "used": 0,
+       "mountpoint": "G:\\"
+      },
+      {
+       "name": "",
+       "filesystem": "",
+       "size": 0,
+       "used": null,
+       "mountpoint": null
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": []}, {\"Number\": 8, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": null}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    },
+    {
+     "id": "PhysicalDrive8",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 3, \"Model\": \"  Spaces  \", \"Serial\": null, \"UniqueId\": \"\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 9, \"Model\": \"SanDisk Ultra\", \"Serial\": 12345, \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive3",
+     "size": 17179869184,
+     "model": "Spaces",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "Spaces"
+      ]
+     ]
+    },
+    {
+     "id": "PhysicalDrive9",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "12345"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  },
+  {
+   "text": "[{\"Number\": 1, \"Model\": \"SanDisk Ultra\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 2, \"Model\": \"B\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}, {\"Number\": 10, \"Model\": \"C\", \"Serial\": \"ABC123\", \"UniqueId\": \"USBSTOR\\\\X\", \"BusType\": \"USB\", \"Size\": 17179869184, \"SectorSize\": 512, \"HoldsSystem\": false, \"Volumes\": [{\"Letter\": \"E\", \"Label\": \"OLD\", \"FileSystem\": \"FAT32\", \"Size\": 8589934592, \"Free\": 6442450944}]}]",
+   "disks": [
+    {
+     "id": "PhysicalDrive1",
+     "size": 17179869184,
+     "model": "SanDisk Ultra",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "SanDisk Ultra"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    },
+    {
+     "id": "PhysicalDrive2",
+     "size": 17179869184,
+     "model": "B",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "B"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    },
+    {
+     "id": "PhysicalDrive10",
+     "size": 17179869184,
+     "model": "C",
+     "volumes": [
+      {
+       "name": "OLD",
+       "filesystem": "FAT32",
+       "size": 8589934592,
+       "used": 2147483648,
+       "mountpoint": "E:\\"
+      }
+     ],
+     "identity": [
+      [
+       "model",
+       "C"
+      ],
+      [
+       "serial",
+       "ABC123"
+      ],
+      [
+       "uniqueid",
+       "USBSTOR\\X"
+      ]
+     ]
+    }
+   ]
+  }
+ ]
+}
