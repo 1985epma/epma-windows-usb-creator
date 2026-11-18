@@ -4,6 +4,7 @@
 //! a folder). Nothing touches a real drive. (`HelpAndDocsTests` are in tests/test_help_a7.rs: they read `help.rs`.)
 
 use super::*;
+#[cfg_attr(windows, allow(unused_imports))]
 use crate::cli::harden::{create_private_file, write_into_with};
 use crate::cli::parser::{parse, CliCommand};
 use crate::cli::{EXIT_EJECT_FAILED, EXIT_ERROR, EXIT_INTERRUPTED, EXIT_USAGE, EXIT_VERIFY_FAILED};

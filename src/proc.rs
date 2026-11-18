@@ -685,6 +685,7 @@ pub fn parse_os_release(text: &str) -> HashMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg_attr(windows, allow(unused_imports))]
     use std::sync::atomic::AtomicUsize;
 
     fn collect() -> (Arc<Mutex<Vec<String>>>, impl Fn(&str) + Send + Sync) {

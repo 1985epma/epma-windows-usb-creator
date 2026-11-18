@@ -2,6 +2,8 @@
 //! the temporary file is never written through a symlink, check_canceled, the sleep inhibitor, and lenient decoding of
 //! command output.
 
+#![cfg_attr(windows, allow(unused_imports))]
+
 mod common_a1;
 
 use common_a1::{random_bytes, Collector, Tmp, MIB};

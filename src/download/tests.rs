@@ -106,6 +106,7 @@ fn response(status: u16, body: &[u8], headers: &[(&str, &str)]) -> Response {
 }
 
 /// A 200 whose body breaks after the first 4 bytes.
+#[cfg_attr(windows, allow(dead_code))]
 fn failing(body: &[u8], errno: Option<i32>, kind: io::ErrorKind) -> Response {
     let mut r = response(200, body, &[]);
     r.body = Box::new(Body { data: body.to_vec(), pos: 0, step: 4, fail: Some((errno, kind)) });
