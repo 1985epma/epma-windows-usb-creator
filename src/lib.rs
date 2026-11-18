@@ -8,7 +8,7 @@
 //! * engine: `copyverify`, `privilege`, `diskrisk`, `engine`
 //! * backends: `macos`, `linux`, `windows`, `seed`
 //! * generated content: `harden_linux`, `harden_windows`, `seed_files`, `help`
-//! * front ends: `download`, `cli`, `gui` (feature `gui`)
+//! * front ends: `download`, `cli`, `gui` (the egui window itself is behind feature `gui`; the window's logic is not)
 
 #![allow(clippy::too_many_arguments)]
 
@@ -41,5 +41,4 @@ pub mod seed_files;
 
 pub mod cli;
 pub mod download;
-#[cfg(feature = "gui")]
 pub mod gui;

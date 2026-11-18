@@ -8,7 +8,7 @@ pub const EXIT_VERIFY_FAILED: i32 = 3;
 pub const EXIT_EJECT_FAILED: i32 = 4;
 pub const EXIT_INTERRUPTED: i32 = 130;
 
-/// `main(argv)`: no arguments opens the window (`gui::run`, feature `gui`; otherwise a hint), anything else is the
+/// `main(argv)`: no arguments opens the window (`gui::run`, which always exists and prints a hint when built without feature `gui`), anything else is the
 /// command line. Returns the process exit code.
 pub fn main(argv: &[String]) -> i32 {
     todo!()
