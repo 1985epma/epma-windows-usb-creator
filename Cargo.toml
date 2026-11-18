@@ -2,7 +2,7 @@
 name = "epma-usb-creator"
 version = "1.1.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.95"
 description = "Create verified bootable USB drives from Windows 11, Linux and other ISOs, and Google's ChromeOS Flex"
 license = "GPL-3.0-or-later"
 repository = "https://github.com/1985epma/epma-windows-usb-creator"
