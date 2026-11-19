@@ -15,8 +15,10 @@ use clap::{Arg, ArgAction, ArgMatches, ColorChoice, Command};
 /// `harden-files --target windows-seed`: the files of the Windows seed drive (`--target windows` is the set that goes
 /// on the same USB as the Windows installer).
 pub const HARDEN_FILES_WINDOWS_SEED: &str = "windows-seed";
-/// `HARDEN_FILES_TARGETS`: "windows", "windows-seed", then the seed targets other than Windows.
-pub const HARDEN_FILES_TARGETS: [&str; 5] = ["windows", HARDEN_FILES_WINDOWS_SEED, "ubuntu", "fedora", "debian"];
+/// `HARDEN_FILES_TARGETS`: "windows", "windows-seed", then the seed targets other than Windows (the macOS seed is new
+/// in the Rust build).
+pub const HARDEN_FILES_TARGETS: [&str; 6] =
+    ["windows", HARDEN_FILES_WINDOWS_SEED, "ubuntu", "fedora", "debian", "macos"];
 
 pub const HARDENED_WINDOWS_ONLY: &str = "--hardened is only available for Windows images (--mode windows). For Linux \
                                          use 'epma-usb-creator harden-seed' with a separate USB drive.";
@@ -80,7 +82,7 @@ pub struct WriteFlags {
 pub struct WriteArgs {
     pub iso: String,
     pub disk: String,
-    /// `Mode::Auto` (the default), Windows, Linux or ChromeOs.
+    /// `Mode::Auto` (the default), Windows, Linux, ChromeOs or MacOs.
     pub mode: Mode,
     pub hardened: bool,
     pub flags: WriteFlags,
@@ -226,7 +228,7 @@ pub fn build_cli_parser() -> Command {
         .subcommand(sub("gui", "open the graphical interface (the default with no arguments)"))
         .subcommand(json_flag(sub("list", "list the USB drives that can be written")))
         .subcommand(json_flag(
-            sub("detect", "tell whether an image is windows, linux or chromeos (or unknown)")
+            sub("detect", "tell whether an image is windows, linux, chromeos or macos (or unknown)")
                 .arg(Arg::new("iso").value_name("ISO").required(true)),
         ))
         .subcommand(json_flag(
@@ -271,7 +273,8 @@ pub fn build_cli_parser() -> Command {
                         .default_value(Mode::Auto.as_str())
                         .help(
                             "windows: GPT+FAT32 file copy; linux: raw write of a hybrid ISO; chromeos: raw write of a \
-                             ChromeOS Flex disk image; auto: detect (default)",
+                             ChromeOS Flex disk image; macos: raw write of a whole-disk macOS image; auto: detect \
+                             (default)",
                         ),
                 )
                 .arg(flag(
@@ -296,8 +299,8 @@ pub fn build_cli_parser() -> Command {
                     .required(true)
                     .value_parser(PossibleValuesParser::new(seed_targets))
                     .help(
-                        "ubuntu (autoinstall), fedora (kickstart), debian (script + preseed) or windows (Windows 11: \
-                         harden.cmd to run after install)",
+                        "ubuntu (autoinstall), fedora (kickstart), debian (script + preseed), windows (Windows 11: \
+                         harden.cmd to run after install) or macos (macOS: harden.command to run after install)",
                     ),
             )
             .arg(Arg::new("disk").long("disk").required(true).value_name("DISKID").help(disk_help)),
@@ -312,7 +315,7 @@ pub fn build_cli_parser() -> Command {
                         .value_parser(PossibleValuesParser::new(HARDEN_FILES_TARGETS))
                         .help(
                             "windows (files for the same USB as Windows), windows-seed (files for the Windows seed \
-                             drive), ubuntu, fedora or debian",
+                             drive), ubuntu, fedora, debian or macos",
                         ),
                 )
                 .arg(

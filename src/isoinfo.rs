@@ -23,6 +23,16 @@ const GPT_ENTRIES_OFFSET: usize = 1024; // LBA 2: the partition entries (128 byt
 const GPT_ENTRY_SIZE: usize = 128;
 /// ChromeOS disks always carry these partition names (kernel and root slots, user state).
 const CHROMEOS_PARTITION_NAMES: [&str; 6] = ["KERN-A", "ROOT-A", "KERN-B", "ROOT-B", "STATE", "EFI-SYSTEM"];
+/// GPT partition type GUIDs Apple uses (on-disk byte order: the first three fields are little-endian): HFS+, APFS,
+/// Apple Boot (the recovery partition) and Core Storage. A disk with one of them is a Mac disk.
+const APPLE_PARTITION_TYPES: [[u8; 16]; 4] = [
+    [0x00, 0x53, 0x46, 0x48, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC], // HFS+
+    [0xEF, 0x57, 0x34, 0x7C, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC], // APFS
+    [0x74, 0x6F, 0x6F, 0x42, 0x00, 0x00, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC], // Apple Boot
+    [0x72, 0x6F, 0x74, 0x53, 0x67, 0x61, 0xAA, 0x11, 0xAA, 0x11, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC], // Core Storage
+];
+/// An Apple disk image (.dmg) ends with a 512-byte "koly" trailer.
+const UDIF_TRAILER_SIZE: u64 = 512;
 const ISO_SECTOR: usize = 2048;
 /// Primary Volume Descriptor: sector 16 (0x8000).
 const ISO_PVD_OFFSET: usize = 16 * ISO_SECTOR;
@@ -199,6 +209,27 @@ fn is_chromeos_disk_image(head: &[u8]) -> bool {
     names.contains("ROOT-A") && names.contains("KERN-A") && known >= 3
 }
 
+/// True if `head` (the first sectors of a file) is a GPT disk with at least one Apple partition (HFS+, APFS, Apple
+/// Boot or Core Storage): a whole-disk macOS image. A single volume without a partition table does not qualify.
+fn is_macos_disk_image(head: &[u8]) -> bool {
+    if head.len() < GPT_ENTRIES_OFFSET + GPT_ENTRY_SIZE || slice(head, GPT_HEADER_OFFSET, 8) != b"EFI PART" {
+        return false;
+    }
+    let end = head.len().min(GPT_ENTRIES_OFFSET + 128 * GPT_ENTRY_SIZE);
+    (GPT_ENTRIES_OFFSET..end)
+        .step_by(GPT_ENTRY_SIZE)
+        .any(|pos| APPLE_PARTITION_TYPES.iter().any(|kind| slice(head, pos, 16) == kind))
+}
+
+/// True if the file ends with the "koly" trailer of an Apple disk image (.dmg).
+fn has_udif_trailer<R: Read + Seek>(fh: &mut R, file_size: u64) -> io::Result<bool> {
+    if file_size < UDIF_TRAILER_SIZE {
+        return Ok(false);
+    }
+    fh.seek(SeekFrom::Start(file_size - UDIF_TRAILER_SIZE))?;
+    Ok(read_up_to(fh, 4)? == b"koly")
+}
+
 /// The detection itself, on any seekable source (`file_size` bounds the directory extents).
 fn detect<R: Read + Seek>(fh: &mut R, file_size: u64) -> io::Result<IsoKind> {
     let head = read_up_to(fh, ISO_PVD_OFFSET + ISO_SECTOR)?;
@@ -207,7 +238,12 @@ fn detect<R: Read + Seek>(fh: &mut R, file_size: u64) -> io::Result<IsoKind> {
     }
     let pvd = head.get(ISO_PVD_OFFSET..).unwrap_or(&[]);
     if pvd.len() < ISO_SECTOR || byte(pvd, 0) != 1 || slice(pvd, 1, 5) != b"CD001" {
-        return Ok(IsoKind::Unknown); // not an ISO 9660 image
+        // Not an ISO 9660 image. A Mac disk image is not one either (a hybrid ISO that carries an Apple boot
+        // partition still is, so it is not mistaken for a Mac disk).
+        if is_macos_disk_image(&head) || has_udif_trailer(fh, file_size)? {
+            return Ok(IsoKind::MacOs);
+        }
+        return Ok(IsoKind::Unknown);
     }
     let volume_id = py_strip(&latin1(slice(pvd, 40, 32))).to_uppercase();
     let mut block = u64::from(le_u16(pvd, 128));
@@ -255,7 +291,7 @@ fn detect<R: Read + Seek>(fh: &mut R, file_size: u64) -> io::Result<IsoKind> {
     Ok(IsoKind::Unknown)
 }
 
-/// Classify an image by its content: Windows, Linux (hybrid), ChromeOS or Unknown. Never fails; reads a few MB at most.
+/// Classify an image by its content: Windows, Linux (hybrid), ChromeOS, macOS or Unknown. Never fails; reads a few MB at most.
 ///
 /// Safe to call on any file the user picks. `Unknown` means "could not tell"; callers must ask the user, not guess
 /// from the file name.

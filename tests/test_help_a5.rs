@@ -407,8 +407,40 @@ fn golden() -> Vec<(String, String)> {
     v.into_iter().map(|p| (p[0].clone(), p[1].clone())).collect()
 }
 
-/// The golden text with the three deliberate changes of the Rust build applied (see the header of `help.rs`).
+/// The sentences that name the macOS image type, which the Python text (written before it existed) lacks:
+/// (section, Python text, Rust text).
+const MACOS_CHANGES: &[(&str, &str, &str)] = &[
+    ("Overview", "## Four image types and the hardening seed (five cards)", "## Five image types and the hardening seed (six cards)"),
+    ("Overview", "An ISO that cannot boot from a USB drive is refused before anything is erased.\n• Hardening seed (optional, the fifth card)", "An ISO that cannot boot from a USB drive is refused before anything is erased.\n• macOS — writes a ready-made whole-disk macOS image (.img, or a .dmg converted to a whole-disk image, for example an OpenCore installer) byte for byte to the whole drive. A compressed .dmg or a single volume is refused before anything is erased. For Apple's own installer use 'createinstallmedia' on a Mac.\n• Hardening seed (optional, the sixth card)"),
+    ("Overview", "1 Image type: five equal cards. Four choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO); the fifth,", "1 Image type: six equal cards. Five choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux, macOS and Other ISO); the sixth,"),
+    ("Overview", "(Windows 11, Linux, ChromeOS Flex or Unknown)", "(Windows 11, Linux, ChromeOS Flex, macOS or Unknown)"),
+    ("Getting the image", "The card (Windows, Linux or Google Chrome) is chosen", "The card (Windows, Linux, macOS or Google Chrome) is chosen"),
+    ("Getting the image", "a file that is not a ChromeOS Flex image under \"Google Chrome\" is refused.", "a file that is not a ChromeOS Flex image under \"Google Chrome\" is refused. A file that does not look like a macOS disk image under \"macOS\" is asked about in the same way."),
+    ("The drive and the Create button", "Linux and Other ISO (the ISO is written directly).", "Linux, macOS and Other ISO (the image is written directly)."),
+    ("The drive and the Create button", "The Google Chrome, Linux and Other ISO cards need nothing extra.", "The Google Chrome, Linux, macOS and Other ISO cards need nothing extra."),
+    ("The drive and the Create button", "direct-write cards (Google Chrome, Linux and Other ISO)", "direct-write cards (Google Chrome, Linux, macOS and Other ISO)"),
+    ("Verification and eject", "• Linux and ChromeOS Flex modes:", "• Linux, ChromeOS Flex and macOS modes:"),
+    ("Command line", "prints windows, linux, chromeos or unknown.", "prints windows, linux, chromeos, macos or unknown."),
+    ("Command line", "[--mode auto|windows|linux|chromeos]", "[--mode auto|windows|linux|chromeos|macos]"),
+    ("Command line", "• harden-seed --target ubuntu|fedora|debian|windows --disk DISK", "• harden-seed --target ubuntu|fedora|debian|windows|macos --disk DISK"),
+    ("Command line", "• harden-files --target windows|windows-seed|ubuntu|fedora|debian --out DIR [--json] — write the hardening files into a new or empty folder. \"windows\" is the set for the same USB drive as Windows; \"windows-seed\" is the set for the Windows seed drive.", "• harden-files --target windows|windows-seed|ubuntu|fedora|debian|macos --out DIR [--json] — write the hardening files into a new or empty folder. \"windows\" is the set for the same USB drive as Windows; \"windows-seed\" is the set for the Windows seed drive; \"macos\" is the set for the macOS seed drive."),
+    ("Command line", "• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows.", "• harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows.\n• harden-seed --target macos makes the macOS seed drive (label EPMA-SEED): harden.command, audit.command, undo.command, harden-macos.sh and a README to run on a Mac that is already installed."),
+    ("Hardened setup (optional)", "## Undo\n• Linux: run the script again with --undo.", "## macOS (a second USB drive)\n• Choose the \"Hardening seed\" card and \"macOS (run after install)\", select a small USB drive and click \"Create Seed Drive\". The drive is erased and checked like any other; it is NOT an installer.\n• It works on a Mac that is already installed (it does not take part in the installation). Open the drive in Finder and double-click audit.command first: it only reports what is in effect and needs no password (lines marked [CHANGE] would be changed, lines marked [WARN] need a look). Then double-click harden.command, answer y and type your password in the Terminal window. If a .command file does not open, run: sudo bash /Volumes/EPMA-SEED/harden-macos.sh\n• It turns on the Application Firewall, stealth mode and Gatekeeper, enables automatic update checks and turns off the guest account and automatic login. It only reports FileVault, System Integrity Protection and Remote Login, and never changes them. Major macOS upgrades are not installed.\n• The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. The log is /var/log/epma-hardening.log. Applying and undoing were tested against stand-in commands only, never on a real Mac.\n\n## Undo\n• Linux: run the script again with --undo."),
+    ("Hardened setup (optional)", "It may report a non-zero exit code when a step failed: read its lines.", "It may report a non-zero exit code when a step failed: read its lines.\n• macOS: double-click undo.command on the seed drive (or run sudo bash harden-macos.sh --undo). It puts back the values it remembered before changing them; a setting that was already in the wanted state is not remembered and stays as it is."),
+    ("Overview", "writes hardening files on it for Ubuntu, Fedora/RHEL, Debian or Windows 11. See \"Hardened setup (optional)\".", "writes hardening files on it for Ubuntu, Fedora/RHEL, Debian, Windows 11 or macOS. See \"Hardened setup (optional)\"."),
+];
+
+/// The golden text with the deliberate changes of the Rust build applied (see the header of `help.rs`).
 fn expected_for_rust(title: &str, body: &str) -> String {
+    // The Python golden was taken at version 1.1.0; the text embeds the version of the program.
+    let mut body = body.replace("EPMA USB CREATOR 1.1.0", &format!("EPMA USB CREATOR {VERSION}"));
+    for (section, old, new) in MACOS_CHANGES {
+        if *section == title {
+            assert!(body.contains(old), "the golden {title:?} no longer has: {old}");
+            body = body.replace(old, new);
+        }
+    }
+    let body = body.as_str();
     match title {
         "Command line" => body.replace("(no Tkinter needed)", "(no window is needed)"),
         "Troubleshooting" => {
@@ -454,7 +486,18 @@ fn the_deliberate_changes_are_exactly_these() {
     let want = golden();
     for (title, body) in &want {
         let changed = expected_for_rust(title, body) != *body;
-        assert_eq!(changed, matches!(title.as_str(), "Command line" | "Troubleshooting" | "About"), "{title}");
+        let expected = matches!(
+            title.as_str(),
+            "Overview"
+                | "Getting the image"
+                | "The drive and the Create button"
+                | "Verification and eject"
+                | "Hardened setup (optional)"
+                | "Command line"
+                | "Troubleshooting"
+                | "About"
+        );
+        assert_eq!(changed, expected, "{title}");
     }
 }
 

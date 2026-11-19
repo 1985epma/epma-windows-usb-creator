@@ -17,7 +17,7 @@ pub fn list_disks(env: &Env) -> std::result::Result<Vec<Disk>, CliError> {
     env.engine.get_external_disks().map_err(|e| CliError::new(format!("Could not list the drives: {e}")))
 }
 
-/// `cli_detect_kind(iso)`: `(kind, method)` with kind one of windows, linux, chromeos or unknown.
+/// `cli_detect_kind(iso)`: `(kind, method)` with kind one of windows, linux, chromeos, macos or unknown.
 ///
 /// Uses `detect_iso_kind()` (reads the ISO), then the hybrid-image boot signature. The FILE NAME is never used: a
 /// guess from the name could select the destructive Windows mode for an unrelated image ("darwin-linux.img"

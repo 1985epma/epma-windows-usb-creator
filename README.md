@@ -2,7 +2,7 @@
 
 **English** · [Português](README.pt-BR.md)
 
-Cross-platform application (**Windows 11**, **macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…) and **Google's ChromeOS Flex** directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
+Cross-platform application (**Windows 11**, **macOS** and **any Linux distribution**) that downloads the official Windows 11 ISO and writes a bootable USB drive in **UEFI (GPT + FAT32)** format. It can also write **any hybrid ISO** (Ubuntu, Debian, Fedora, Mint, Arch…), **Google's ChromeOS Flex** and ready-made **macOS disk images** directly to a USB drive, and every write is **read back and verified** before the drive is ejected.
 
 It has a graphical interface (US English) and a [command line mode](#command-line).
 
@@ -24,6 +24,7 @@ Written in **Rust** — a single self-contained program (window and command line
 ## Table of contents
 
 - [Features](#features)
+- [New in 1.2.0](#new-in-120)
 - [New in 1.1.0](#new-in-110)
 - [How it works](#how-it-works)
 - [Requirements](#requirements)
@@ -44,7 +45,7 @@ Written in **Rust** — a single self-contained program (window and command line
 - **Automatic formatting** of the USB drive as GPT + FAT32 with the label `WIN11USB` (UEFI-bootable, no need to disable Secure Boot).
 - **Automatic splitting of `install.wim` / `install.esd`**: these files usually exceed 4 GB, the FAT32 size limit. The application detects this and splits the file into `.swm` parts using `wimlib-imagex`.
 - **Automatic dependency installation**: detects your package manager (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) or Homebrew on macOS and installs whatever is missing. Missing tools are detected **before** anything is erased: the Create button stays disabled, with a hint saying what to install.
-- **Four image cards**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* and *Other ISO*. *Windows 11* is formatted as GPT + FAT32 and its files are copied; the other three are written byte-for-byte, like `dd` (*Linux* and *Other ISO* write the same way). The card is picked from the image's **contents**, not its file name, and you can always change it.
+- **Five image cards**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux*, *macOS* and *Other ISO*. *Windows 11* is formatted as GPT + FAT32 and its files are copied; the other four are written byte-for-byte, like `dd` (*Linux* and *Other ISO* write the same way). The card is picked from the image's **contents**, not its file name, and you can always change it.
 - **ChromeOS Flex**: the *Google Chrome* card downloads Google's official image (`dl.google.com`, HTTPS, resumable), extracts it safely from the ZIP and prepares it for the USB drive. Regular ChromeOS is not distributed for ordinary PCs, so Flex — Google's free ChromeOS for PCs and Macs — is the official option.
 - **Verified writes**: after writing, the drive is read back and compared with the ISO (byte for byte for Linux images; checksum comparison and `wimlib-imagex verify` for Windows). If anything differs the drive is **not** ejected and you are told not to use it.
 - **Reliable eject** once the drive has been verified, with a clear message if the operating system refuses.
@@ -56,8 +57,15 @@ Written in **Rust** — a single self-contained program (window and command line
 - **Command line mode** (`list`, `write`, `detect`, `sha256`, `--dry-run`, JSON output, exit codes) for scripts.
 - **Built-in documentation**: open **Help → EPMA USB CREATOR Help** (or press **F1**) for quick starts, a reference for the window and its five cards, safety, verification and eject, the command line, troubleshooting and the files/settings the program uses.
 - **Integrity verification**: HTTPS-only downloads, warnings for unrecognised servers, and a SHA-256 checksum of the downloaded image.
-- **Hardened setup (optional, experimental):** a Windows option and a *Hardening seed* drive for Ubuntu, Fedora/RHEL, Debian and Windows 11 that start a fresh install from safer settings; see [Hardened setup](#hardened-setup-optional).
+- **Hardened setup (optional, experimental):** a Windows option and a *Hardening seed* drive for Ubuntu, Fedora/RHEL, Debian, Windows 11 and macOS that start a fresh install from safer settings; see [Hardened setup](#hardened-setup-optional).
 - **Real-time log** of every command executed, inside the application window: open **Show details** to read it (it opens by itself when a write fails).
+
+## New in 1.2.0
+
+- **Rewritten in Rust**: one self-contained program (window and command line), with no Python or Tk. Behaviour, messages, exit codes and every safety check are unchanged.
+- **Runs on Windows 11** as well as macOS and Linux, with release archives for all three.
+- **A macOS image type**: the *macOS* card writes a ready-made whole-disk macOS image byte for byte and reads it back (`--mode macos` on the command line).
+- **Hardened setup (optional)**: a Windows option and a *Hardening seed* drive for Ubuntu, Fedora/RHEL, Debian, Windows 11 and macOS; see [Hardened setup](#hardened-setup-optional).
 
 ## New in 1.1.0
 
@@ -128,8 +136,8 @@ On Linux, partitioning/formatting/mounting a raw block device requires root, so 
 Download `epma-usb-creator-<version>-x86_64-pc-windows-msvc.zip` from the [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases) page, check it and unzip it:
 
 ```powershell
-Get-FileHash .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256   # compare with SHA256SUMS.txt
-Expand-Archive .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+Get-FileHash .\epma-usb-creator-v1.2.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256   # compare with SHA256SUMS.txt
+Expand-Archive .\epma-usb-creator-v1.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
 .\epma-usb-creator-x86_64-pc-windows-msvc\epma-usb-creator.exe   # opens the window (asks for Administrator: UAC prompt)
 ```
 
@@ -155,7 +163,7 @@ tap.
 Each [release](https://github.com/1985epma/epma-windows-usb-creator/releases) has the program for Linux (`x86_64`), macOS (Apple silicon) and Windows 11 (`x86_64`), its checksums and a software bill of materials. Download, check and run (Linux and macOS):
 
 ```bash
-V=v1.1.0
+V=v1.2.0
 T=x86_64-unknown-linux-gnu        # macOS (Apple silicon): aarch64-apple-darwin
 curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/epma-usb-creator-$V-$T.tar.gz
 curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/SHA256SUMS.txt
@@ -191,13 +199,14 @@ epma-usb-creator
 
 ### The window
 
-One window with three numbered steps — **1 Image type** (five cards: the four image types and the optional **Hardening seed**), **2 Image** (where to get it, and the file) and **3 USB drive** — and the **Create** button. A slim header shows the version, a **Ready** / **Missing tools** chip for the tools the program needs, and **Help**.
+One window with three numbered steps — **1 Image type** (six cards: the five image types and the optional **Hardening seed**), **2 Image** (where to get it, and the file) and **3 USB drive** — and the **Create** button. A slim header shows the version, a **Ready** / **Missing tools** chip for the tools the program needs, and **Help**.
 
-1. **Choose a card** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* or *Other ISO*. The panel under the cards shows where to get that kind of image. Selecting an image file picks the right card for you, from the **contents** of the file.
+1. **Choose a card** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux*, *macOS* or *Other ISO*. The panel under the cards shows where to get that kind of image. Selecting an image file picks the right card for you, from the **contents** of the file.
 2. **Get the image** (skip this if you already have it):
    - **Windows 11** — click **"Open Microsoft's official page"**, choose *Windows 11 (multi-edition ISO)* and your language, **right-click** the blue 64-bit button and choose **"Copy Link Address"** (do not click it). Paste the link, optionally paste Microsoft's SHA-256, and click **"Download ISO"**.
    - **Google Chrome (ChromeOS Flex)** — click **"Download ChromeOS Flex from Google"**; the ZIP is downloaded (resumable), extracted and selected for you. Details below.
    - **Linux / Other ISO** — download the ISO from your distribution's website.
+   - **macOS** — use a ready-made whole-disk image (`.img`, or a `.dmg` converted with `hdiutil convert FILE.dmg -format UDRW -o FILE-raw.dmg`), for example an OpenCore installer. For Apple's own installer, use `createinstallmedia` on a Mac instead.
 3. **Select the file** with **"Select existing ISO file..."** (a ChromeOS Flex `.zip` is extracted for you). A **"Verify the selected ISO (SHA-256)"** link appears under the file name: click it, paste the published hash (or a `SHA256SUMS` line) and click **"Calculate SHA-256"**.
 4. **Choose the drive** — plug in the USB drive (**8 GB minimum**; **16 GB or larger** for ChromeOS Flex) and select its row (model, size, volumes and a `USB` badge). The list is read when the program starts and whenever you return to its window; click **"Refresh USB drives list"** if the drive does not show up. While **Create** is disabled, a hint under it says why.
 5. Click **"Create Bootable USB Drive"**. The final dialog shows the drive's model, size and volumes. For a **high-risk drive** (larger than 256 GB, with lots of data, or that looks like a backup/external disk) you must also type its identifier (for example `disk4`). Then the drive is erased and the image is written, verified and ejected. **Cancel** stops it; the drive is then left unusable until written again. Results appear under the button instead of in pop-up windows: a green box when the drive was verified and ejected (with **Make another**), a red box with **Try again** for a failed download.
@@ -206,11 +215,12 @@ What each card does:
 
 - **Windows 11** — GPT + FAT32, the ISO files are copied (`install.wim` is split when over 4 GB).
 - **Linux** and **Other ISO** — the image is written byte-for-byte to the drive (like `dd`). Use *Linux* for Ubuntu, Debian, Fedora, Mint, Arch… and *Other ISO* for any other bootable image. Images without a boot signature are refused before anything is erased.
+- **macOS** — a ready-made whole-disk macOS image, also written byte-for-byte. It needs a partition table: a compressed `.dmg` or a single volume is refused before anything is erased, with the `hdiutil` command that converts it. The program recognises these images by their Apple partitions (HFS+, APFS) or by the `.dmg` trailer.
 - **Google Chrome (ChromeOS Flex)** — Google's disk image, also written byte-for-byte. The drive must be at least as large as the image (Google asks for 16 GB or larger).
 
-If the file clearly does not match the card (for example a Linux ISO under *Windows 11*) the program asks before erasing anything, and a file that is not a ChromeOS Flex image under *Google Chrome* is refused.
+If the file clearly does not match the card (for example a Linux ISO under *Windows 11*) the program asks before erasing anything, and a file that is not a ChromeOS Flex image under *Google Chrome* is refused. A file that does not look like a macOS disk image under *macOS* is asked about in the same way.
 
-> Administrator rights are needed on Linux, and on macOS for the direct-write cards (*Google Chrome*, *Linux*, *Other ISO*). The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining.
+> Administrator rights are needed on Linux, and on macOS for the direct-write cards (*Google Chrome*, *Linux*, *macOS*, *Other ISO*). The password is asked and verified right after you confirm, **before** the drive is touched (a wrong or canceled password changes nothing). A progress bar shows the percentage, speed and time remaining.
 >
 > **macOS and Linux/ChromeOS images:** macOS cannot read those images, so the finished drive will **not appear in Finder**, and macOS may say the disk is "not readable". Click **Ignore** — never *Initialize*. The content was already verified against the image.
 
@@ -230,7 +240,7 @@ Google lists these requirements for the computer: Intel or AMD 64-bit processor,
 
 Optional files that make a fresh install start from safer settings. They are **inspired by common security baselines**; the program does **not** claim that the result complies with, or is certified by, any standard. Nothing here chooses a disk, creates an account or sets a password or key: Windows Setup and the Linux installers stay interactive.
 
-> **Experimental.** The scripts were checked with automated tests and simulated systems only (no real Windows, Debian, Ubuntu or Fedora install was run). Try them on a spare computer or a virtual machine first, and read the files before using them: `harden-files` writes them to a folder without touching any drive.
+> **Experimental.** The scripts were checked with automated tests and simulated systems only (no real Windows, Debian, Ubuntu, Fedora or macOS install was changed). Try them on a spare computer or a virtual machine first, and read the files before using them: `harden-files` writes them to a folder without touching any drive.
 
 <p align="center">
   <img src="docs/images/interface-hardening.png" alt="The Hardening seed card: a second small USB drive with auto-install settings, the install target (Ubuntu, Fedora / RHEL, Debian) and the Create Seed Drive button" width="620">
@@ -238,6 +248,7 @@ Optional files that make a fresh install start from safer settings. They are **i
 
 - **Windows 11 (same USB drive):** tick **"Add hardening settings to the Windows installation (optional)"** on the Windows 11 card. A script runs at the **end** of Windows Setup (log: `C:\Windows\Temp\epma-hardening.log`) and turns off SMBv1 and LLMNR, AutoRun/AutoPlay, turns the firewall on, sets a few Microsoft Defender protections (one attack-surface rule in Block mode, four in Audit mode), disables the PowerShell 2.0 feature and WDigest credential caching, turns on script-block logging and an advanced audit policy (the Security log is raised to 128 MiB). **"What does it change?"** lists every setting with its risk. BitLocker, NTLM levels, accounts, disks, language and the product key are left alone. The files are checked byte for byte with the rest of the drive, and if the image already contains one of them the program stops **before** erasing anything.
 - **Linux and others (a second USB drive):** raw-written ISOs cannot take extra files, so the **Hardening seed** card erases a **second, small** USB drive (GPT + FAT32) and writes the files on it. Keep your installer USB and plug the seed drive in next to it. **Ubuntu** (`autoinstall`, drive label `CIDATA`; add `autoinstall` to the boot line, every screen stays interactive), **Fedora / RHEL** (kickstart, label `OEMDRV`, found by the installer by itself) and **Debian** (the installer does **not** find the drive: mount it after installing and run `sudo bash harden-linux.sh`, or `su -` without sudo).
+- **macOS (a second USB drive):** the same card has a **macOS (run after install)** choice for a Mac that is **already installed**. Open the drive in Finder, double-click `audit.command` (a read-only report that needs no password; `[CHANGE] (dry-run)` lines are what the script would change, `[WARN]` lines need a look), then `harden.command` (asks `y`, then your password in the Terminal window); `undo.command` goes back. It turns on the Application Firewall, stealth mode and Gatekeeper, enables automatic update checks and turns off the guest account and automatic login. It **only reports** FileVault, System Integrity Protection and Remote Login, and never changes them. `harden-macos.sh` is plain text, works with the bash that ships with macOS and supports `--dry-run`, `--yes`, `--undo` and `--help`; it remembers every value it changes (in `/var/db/epma-hardening`) so `--undo` puts the original back, and logs to `/var/log/epma-hardening.log`. If a `.command` file does not open from the FAT drive, run `sudo bash /Volumes/EPMA-SEED/harden-macos.sh` in Terminal. The report was run on a real Mac; applying and undoing were only tested against stand-in commands.
 - **Windows 11 (a second USB drive):** the same card has a **Windows 11 (run after install)** choice that works on a Windows 11 that is **already installed** (it takes no part in Windows Setup): open the drive, double-click `audit.cmd` (a read-only report; lines marked `[DIFF]` are not in effect), then `harden.cmd` (asks `y`, then the administrator prompt); `undo.cmd` goes back (it never turns SMBv1 or PowerShell 2.0 back on and cannot restore what was already set before). The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. Opt-in extra: `harden.ps1 -DisableLegacyNetwork` (NetBIOS over TCP/IP and WPAD off).
 - **The Linux script** (`harden-linux.sh`) is plain text, supports `--dry-run`, `--yes`, `--undo` and `--help`, backs up every file it changes (`.epma-bak`), prints each change and logs to `/var/log/epma-hardening.log`. It is idempotent and tries not to lock you out: root or password login over SSH is only turned off when an administrator account with a key exists, and a firewall is not enabled on a computer that runs Docker, libvirt or LXD unless you pass `--yes`.
 
@@ -246,6 +257,7 @@ epma-usb-creator harden-files --target ubuntu --out ./ubuntu-seed          # jus
 epma-usb-creator harden-seed --target fedora --disk disk4 --dry-run        # plan for a seed drive
 epma-usb-creator harden-seed --target windows --disk disk4                 # Windows 11 seed drive
 epma-usb-creator harden-files --target windows-seed --out ./win-seed        # the Windows seed files, no drive
+epma-usb-creator harden-seed --target macos --disk disk4                    # macOS seed drive
 epma-usb-creator write --iso Win11.iso --disk disk4 --hardened             # Windows + hardening files
 ```
 
@@ -256,12 +268,13 @@ The same engine is available without the window:
 ```bash
 epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
 epma-usb-creator list                       # USB drives that can be used (--json available)
-epma-usb-creator detect ubuntu.iso          # windows | linux | chromeos | unknown
+epma-usb-creator detect ubuntu.iso          # windows | linux | chromeos | macos | unknown
 epma-usb-creator sha256 ubuntu.iso --expected <hash>
 epma-usb-creator write --iso ubuntu.iso --disk disk4 --dry-run   # show the plan, change nothing
 epma-usb-creator write --iso ubuntu.iso --disk disk4             # asks you to type the disk id
 epma-usb-creator fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: download + extract
 epma-usb-creator write --iso ~/Downloads/<image>.bin --disk disk4 --mode chromeos
+epma-usb-creator write --iso macos-disk.img --disk disk4 --mode macos   # a whole-disk macOS image
 ```
 
 The hardening commands (`harden-files`, `harden-seed`, `write --hardened`) are shown in [Hardened setup](#hardened-setup-optional).

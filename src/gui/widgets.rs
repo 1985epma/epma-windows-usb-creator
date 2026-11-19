@@ -15,6 +15,7 @@ pub fn image_label(mode: Mode, other: &str) -> String {
     match mode {
         Mode::Windows => tr("Windows 11"),
         Mode::ChromeOs => tr("ChromeOS Flex"),
+        Mode::MacOs => tr("macOS"),
         _ => other.to_string(),
     }
 }
@@ -302,6 +303,7 @@ impl FileCard {
             IsoKind::Windows => tr("Windows 11"),
             IsoKind::Linux => tr("Linux"),
             IsoKind::ChromeOs => tr("ChromeOS Flex"),
+            IsoKind::MacOs => tr("macOS"),
             IsoKind::Unknown => tr("Unknown"),
         }
     }
@@ -577,12 +579,13 @@ impl Default for ShaPanel {
     }
 }
 
-/// The five cards, with the strings of their titles and subtitles (the order of `Card::ORDER`).
+/// The six cards, with the strings of their titles and subtitles (the order of `Card::ORDER`).
 pub fn card_texts(card: Card) -> (String, String) {
     match card {
         Card::Chrome => (tr("Google Chrome"), tr("ChromeOS Flex")),
         Card::Windows => (tr("Windows 11"), tr("Copies the files")),
         Card::Linux => (tr("Linux"), tr("Ubuntu, Fedora...")),
+        Card::Mac => (tr("macOS"), tr("Disk image")),
         Card::Other => (tr("Other ISO"), tr("Any bootable image")),
         Card::Seed => (tr("Hardening seed"), tr("Second USB drive")),
     }

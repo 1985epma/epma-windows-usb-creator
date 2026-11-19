@@ -9,11 +9,12 @@ pub const WINDOWS_HARDENING_LOG_SHOWN: &str = "C:\\Windows\\Temp\\epma-hardening
 
 /// `SEED_CHOICES`: each radio button of the Hardening seed card has a key; this table says which seed target the key
 /// means for the engine (the keys are the target names).
-pub const SEED_CHOICES: [(&str, SeedTarget); 4] = [
+pub const SEED_CHOICES: [(&str, SeedTarget); 5] = [
     ("ubuntu", SeedTarget::Ubuntu),
     ("fedora", SeedTarget::Fedora),
     ("debian", SeedTarget::Debian),
     ("windows", SeedTarget::Windows),
+    ("macos", SeedTarget::MacOs),
 ];
 
 /// `SEED_CHOICES.get(choice)`.
@@ -21,19 +22,20 @@ pub fn seed_target(choice: &str) -> Option<SeedTarget> {
     SEED_CHOICES.iter().find(|(k, _)| *k == choice).map(|(_, t)| *t)
 }
 
-/// `App.seed_target_texts()`: `(choice key, translated name)` for the four radio buttons.
+/// `App.seed_target_texts()`: `(choice key, translated name)` for the five radio buttons.
 pub fn seed_target_texts() -> Vec<(&'static str, String)> {
     vec![
         ("ubuntu", tr("Ubuntu (autoinstall)")),
         ("fedora", tr("Fedora / RHEL (kickstart)")),
         ("debian", tr("Debian (script + preseed)")),
         ("windows", tr("Windows 11 (run after install)")),
+        ("macos", tr("macOS (run after install)")),
     ]
 }
 
 /// `App.seed_step_heading(choice)`: the title of step 2 on the Hardening seed card: what the chosen drive carries.
 pub fn seed_step_heading(choice: &str) -> String {
-    if choice == "windows" {
+    if choice == "windows" || choice == "macos" {
         tr("Hardening scripts")
     } else {
         tr("Auto-install files")
@@ -51,6 +53,8 @@ pub fn seed_target_note(choice: &str) -> String {
                         parameter, and the script to run after the install is on it too."),
         "windows" => tr("Run harden.cmd as administrator on a Windows 11 that is already installed; \
                          audit.cmd shows a report first, undo.cmd goes back."),
+        "macos" => tr("Run harden.command on a Mac that is already installed; audit.command shows a report \
+                       first, undo.command goes back."),
         _ => String::new(),
     }
 }
@@ -106,6 +110,24 @@ pub fn windows_seed_success_texts(ejected: bool) -> (String, String) {
             + &tr("On a Windows 11 that is already installed, open this drive and run audit.cmd \
                    (shows a report, changes nothing), harden.cmd (as administrator) or undo.cmd (goes \
                    back). The scripts were never run on real Windows: try them on a test machine first."),
+    )
+}
+
+/// `(title, text)` of the success panel for the macOS seed drive (new in the Rust build).
+pub fn macos_seed_success_texts(ejected: bool) -> (String, String) {
+    let note = if ejected {
+        tr("The files were checked on the drive and it was ejected — you can unplug it now.")
+    } else {
+        tr("The files were checked on the drive, but it could not be ejected automatically. Eject it from \
+            the file manager before unplugging.")
+    };
+    (
+        tr("macOS hardening drive created and verified"),
+        note + " "
+            + &tr("On a Mac that is already installed, open this drive and double-click audit.command (shows \
+                   a report, changes nothing), then harden.command (asks for your password) or undo.command \
+                   (goes back). Applying and undoing were never tried on a real Mac: try them on a test Mac \
+                   first."),
     )
 }
 
@@ -169,6 +191,10 @@ pub fn panel_text(card: crate::types::Card) -> String {
         Card::Linux => tr("Download the ISO from your distribution's website (Ubuntu, Debian, Fedora, Mint, Arch...), \
                            then choose the file below. It is written to the drive as it is, so it must be a hybrid \
                            image; all current Linux ISOs are. Check its SHA-256 below if the site publishes one."),
+        Card::Mac => tr("A ready-made macOS disk image (.img, or a .dmg converted to a whole-disk image) is written to \
+                         the drive exactly as it is, for example an OpenCore installer. It must be a whole-disk image \
+                         with a partition table; a compressed .dmg or a single volume is refused before anything is \
+                         erased. To make Apple's own installer, use 'createinstallmedia' on a Mac."),
         Card::Other => tr("Any bootable hybrid ISO or disk image is written to the drive exactly as it is. Choose the \
                            file below. Images that cannot boot from a USB drive are refused before anything is erased."),
         Card::Seed => tr("Makes a SECOND, small USB drive (not the installer) with settings for a hardened Linux or \
@@ -256,14 +282,15 @@ mod tests {
                 "Ubuntu (autoinstall)",
                 "Fedora / RHEL (kickstart)",
                 "Debian (script + preseed)",
-                "Windows 11 (run after install)"
+                "Windows 11 (run after install)",
+                "macOS (run after install)"
             ]
         );
     }
 
     #[test]
-    fn there_are_four_radios_and_each_key_maps_to_its_target_only() {
-        assert_eq!(SEED_CHOICES.len(), 4);
+    fn there_are_five_radios_and_each_key_maps_to_its_target_only() {
+        assert_eq!(SEED_CHOICES.len(), 5);
         let keys: Vec<&str> = seed_target_texts().into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, SEED_CHOICES.iter().map(|(k, _)| *k).collect::<Vec<_>>());
         for (key, target) in SEED_CHOICES {
@@ -271,7 +298,7 @@ mod tests {
             assert_eq!(seed_target(key), Some(target));
         }
         let targets: std::collections::HashSet<_> = SEED_CHOICES.iter().map(|(_, t)| *t).collect();
-        assert_eq!(targets.len(), 4);
+        assert_eq!(targets.len(), 5);
         for t in SeedTarget::ALL {
             assert!(targets.contains(&t));
         }
@@ -351,6 +378,45 @@ mod tests {
             assert!(!re.is_match(&text.to_lowercase()), "{text}");
             assert!(!text.contains("ISO"), "there is no image: {text}");
         }
+    }
+
+    #[test]
+    fn the_macos_radio_note_heading_and_success_texts() {
+        assert_eq!(seed_target("macos"), Some(SeedTarget::MacOs));
+        assert_eq!(seed_step_heading("macos"), "Hardening scripts");
+        assert_eq!(
+            seed_target_note("macos"),
+            "Run harden.command on a Mac that is already installed; audit.command shows a report first, \
+             undo.command goes back."
+        );
+        let after = macos_seed_success_texts(true);
+        assert_eq!(after.0, "macOS hardening drive created and verified");
+        for name in ["audit.command", "harden.command", "undo.command"] {
+            assert!(after.1.contains(name), "{name}");
+        }
+        assert!(after.1.contains("never tried on a real Mac"));
+        assert!(after.1.contains("you can unplug it now"));
+        let not_ejected = macos_seed_success_texts(false);
+        assert!(not_ejected.1.contains("could not be ejected automatically"));
+        assert!(!not_ejected.1.contains("you can unplug it now"));
+        let re = regex::Regex::new(r"\b(cis|stig|nist|complian|certif)").unwrap();
+        for text in [&after.0, &after.1, &not_ejected.1] {
+            assert!(!re.is_match(&text.to_lowercase()), "{text}");
+            assert!(!text.contains("ISO"), "there is no image: {text}");
+        }
+    }
+
+    #[test]
+    fn the_macos_texts_are_translated_when_the_language_is_portuguese() {
+        set_test_language("pt");
+        let texts: Vec<String> = seed_target_texts().into_iter().map(|(_, t)| t).collect();
+        let note = seed_target_note("macos");
+        let after = macos_seed_success_texts(true);
+        set_test_language("en");
+        assert_eq!(texts[4], "macOS (executar depois de instalar)");
+        assert!(note.contains("harden.command") && note.contains("desfaz"));
+        assert!(after.0.contains("Pendrive") && after.0.contains("macOS"));
+        assert!(after.1.contains("undo.command") && after.1.contains("Mac de teste"));
     }
 
     #[test]

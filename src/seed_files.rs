@@ -1,5 +1,6 @@
 //! Contents of the hardening seed drives: cloud-init (Ubuntu), kickstart (Fedora/RHEL), preseed (Debian) and the
-//! Windows 11 seed (harden.cmd / audit.cmd / undo.cmd / harden.ps1 / README.txt). OWNER: A5.
+//! Windows 11 seed (harden.cmd / audit.cmd / undo.cmd / harden.ps1 / README.txt) and the macOS seed (harden.command /
+//! audit.command / undo.command / harden-macos.sh / README.txt; new in the Rust build). OWNER: A5.
 //! Port of win11_usb_creator.py lines 7940-8461. Output is byte-identical to the Python (tests/golden/seed-*).
 //!
 //! The files of the "seed drive": a small second USB that is plugged in next to a Linux installer USB. Nothing here
@@ -9,6 +10,7 @@
 //! deterministic: same input, same bytes.
 
 use crate::harden_linux::linux_hardening_script;
+use crate::harden_macos::{describe_hardening_macos_applied, macos_hardening_script, MACOS_HARDENING_NOT_CHANGED};
 use crate::harden_windows::{describe_hardening_windows_applied, windows_hardening_ps1, WINDOWS_HARDENING_NOT_CHANGED};
 use crate::types::{Error, Files, Hardening, Result, SeedTarget};
 
@@ -82,14 +84,74 @@ pub const SEED_WINDOWS_LAUNCHERS: &[WindowsLauncher] = &[
     },
 ];
 
+pub const SEED_MACOS_LABEL: &str = "EPMA-SEED";
+pub const SEED_MACOS_README_WIDTH: usize = 76;
+pub const SEED_MACOS_HARDEN_FILE: &str = "harden-macos.sh";
+/// The log of harden-macos.sh, as shown to the user.
+pub const SEED_MACOS_LOG_SHOWN: &str = "/var/log/epma-hardening.log";
+
+/// One double-click launcher of the macOS seed drive.
+pub struct MacosLauncher {
+    /// File name on the drive.
+    pub name: &'static str,
+    /// The options passed to harden-macos.sh (`--dry-run`, `--undo --yes`...).
+    pub args: &'static str,
+    /// Asks "Continue? [y/N]" first.
+    pub confirm: bool,
+    /// Runs through `sudo` (the report does not need it).
+    pub sudo: bool,
+    /// Lines echoed before anything happens (no single quote in them: they are shell-quoted with ' ').
+    pub banner: &'static [&'static str],
+}
+
+/// SEED_MACOS_LAUNCHERS.
+pub const SEED_MACOS_LAUNCHERS: &[MacosLauncher] = &[
+    MacosLauncher {
+        name: "harden.command",
+        args: "--yes",
+        confirm: true,
+        sudo: true,
+        banner: &[
+            "EPMA USB CREATOR - hardening of this Mac.",
+            "This applies a small set of recommended security settings with harden-macos.sh.",
+            "Nothing is installed and nothing is downloaded. A log is written to",
+            "/var/log/epma-hardening.log. Run audit.command first to see a report.",
+        ],
+    },
+    MacosLauncher {
+        name: "audit.command",
+        args: "--dry-run",
+        confirm: false,
+        sudo: false,
+        banner: &[
+            "EPMA USB CREATOR - report on this Mac.",
+            "This only reports which settings are in effect. It changes nothing and needs",
+            "no administrator password. Nothing is installed and nothing is downloaded.",
+        ],
+    },
+    MacosLauncher {
+        name: "undo.command",
+        args: "--undo --yes",
+        confirm: true,
+        sudo: true,
+        banner: &[
+            "EPMA USB CREATOR - undo the hardening of this Mac.",
+            "This asks harden-macos.sh to put back the values it remembered before it",
+            "changed them. Nothing is installed and nothing is downloaded. A log is",
+            "written to /var/log/epma-hardening.log.",
+        ],
+    },
+];
+
 /// SEED_LABELS: FAT volume label of each seed drive (Ubuntu CIDATA, Fedora OEMDRV, Debian EPMA-SEED, Windows
-/// EPMA-SEED).
+/// EPMA-SEED, macOS EPMA-SEED).
 pub fn seed_label(target: SeedTarget) -> &'static str {
     match target {
         SeedTarget::Ubuntu => "CIDATA",
         SeedTarget::Fedora => "OEMDRV",
         SeedTarget::Debian => "EPMA-SEED",
         SeedTarget::Windows => SEED_WINDOWS_LABEL,
+        SeedTarget::MacOs => SEED_MACOS_LABEL,
     }
 }
 
@@ -100,6 +162,7 @@ fn seed_readme_title(target: SeedTarget) -> &'static str {
         SeedTarget::Fedora => "Fedora / RHEL / Rocky / Alma (kickstart)",
         SeedTarget::Debian => "Debian (script + preseed)",
         SeedTarget::Windows => "Windows 11 (experimental scripts)",
+        SeedTarget::MacOs => "macOS (scripts)",
     }
 }
 
@@ -587,6 +650,7 @@ pub fn linux_seed_files_from(target: SeedTarget, script_text: &str) -> Result<(S
         SeedTarget::Fedora => vec![("ks.cfg", seed_fedora_ks(script))],
         SeedTarget::Debian => vec![("preseed.cfg", seed_debian_preseed(script)?)],
         SeedTarget::Windows => return Err(Error::value("The Windows seed has no Linux files")),
+        SeedTarget::MacOs => return Err(Error::value("The macOS seed has no Linux files")),
     };
     let mut files = Files::new();
     for (name, body) in texts {
@@ -783,6 +847,182 @@ pub fn windows_seed_readme_from(applied: &[String], not_changed: &[(&str, &str, 
     text.into_bytes()
 }
 
+/// A launcher of the macOS seed drive (a bash script Terminal opens when it is double-clicked): ASCII, LF.
+///
+/// It runs harden-macos.sh from its own folder (the folder is resolved and quoted, so a drive or folder name with
+/// spaces works), optionally asks `Continue? [y/N]` first, runs the script (through `sudo` when it changes things: the
+/// password is asked by `sudo` in the Terminal window, never by this program) and waits for Return so that the window
+/// stays open. It never deletes, formats or partitions anything and downloads nothing.
+pub fn macos_seed_launcher(launcher: &MacosLauncher) -> Vec<u8> {
+    let flag = if launcher.args.contains("--dry-run") { "[CHANGE]" } else { "[WARN]" };
+    let mut lines: Vec<String> = vec![
+        "#!/bin/bash".into(),
+        format!("# {}: EPMA hardening seed for macOS (see README.txt).", launcher.name),
+        format!("# Runs harden-macos.sh {} from this folder. Nothing is installed or downloaded.", launcher.args),
+        "here=\"$(cd \"$(dirname \"$0\")\" && pwd)\" || exit 1".into(),
+        "echo".into(),
+    ];
+    lines.extend(launcher.banner.iter().map(|text| format!("echo '{text}'")));
+    lines.push("echo".into());
+    if launcher.confirm {
+        for line in [
+            "printf 'Continue? [y/N] '",
+            "read -r answer",
+            "case \"$answer\" in",
+            "  y | Y | yes | YES) ;;",
+            "  *)",
+            "    echo",
+            "    echo 'Cancelled. Nothing was changed.'",
+            "    printf 'Press Return to close this window. '",
+            "    read -r _",
+            "    exit 1",
+            "    ;;",
+            "esac",
+        ] {
+            lines.push(line.into());
+        }
+    }
+    let run = if launcher.sudo {
+        format!("sudo /bin/bash \"$here/{SEED_MACOS_HARDEN_FILE}\" {}", launcher.args)
+    } else {
+        format!("/bin/bash \"$here/{SEED_MACOS_HARDEN_FILE}\" {}", launcher.args)
+    };
+    lines.push(run);
+    lines.push("rc=$?".into());
+    lines.push("echo".into());
+    lines.push(format!("echo \"Finished with exit code $rc. Read the lines above: a {flag} line means a\""));
+    lines.push(if launcher.args.contains("--dry-run") {
+        "echo \"setting would be changed, so it is not in effect now.\"".into()
+    } else {
+        "echo \"setting is not in effect or needs a look. Nothing is forced.\"".into()
+    });
+    lines.push("printf 'Press Return to close this window. '".into());
+    lines.push("read -r _".into());
+    lines.push("exit \"$rc\"".into());
+    let mut text = lines.join("\n");
+    text.push('\n');
+    text.into_bytes()
+}
+
+/// README.txt of the macOS seed drive: ASCII, LF, lines of at most 76 characters. `applied` is
+/// `describe_hardening_macos_applied(profile)` and `not_changed` is `MACOS_HARDENING_NOT_CHANGED`.
+pub fn macos_seed_readme_from(applied: &[String], not_changed: &[(&str, &str, &str)]) -> Vec<u8> {
+    let mut r = Readme::new(SEED_MACOS_README_WIDTH);
+    r.line("EPMA HARDENING SEED - macOS (scripts)");
+    r.line(&"=".repeat(60));
+    r.heading("What this drive is");
+    r.para(
+        "A small helper drive made by EPMA USB CREATOR. It holds a shell script and three \
+         double-click launchers that apply a small set of recommended security settings to \
+         macOS. It is a SECOND small USB. It is NOT a macOS installer and it does not boot by \
+         itself. Nothing is installed and nothing is downloaded.",
+    );
+    r.heading("How to use it: run it after macOS is installed");
+    for (n, text) in [
+        "Install macOS as usual, then sign in with an administrator account.",
+        "Plug this drive in. It shows up in Finder as EPMA-SEED.",
+        "Double-click audit.command FIRST. A Terminal window opens and prints a report of \
+         what is in effect. It changes nothing and needs no password. In the report [OK] \
+         means in effect, [CHANGE] (dry-run) means the script would change it, [WARN] means \
+         something to look at and [INFO] is information only.",
+        "Then double-click harden.command. It asks 'Continue? [y/N]': press y. Terminal then \
+         asks for your password (sudo): type it in that window.",
+        "Read the lines it prints. A [WARN] line means that a setting is NOT in effect or \
+         needs a look. Nothing was forced.",
+        "To go back, double-click undo.command (it asks 'Continue? [y/N]' too). Read the \
+         limits of undo.command below.",
+    ]
+    .iter()
+    .enumerate()
+    {
+        r.para_with(text, &format!("{}. ", n + 1), "");
+    }
+    r.blank();
+    r.para(
+        "If a .command file does not open when you double-click it (macOS can refuse to run \
+         files from a FAT drive), open Terminal and run the script by hand. This prints the \
+         report, and changes nothing:",
+    );
+    r.line("    bash /Volumes/EPMA-SEED/harden-macos.sh --dry-run");
+    r.para("To apply the settings, or to go back:");
+    r.line("    sudo bash /Volumes/EPMA-SEED/harden-macos.sh");
+    r.line("    sudo bash /Volumes/EPMA-SEED/harden-macos.sh --undo");
+    r.blank();
+    r.para(&format!(
+        "harden.command and undo.command write a log to {SEED_MACOS_LOG_SHOWN}. audit.command \
+         only prints in its window. Running harden.command twice changes nothing more."
+    ));
+    r.heading("Limits of undo.command");
+    for text in [
+        "undo.command puts back the values that harden-macos.sh remembered when it changed \
+         them (they are kept in /var/db/epma-hardening).",
+        "A setting that was already in the wanted state before harden.command ran is not \
+         remembered, so undo.command leaves it as it is.",
+        "A setting that was not set at all before is removed again, so the system default \
+         applies.",
+    ] {
+        r.item(text);
+    }
+    r.heading("What the script changes");
+    for line in applied {
+        r.item(line.split(" -- risk:").next().unwrap_or(""));
+    }
+    r.heading("What it leaves alone");
+    for (_sid, text, why) in not_changed {
+        r.item(&format!("{text}. {why}"));
+    }
+    r.heading("Read the files before you run them");
+    r.para(
+        "harden.command, audit.command, undo.command and harden-macos.sh are plain text \
+         files. Open them in TextEdit (right-click, Open With) and read them first. harden.command \
+         and undo.command also ask you to confirm; audit.command does not.",
+    );
+    r.heading("Honest caveats");
+    for text in [
+        "These settings are inspired by common security baselines. They are a sensible \
+         starting point, not a compliance claim, certification or guarantee.",
+        "The report (audit.command) was run on a real Mac. Applying and undoing were only \
+         tested against stand-in commands, never on a real Mac. Try it on a spare Mac or in \
+         a virtual machine before you use it on a Mac you depend on.",
+        "A Mac managed by a company (a configuration profile or MDM) can stop some settings \
+         from being changed. The script then prints a [WARN] line.",
+        "Nothing here selects a disk, partitions or erases anything, and nothing creates an \
+         account or sets a password.",
+        "This drive is not protected or authenticated in any way: whatever is on it runs \
+         with administrator rights when you use a launcher. Keep it with you.",
+    ] {
+        r.item(text);
+    }
+    let mut text = r.out.join("\n");
+    text.push('\n');
+    text.into_bytes()
+}
+
+/// `(label, files)` of the macOS seed drive from the text of harden-macos.sh and the two lists the README quotes.
+pub fn macos_seed_files_from(
+    script: &str,
+    applied: &[String],
+    not_changed: &[(&str, &str, &str)],
+) -> Result<(String, Files)> {
+    if script.trim().is_empty() {
+        return Err(Error::value("The macOS hardening script is empty"));
+    }
+    let mut files = Files::new();
+    for launcher in SEED_MACOS_LAUNCHERS {
+        files.insert(launcher.name.to_string(), macos_seed_launcher(launcher));
+    }
+    files.insert(SEED_MACOS_HARDEN_FILE.to_string(), ascii_bytes(script.to_string())?);
+    files.insert("README.txt".to_string(), macos_seed_readme_from(applied, not_changed));
+    Ok((SEED_MACOS_LABEL.to_string(), files))
+}
+
+/// `_macos_seed_files(profile)`: the five files of the macOS seed drive.
+fn macos_seed_files(profile: Hardening) -> Result<(String, Files)> {
+    let script = macos_hardening_script(profile)?;
+    let applied = describe_hardening_macos_applied(profile);
+    macos_seed_files_from(script, &applied, MACOS_HARDENING_NOT_CHANGED)
+}
+
 /// `(label, files)` of the Windows seed drive from the bytes of harden.ps1 and the two lists the README quotes (see
 /// `windows_seed_readme_from`). `hardening_files_seed` calls it with the real ones.
 pub fn windows_seed_files_from(
@@ -814,11 +1054,15 @@ fn windows_seed_files(profile: Hardening) -> Result<(String, Files)> {
 /// `profile` is `Hardening::Baseline` (`Hardening::None` has no files and is `Error::Value`). The files never choose a
 /// disk and never contain a password, hash or key; harden-linux.sh is exactly `linux_hardening_script(profile)`.
 /// `SeedTarget::Windows` is the set of the Windows seed drive (harden.cmd, audit.cmd, undo.cmd, harden.ps1,
+/// README.txt); `SeedTarget::MacOs` is the macOS one (harden.command, audit.command, undo.command, harden-macos.sh,
 /// README.txt).
 pub fn hardening_files_seed(target: SeedTarget, profile: Hardening) -> Result<(String, Files)> {
     seed_check_args(profile)?;
     if target == SeedTarget::Windows {
         return windows_seed_files(profile);
+    }
+    if target == SeedTarget::MacOs {
+        return macos_seed_files(profile);
     }
     let text = linux_hardening_script(profile)?;
     linux_seed_files_from(target, text)

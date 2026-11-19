@@ -11,6 +11,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn golden(target: SeedTarget) -> (String, Files) {
+    if target == SeedTarget::MacOs {
+        // There is no Python golden for the macOS seed (it is new in the Rust build): the generated set stands in.
+        let (label, files) =
+            epma_usb_creator::seed_files::hardening_files_seed(target, epma_usb_creator::types::Hardening::Baseline)
+                .expect("the macOS seed files");
+        let mut sorted: Vec<_> = files.into_iter().collect();
+        sorted.sort(); // the golden directories are read in name order
+        return (label, sorted.into_iter().collect());
+    }
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("golden").join(format!("seed-{target}"));
     let label = fs::read_to_string(dir.join("LABEL")).expect("LABEL");
     let mut names: Vec<_> = fs::read_dir(&dir)
@@ -29,6 +38,7 @@ fn expected_names(target: SeedTarget) -> &'static [&'static str] {
         SeedTarget::Fedora => &["README.txt", "harden-linux.sh", "ks.cfg"],
         SeedTarget::Debian => &["README.txt", "harden-linux.sh", "preseed.cfg"],
         SeedTarget::Windows => &["README.txt", "audit.cmd", "harden.cmd", "harden.ps1", "undo.cmd"],
+        SeedTarget::MacOs => &["README.txt", "audit.command", "harden-macos.sh", "harden.command", "undo.command"],
     }
 }
 
@@ -75,6 +85,7 @@ fn the_label_of_every_target_is_a_valid_fat32_label() {
         (SeedTarget::Fedora, "OEMDRV"),
         (SeedTarget::Debian, "EPMA-SEED"),
         (SeedTarget::Windows, "EPMA-SEED"),
+        (SeedTarget::MacOs, "EPMA-SEED"),
     ];
     for (target, expected) in want {
         let (label, _) = golden(target);

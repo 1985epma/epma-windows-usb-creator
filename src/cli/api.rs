@@ -61,6 +61,9 @@ pub trait Engine: Send + Sync {
     fn validate_disk_image(&self, path: &Path) -> Result<()> {
         crate::validate::validate_disk_image(path)
     }
+    fn validate_macos_image(&self, path: &Path) -> Result<()> {
+        crate::validate::validate_macos_image(path)
+    }
     fn detect_iso_kind(&self, path: &Path) -> IsoKind {
         crate::isoinfo::detect_iso_kind(path)
     }

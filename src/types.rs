@@ -201,18 +201,20 @@ pub enum Mode {
     Windows,
     Linux,
     ChromeOs,
+    MacOs,
     Seed,
     Auto,
 }
 
 impl Mode {
-    /// ALL_MODES: the three real image types.
-    pub const ALL: [Mode; 3] = [Mode::Windows, Mode::Linux, Mode::ChromeOs];
+    /// ALL_MODES: the four real image types.
+    pub const ALL: [Mode; 4] = [Mode::Windows, Mode::Linux, Mode::ChromeOs, Mode::MacOs];
     pub fn as_str(self) -> &'static str {
         match self {
             Mode::Windows => "windows",
             Mode::Linux => "linux",
             Mode::ChromeOs => "chromeos",
+            Mode::MacOs => "macos",
             Mode::Seed => "seed",
             Mode::Auto => "auto",
         }
@@ -222,6 +224,7 @@ impl Mode {
             "windows" => Some(Mode::Windows),
             "linux" => Some(Mode::Linux),
             "chromeos" => Some(Mode::ChromeOs),
+            "macos" => Some(Mode::MacOs),
             "seed" => Some(Mode::Seed),
             "auto" => Some(Mode::Auto),
             _ => None,
@@ -233,7 +236,7 @@ impl Mode {
     }
     /// `mode in RAW_MODES`: written byte for byte to the whole drive.
     pub fn is_raw(self) -> bool {
-        matches!(self, Mode::Linux | Mode::ChromeOs)
+        matches!(self, Mode::Linux | Mode::ChromeOs | Mode::MacOs)
     }
 }
 
@@ -281,17 +284,20 @@ pub enum SeedTarget {
     Fedora,
     Debian,
     Windows,
+    MacOs,
 }
 
 impl SeedTarget {
     /// SEED_TARGETS
-    pub const ALL: [SeedTarget; 4] = [SeedTarget::Ubuntu, SeedTarget::Fedora, SeedTarget::Debian, SeedTarget::Windows];
+    pub const ALL: [SeedTarget; 5] =
+        [SeedTarget::Ubuntu, SeedTarget::Fedora, SeedTarget::Debian, SeedTarget::Windows, SeedTarget::MacOs];
     pub fn as_str(self) -> &'static str {
         match self {
             SeedTarget::Ubuntu => "ubuntu",
             SeedTarget::Fedora => "fedora",
             SeedTarget::Debian => "debian",
             SeedTarget::Windows => "windows",
+            SeedTarget::MacOs => "macos",
         }
     }
     pub fn parse(s: &str) -> Option<SeedTarget> {
@@ -311,6 +317,7 @@ pub enum IsoKind {
     Windows,
     Linux,
     ChromeOs,
+    MacOs,
     Unknown,
 }
 
@@ -320,6 +327,7 @@ impl IsoKind {
             IsoKind::Windows => "windows",
             IsoKind::Linux => "linux",
             IsoKind::ChromeOs => "chromeos",
+            IsoKind::MacOs => "macos",
             IsoKind::Unknown => "unknown",
         }
     }
@@ -329,6 +337,7 @@ impl IsoKind {
             IsoKind::Windows => Some(Mode::Windows),
             IsoKind::Linux => Some(Mode::Linux),
             IsoKind::ChromeOs => Some(Mode::ChromeOs),
+            IsoKind::MacOs => Some(Mode::MacOs),
             IsoKind::Unknown => None,
         }
     }
@@ -338,6 +347,7 @@ impl IsoKind {
             IsoKind::Windows => Some(Card::Windows),
             IsoKind::Linux => Some(Card::Linux),
             IsoKind::ChromeOs => Some(Card::Chrome),
+            IsoKind::MacOs => Some(Card::Mac),
             IsoKind::Unknown => None,
         }
     }
@@ -355,18 +365,20 @@ pub enum Card {
     Chrome,
     Windows,
     Linux,
+    Mac,
     Other,
     Seed,
 }
 
 impl Card {
     /// CARD_ORDER
-    pub const ORDER: [Card; 5] = [Card::Chrome, Card::Windows, Card::Linux, Card::Other, Card::Seed];
+    pub const ORDER: [Card; 6] = [Card::Chrome, Card::Windows, Card::Linux, Card::Mac, Card::Other, Card::Seed];
     pub fn as_str(self) -> &'static str {
         match self {
             Card::Chrome => "chrome",
             Card::Windows => "windows",
             Card::Linux => "linux",
+            Card::Mac => "mac",
             Card::Other => "other",
             Card::Seed => "seed",
         }
@@ -377,6 +389,7 @@ impl Card {
             Card::Chrome => Mode::ChromeOs,
             Card::Windows => Mode::Windows,
             Card::Linux | Card::Other => Mode::Linux,
+            Card::Mac => Mode::MacOs,
             Card::Seed => Mode::Seed,
         }
     }

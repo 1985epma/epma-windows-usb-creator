@@ -11,6 +11,7 @@
 //! script (and, with the golden harden.ps1, on the Windows drive).
 
 use epma_usb_creator::harden_linux::linux_hardening_script;
+use epma_usb_creator::harden_macos::{describe_hardening_macos_applied, MACOS_HARDENING_NOT_CHANGED};
 use epma_usb_creator::seed_files::*;
 use epma_usb_creator::types::{Error, Files, Hardening, Mode, SeedTarget};
 use regex::Regex;
@@ -98,14 +99,18 @@ fn expected_files(target: SeedTarget) -> BTreeSet<&'static str> {
         SeedTarget::Debian => ["preseed.cfg", "harden-linux.sh", "README.txt"].into(),
         // Windows: only the "run after install" files (no answer file, no marker, no SetupComplete.cmd)
         SeedTarget::Windows => ["harden.cmd", "audit.cmd", "undo.cmd", "harden.ps1", "README.txt"].into(),
+        // macOS: the same idea with double-click launchers; the script is run after macOS is installed
+        SeedTarget::MacOs => {
+            ["harden.command", "audit.command", "undo.command", "harden-macos.sh", "README.txt"].into()
+        }
     }
 }
 
 fn script_file(target: SeedTarget) -> &'static str {
-    if target == SeedTarget::Windows {
-        "harden.ps1"
-    } else {
-        "harden-linux.sh"
+    match target {
+        SeedTarget::Windows => "harden.ps1",
+        SeedTarget::MacOs => "harden-macos.sh",
+        _ => "harden-linux.sh",
     }
 }
 
@@ -115,6 +120,7 @@ fn config_file(target: SeedTarget) -> &'static str {
         SeedTarget::Fedora => "ks.cfg",
         SeedTarget::Debian => "preseed.cfg",
         SeedTarget::Windows => "harden.cmd",
+        SeedTarget::MacOs => "harden.command",
     }
 }
 
@@ -122,7 +128,7 @@ fn allowed_label(target: SeedTarget) -> &'static str {
     match target {
         SeedTarget::Ubuntu => "CIDATA",
         SeedTarget::Fedora => "OEMDRV",
-        SeedTarget::Debian | SeedTarget::Windows => "EPMA-SEED",
+        SeedTarget::Debian | SeedTarget::Windows | SeedTarget::MacOs => "EPMA-SEED",
     }
 }
 
@@ -156,10 +162,15 @@ fn describe_lines() -> Vec<String> {
 
 /// The seed of `target` for a given Linux script (and the fake Windows script).
 fn seed_with(target: SeedTarget, script: &str) -> (String, Files) {
-    if target == SeedTarget::Windows {
-        windows_seed_files_from(FAKE_PS1.to_vec(), &applied_lines(), NOT_CHANGED).unwrap()
-    } else {
-        linux_seed_files_from(target, script).unwrap()
+    match target {
+        SeedTarget::Windows => windows_seed_files_from(FAKE_PS1.to_vec(), &applied_lines(), NOT_CHANGED).unwrap(),
+        SeedTarget::MacOs => macos_seed_files_from(
+            script,
+            &describe_hardening_macos_applied(Hardening::Baseline),
+            MACOS_HARDENING_NOT_CHANGED,
+        )
+        .unwrap(),
+        _ => linux_seed_files_from(target, script).unwrap(),
     }
 }
 
@@ -467,7 +478,7 @@ fn contract_constants() {
     assert_eq!(Hardening::Baseline.as_str(), "baseline");
     assert_eq!(Hardening::ALL, [Hardening::None, Hardening::Baseline]);
     let names: Vec<&str> = SeedTarget::ALL.iter().map(|t| t.as_str()).collect();
-    assert_eq!(names, ["ubuntu", "fedora", "debian", "windows"]);
+    assert_eq!(names, ["ubuntu", "fedora", "debian", "windows", "macos"]);
 }
 
 #[test]

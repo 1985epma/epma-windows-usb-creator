@@ -568,6 +568,68 @@ mod image_type {
     }
 
     #[test]
+    fn the_macos_card_writes_the_macos_mode_and_a_macos_image_selects_it() {
+        let mut h = Harness::new();
+        h.state.select_card(Card::Mac);
+        assert_eq!(h.state.mode, Mode::MacOs);
+        assert!(h.state.mode.is_raw(), "a whole-disk image is written byte for byte");
+        // choosing a file whose content is a macOS image switches to the macOS card from any other
+        h.state.select_card(Card::Linux);
+        *h.be.iso_kind.lock().unwrap() = IsoKind::MacOs;
+        h.state.set_iso("/tmp/opencore.img");
+        assert_eq!(h.state.card, Card::Mac);
+        assert_eq!(h.state.mode, Mode::MacOs);
+        assert_eq!(h.state.iso_card.kind, IsoKind::MacOs);
+        assert_eq!(super::super::widgets::FileCard::kind_name(IsoKind::MacOs), "macOS");
+        assert_eq!(h.state.card_title(Card::Mac), "macOS");
+        assert_eq!(super::super::widgets::card_texts(Card::Mac), ("macOS".to_string(), "Disk image".to_string()));
+        assert_eq!(super::super::widgets::image_label(Mode::MacOs, "x"), "macOS");
+    }
+
+    #[test]
+    fn a_linux_or_windows_image_under_the_macos_card_asks_before_anything_is_erased() {
+        let h = Harness::new();
+        for kind in [IsoKind::Linux, IsoKind::Windows, IsoKind::Unknown] {
+            *h.be.iso_kind.lock().unwrap() = kind;
+            h.dialogs.set_yes(false);
+            assert!(!image_matches_choice(&*h.be, &*h.dialogs, Mode::MacOs, "/tmp/x.iso"), "{kind:?}");
+            assert_eq!(h.dialogs.titles(Some("question")), vec!["This does not look like a macOS disk image"]);
+            assert!(h.dialogs.last().unwrap().2.contains("/tmp/x.iso"));
+            h.dialogs.clear();
+            // the user may insist: the engine still refuses an image without a partition table
+            h.dialogs.set_yes(true);
+            assert!(image_matches_choice(&*h.be, &*h.dialogs, Mode::MacOs, "/tmp/x.iso"), "{kind:?}");
+            h.dialogs.clear();
+        }
+        // a macOS image passes without a question
+        *h.be.iso_kind.lock().unwrap() = IsoKind::MacOs;
+        assert!(image_matches_choice(&*h.be, &*h.dialogs, Mode::MacOs, "/tmp/x.img"));
+        assert_eq!(h.dialogs.count(), 0);
+    }
+
+    #[test]
+    fn a_macos_image_under_the_windows_card_asks_too() {
+        let h = Harness::new();
+        *h.be.iso_kind.lock().unwrap() = IsoKind::MacOs;
+        h.dialogs.set_yes(false);
+        assert!(!image_matches_choice(&*h.be, &*h.dialogs, Mode::Windows, "/tmp/x.img"));
+        assert_eq!(h.dialogs.titles(Some("question")), vec!["This does not look like Windows"]);
+        assert!(h.dialogs.last().unwrap().2.contains("looks like a macOS image"));
+    }
+
+    #[test]
+    fn the_macos_texts_are_translated() {
+        set_test_language("pt");
+        let title = Harness::new().state.card_title(Card::Mac);
+        let subtitle = super::super::widgets::card_texts(Card::Mac).1;
+        let panel = super::super::texts::panel_text(Card::Mac);
+        set_test_language("en");
+        assert_eq!(title, "macOS");
+        assert_eq!(subtitle, "Imagem de disco");
+        assert!(panel.contains("imagem de disco do macOS"), "{panel}");
+    }
+
+    #[test]
     fn the_image_checks_do_not_apply_to_the_seed_drive() {
         let h = Harness::new();
         assert!(image_matches_choice(&*h.be, &*h.dialogs, Mode::Seed, "/tmp/whatever.iso"));
@@ -1684,27 +1746,27 @@ mod hardening {
     use super::*;
 
     #[test]
-    fn the_seed_card_is_the_fifth_and_writes_the_seed_mode() {
-        assert_eq!(Card::ORDER, [Card::Chrome, Card::Windows, Card::Linux, Card::Other, Card::Seed]);
+    fn the_seed_card_is_the_last_and_writes_the_seed_mode() {
+        assert_eq!(Card::ORDER, [Card::Chrome, Card::Windows, Card::Linux, Card::Mac, Card::Other, Card::Seed]);
         assert_eq!(Card::Seed.mode(), Mode::Seed);
         assert!(!Mode::Seed.is_raw(), "the seed mode is not a raw write");
         assert!(!Mode::Seed.is_image_mode(), "and not an image kind");
-        for kind in [IsoKind::Windows, IsoKind::Linux, IsoKind::ChromeOs, IsoKind::Unknown] {
+        for kind in [IsoKind::Windows, IsoKind::Linux, IsoKind::ChromeOs, IsoKind::MacOs, IsoKind::Unknown] {
             assert_ne!(kind.card(), Some(Card::Seed), "no image is ever detected as \"the seed\"");
             assert_ne!(kind.mode(), Some(Mode::Seed));
         }
         let mut cards: Vec<_> = Card::ORDER.to_vec();
         cards.dedup();
-        assert_eq!(cards.len(), 5);
+        assert_eq!(cards.len(), 6);
     }
 
     #[test]
-    fn there_are_five_cards_in_order_with_the_right_texts() {
+    fn there_are_six_cards_in_order_with_the_right_texts() {
         let h = Harness::new();
         assert_eq!(h.state.card_title(Card::Seed), "Hardening seed");
         assert_eq!(super::super::widgets::card_texts(Card::Seed).1, "Second USB drive");
         let titles: Vec<String> = Card::ORDER.iter().map(|c| h.state.card_title(*c)).collect();
-        assert_eq!(titles, ["Google Chrome", "Windows 11", "Linux", "Other ISO", "Hardening seed"]);
+        assert_eq!(titles, ["Google Chrome", "Windows 11", "Linux", "macOS", "Other ISO", "Hardening seed"]);
     }
 
     #[test]
@@ -1713,7 +1775,7 @@ mod hardening {
         assert!(!h.state.hardening, "off by default");
         h.state.hardening = true;
         assert_eq!(h.state.hardening_selected(None), Hardening::Baseline);
-        for card in [Card::Linux, Card::Chrome, Card::Other, Card::Seed] {
+        for card in [Card::Linux, Card::Chrome, Card::Mac, Card::Other, Card::Seed] {
             h.state.select_card(card);
             assert_eq!(h.state.hardening_selected(None), Hardening::None, "{card:?}");
         }
@@ -2261,6 +2323,10 @@ mod write_flow {
     }
 
     // ----- results -----
+    fn seed_note_for(choice: &str) -> String {
+        super::super::texts::seed_target_note(choice)
+    }
+
     #[test]
     fn success_panel_for_the_seed_drive() {
         let mut h = setup(true);
@@ -2303,6 +2369,29 @@ mod write_flow {
         assert_eq!(panel.kind, super::super::widgets::BannerKind::Warning);
         assert!(panel.message_text.contains("could not be ejected automatically"));
         assert!(!panel.message_text.contains("you can unplug it now"));
+    }
+
+    #[test]
+    fn success_panel_for_the_macos_choice_hands_the_macos_target_to_the_engine() {
+        let mut h = setup(true);
+        h.state.select_card(Card::Seed);
+        h.state.set_seed_choice("macos");
+        assert_eq!(h.state.seed_note(), seed_note_for("macos"));
+        h.write();
+        let panel = &h.state.success_panel;
+        assert!(panel.shown);
+        assert!(panel.title_text.starts_with("macOS hardening drive created and verified"));
+        for name in ["audit.command", "harden.command", "undo.command"] {
+            assert!(panel.message_text.contains(name), "{name}");
+        }
+        assert!(!panel.message_text.contains("next to the installer"), "the Linux wording does not apply");
+        assert!(!panel.message_text.contains("ISO"), "there was no image");
+        // not ejected: the amber variant
+        h.be.set_seed(|_, _| Ok(false));
+        h.write();
+        let panel = &h.state.success_panel;
+        assert_eq!(panel.kind, super::super::widgets::BannerKind::Warning);
+        assert!(panel.message_text.contains("could not be ejected automatically"));
     }
 
     #[test]

@@ -6,10 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 The release workflow (`.github/workflows/release.yml`) publishes the section whose
-heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses the
-`## [1.1.0]` section below. Keep the heading format `## [X.Y.Z] - date`.
+heading matches the pushed tag as the GitHub release notes: tag `v1.2.0` uses the
+`## [1.2.0]` section below. Keep the heading format `## [X.Y.Z] - date`.
 
 ## [Unreleased]
+
+## [1.2.0] - unreleased
 
 ### Changed
 
@@ -23,7 +25,24 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ### Added
 
-- **Windows 11 support and an MSI package.** The program now runs on Windows 11 (window and command line) and
+- **A *macOS* image type.** A sixth card, next to *Google Chrome*, *Windows 11*, *Linux*, *Other ISO* and the
+  Hardening seed, writes a ready-made whole-disk macOS image (`.img`, or a `.dmg` converted to a whole-disk image,
+  for example an OpenCore installer) byte for byte to the whole drive and reads it back, on macOS, Linux and
+  Windows. The image is recognised by its Apple partitions (HFS+, APFS, Apple Boot) or by the `.dmg` trailer; the
+  command line has `--mode macos` and `detect` reports `macos`. A compressed `.dmg` or a single volume (no
+  partition table) is refused before anything is erased, with the `hdiutil convert` command that fixes it.
+  Apple's own installer (`createinstallmedia`) is not part of this: it needs the *Install macOS* app and a Mac.
+  Not verified on a real drive.
+- **A macOS target for the Hardening seed.** The seed card has a fifth choice, *macOS (run after install)*, and the
+  command line has `harden-seed --target macos` and `harden-files --target macos`. The drive (FAT32, label
+  `EPMA-SEED`) carries `harden-macos.sh`, three double-click launchers (`audit.command`, `harden.command`,
+  `undo.command`) and a README. The script turns on the Application Firewall, stealth mode and Gatekeeper, enables
+  automatic update checks (major macOS upgrades are not installed) and turns off the guest account and automatic
+  login; it only reports FileVault, System Integrity Protection and Remote Login. It works with the bash 3.2 that
+  ships with macOS, supports `--dry-run`, `--yes`, `--undo` and `--help`, remembers every value it changes so
+  `--undo` puts the original back, and logs to `/var/log/epma-hardening.log`. The report (`--dry-run`) was run on a
+  real Mac; applying and undoing were only tested against stand-in commands, never on a real Mac.
+- **Windows 11 support.** The program now runs on Windows 11 (window and command line) and
   does everything it does elsewhere: *Windows 11* (GPT + FAT32, `install.wim` split with DISM when over 4 GB),
   *Google Chrome*, *Linux* and *Other ISO* (written byte for byte to `\\.\PhysicalDriveN`, unbuffered and
   read back), and the Hardening seed drive. It uses only what ships with Windows (PowerShell Storage cmdlets,
@@ -31,15 +50,14 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   accepted where an identifier is typed. Only USB drives are listed and the disk holding the running Windows
   is never offered. There is no password: the program must run as Administrator (the GUI relaunches itself
   with the UAC prompt; the command line says how to open an elevated terminal). The audit log is in
-  `%LOCALAPPDATA%\epma-win11-usb-creator`. Files are copied and compared in plain Python (no rsync); the raw
+  `%LOCALAPPDATA%\epma-win11-usb-creator`. Files are copied and compared by the program itself (no rsync); the raw
   image's partition table is written last, so Windows cannot mount the half-written image.
-  - **MSI** (`epma-usb-creator-<version>-x64.msi`, built in CI with PyInstaller + WiX): per-machine install,
-    Start-menu shortcut that runs as Administrator, optional `epma-usb-creator-cli.exe` on the `PATH`,
-    upgrade/uninstall, attached to every release with its SHA-256, provenance and SBOM. Not code-signed.
+  - **Release archive** (`epma-usb-creator-<version>-x86_64-pc-windows-msvc.zip`): attached to every release
+    with its SHA-256, provenance and SBOM, next to the Linux and macOS ones. Not code-signed.
   - **Not verified on real hardware:** this was written without a Windows machine. The unit tests simulate
-    PowerShell, DISM and the raw disk; the end-to-end test on a VHD and the MSI build/install smoke test run only
-    in CI (`windows.yml`). Windows limits FAT32 to 32 GB, so the *Windows 11* card makes a 30 GiB partition on
-    bigger drives. `install.esd` over 4 GB cannot be split on Windows.
+    PowerShell, DISM and the raw disk, and the Windows-only code is compiled and tested in CI on a Windows runner.
+    Windows limits FAT32 to 32 GB, so the *Windows 11* card makes a 30 GiB partition on bigger drives.
+    `install.esd` over 4 GB cannot be split on Windows.
 - **Hardened setup (optional, experimental).** Files that make a fresh install start from safer
   settings, "inspired by common security baselines" (no claim of compliance or certification).
   Nothing in them selects a disk, creates an account or contains a password or key.
@@ -71,8 +89,8 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
     kernel modules, core dumps. It only turns off SSH root or password login when an administrator account with a key
     exists, only raises sysctl values, and does not enable a firewall on a computer that runs Docker,
     libvirt or LXD unless `--yes` is given.
-  - **Command line:** `write --hardened` (Windows only), `harden-seed --target ubuntu|fedora|debian --disk DISK`
-    and `harden-files --target windows|ubuntu|fedora|debian --out DIR` (writes the files to a new or empty
+  - **Command line:** `write --hardened` (Windows only), `harden-seed --target ubuntu|fedora|debian|windows|macos --disk DISK`
+    and `harden-files --target windows|windows-seed|ubuntu|fedora|debian|macos --out DIR` (writes the files to a new or empty
     folder, no drive involved, so you can read them first).
   - **Not verified:** the PowerShell script was never executed (no PowerShell here) and the Linux script and seeds were
     only run against simulated systems; real Windows, Ubuntu, Fedora and Debian installs, and the loop-device end-to-end
@@ -81,7 +99,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
 
 ### Changed
 
-- **Five cards.** The fifth card, *Hardening seed*, needs no image file (see above).
+- **Six cards.** The last card, *Hardening seed*, needs no image file (see above); *macOS* is the fourth.
 - **Quieter window.** *Create Bootable USB Drive* is now a filled accent-colour button and the
   only highlighted element; there is a single *Cancel* button that stops whatever is running
   (a download, an extraction or the write) instead of three. The erase warning is one amber
@@ -97,11 +115,10 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   a cancel and every confirmation keep their dialogs.
 - **Header** with the version, a *Ready* / *Missing tools* chip (with *Install missing
   dependencies* beside it) and a *Help* link; the old dependency row is gone.
-- **Three numbered steps** (1 Image type, 2 Image, 3 USB drive); the four cards share the full
+- **Three numbered steps** (1 Image type, 2 Image, 3 USB drive); the six cards share the full
   width; the panel under them is only as tall as the chosen card needs (no blank area) and the
   window settles back to its usual height; the chosen file is a card with its name, folder,
-  size and detected type. Drag and drop of an image was not added: Tk 9.1 on macOS has no
-  file-drop support in the standard library.
+  size and detected type. Drag and drop of an image was not added.
 
 ## [1.1.0] - 2026-10-17
 
@@ -225,6 +242,7 @@ heading matches the pushed tag as the GitHub release notes: tag `v1.1.0` uses th
   workflow producing SHA256SUMS and a build-provenance attestation.
 - Homebrew formula (`1985epma/homebrew-tap`).
 
-[Unreleased]: https://github.com/1985epma/epma-windows-usb-creator/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/1985epma/epma-windows-usb-creator/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/1985epma/epma-windows-usb-creator/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/1985epma/epma-windows-usb-creator/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/1985epma/epma-windows-usb-creator/releases/tag/v1.0.0

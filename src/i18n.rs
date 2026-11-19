@@ -470,6 +470,7 @@ mod tests {
             "Windows 11",
             "ChromeOS Flex",
             "Google Chrome",
+            "macOS",
             "Linux",
             "Ubuntu, Fedora...",
             "Ubuntu (autoinstall)",

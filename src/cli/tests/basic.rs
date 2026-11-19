@@ -113,7 +113,9 @@ fn usage_errors_are_worded_like_argparse() {
     assert!(err.contains("epma-usb-creator write: error: the following arguments are required: --disk"), "{err}");
     let (_c, _o, err) = t.run(&["write", "--iso", "x", "--disk", "y", "--mode", "weird"]);
     assert!(
-        err.contains("argument --mode: invalid choice: 'weird' (choose from 'auto', 'windows', 'linux', 'chromeos')"),
+        err.contains(
+            "argument --mode: invalid choice: 'weird' (choose from 'auto', 'windows', 'linux', 'chromeos', 'macos')"
+        ),
         "{err}"
     );
     let (_c, _o, err) = t.run(&["list", "--nope"]);

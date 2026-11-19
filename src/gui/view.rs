@@ -271,7 +271,8 @@ impl EpmaApp {
 
     fn cards(&mut self, ui: &mut Ui) {
         let available = ui.available_width();
-        let width = ((available - 4.0 * CARD_GAP) / 5.0).max(40.0);
+        let count = Card::ORDER.len() as f32;
+        let width = ((available - (count - 1.0) * CARD_GAP) / count).max(40.0);
         let enabled = self.state.controls.cards_enabled;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = CARD_GAP;
@@ -294,7 +295,7 @@ impl EpmaApp {
             Card::Chrome => self.chrome_panel(ui),
             Card::Windows => self.windows_panel(ui),
             Card::Seed => self.seed_panel(ui),
-            Card::Linux | Card::Other => {}
+            Card::Linux | Card::Mac | Card::Other => {}
         }
     }
 
@@ -368,8 +369,8 @@ impl EpmaApp {
         let radios = texts::seed_target_texts();
         let mut choice = self.state.seed_choice.clone();
         ui.add_enabled_ui(enabled, |ui| {
-            // Four radio buttons do not fit one row of a 780 px window (the texts are long, more so in Portuguese):
-            // two rows of two.
+            // The radio buttons do not fit one row of a 780 px window (the texts are long, more so in Portuguese):
+            // rows of two (three rows for the five targets).
             for pair in radios.chunks(2) {
                 ui.horizontal(|ui| {
                     for (key, text) in pair {
@@ -430,6 +431,7 @@ impl EpmaApp {
                             crate::types::IsoKind::Windows => ACCENT,
                             crate::types::IsoKind::Linux => Color32::from_rgb(0xbf, 0x5a, 0xf2),
                             crate::types::IsoKind::ChromeOs => Color32::from_rgb(0x30, 0xa4, 0x6c),
+                            crate::types::IsoKind::MacOs => Color32::from_rgb(0xe0, 0x7b, 0x1f),
                             crate::types::IsoKind::Unknown => MUTED,
                         };
                         egui::Frame::new().fill(color).corner_radius(4).inner_margin(Margin::symmetric(7, 1)).show(
@@ -1031,6 +1033,13 @@ fn option_card(ui: &mut Ui, card: Card, width: f32, selected: bool, enabled: boo
                 Stroke::new(3.0, glyph),
             ));
         }
+        Card::Mac => {
+            // a monitor on its stand
+            let screen = Rect::from_center_size(pos2(c.x, c.y - 3.0), vec2(40.0, 28.0));
+            painter.rect_stroke(screen, CornerRadius::same(4), Stroke::new(3.0, glyph), StrokeKind::Inside);
+            painter.line_segment([pos2(c.x, c.y + 11.0), pos2(c.x, c.y + 18.0)], Stroke::new(3.0, glyph));
+            painter.line_segment([pos2(c.x - 10.0, c.y + 18.0), pos2(c.x + 10.0, c.y + 18.0)], Stroke::new(3.0, glyph));
+        }
         Card::Other => {
             painter.circle_stroke(c, 18.5, Stroke::new(3.0, glyph));
             painter.circle_stroke(c, 4.5, Stroke::new(3.0, glyph));
@@ -1038,7 +1047,7 @@ fn option_card(ui: &mut Ui, card: Card, width: f32, selected: bool, enabled: boo
     }
     let (title, subtitle) = card_texts(card);
     let room = (rect.width() - 16.0).max(10.0);
-    // five cards share the width of the window: a longer title or a translation shrinks (down to 8 pt), then is cut
+    // six cards share the width of the window: a longer title or a translation shrinks (down to 8 pt), then is cut
     let measure_size = |size: f32, text: &str| {
         painter.layout_no_wrap(text.to_string(), FontId::proportional(size), Color32::WHITE).size().x
     };

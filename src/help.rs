@@ -10,6 +10,10 @@
 //! * Command line: "(no Tkinter needed)" is now "(no window is needed)".
 //! * Troubleshooting: the entry about "Tkinter is not available for this Python installation" (with its Tk install
 //!   instructions) is gone, because the program no longer depends on Tk or Python.
+//! * macOS: the Rust build has a sixth card (the image type "macOS") that the Python program does not have, so the
+//!   sections that list the image types (Overview, Getting the image, The drive and the Create button,
+//!   Verification and eject, Command line) name it too. `tests/test_help_a5.rs` lists these changes one by one.
+//! * macOS seed: the same, for the hardening seed's fifth target (Hardened setup, Command line).
 
 use crate::cli::{EXIT_EJECT_FAILED, EXIT_ERROR, EXIT_INTERRUPTED, EXIT_OK, EXIT_USAGE, EXIT_VERIFY_FAILED};
 use crate::constants::{
@@ -62,11 +66,12 @@ pub fn help_sections_with(
             "Overview".to_string(),
             format!(r#"EPMA USB CREATOR {VERSION} writes a bootable USB drive from an ISO image on Windows 11, macOS and Linux.
 
-## Four image types and the hardening seed (five cards)
+## Five image types and the hardening seed (six cards)
 • Google Chrome — ChromeOS Flex, Google's free ChromeOS for PCs and Macs. The disk image is written byte for byte, like a Linux ISO. The program can download Google's official image for you.
 • Windows 11 — erases the drive, creates a GPT partition table with one FAT32 partition (label {VOL_NAME}) and copies the files of the ISO. The result boots on UEFI computers. Windows' install.wim / install.esd is usually larger than the 4 GB FAT32 limit, so it is split into .swm parts with wimlib-imagex.
 • Linux and Other ISO — both write the ISO byte for byte to the whole drive (like dd). Use Linux for Ubuntu, Debian, Fedora, Mint, Arch and other "hybrid" images, and Other ISO for any other bootable image. An ISO that cannot boot from a USB drive is refused before anything is erased.
-• Hardening seed (optional, the fifth card) — needs no image. It erases a second, small USB drive and writes hardening files on it for Ubuntu, Fedora/RHEL, Debian or Windows 11. See "Hardened setup (optional)".
+• macOS — writes a ready-made whole-disk macOS image (.img, or a .dmg converted to a whole-disk image, for example an OpenCore installer) byte for byte to the whole drive. A compressed .dmg or a single volume is refused before anything is erased. For Apple's own installer use 'createinstallmedia' on a Mac.
+• Hardening seed (optional, the sixth card) — needs no image. It erases a second, small USB drive and writes hardening files on it for Ubuntu, Fedora/RHEL, Debian, Windows 11 or macOS. See "Hardened setup (optional)".
 
 ## What always happens
 • Only drives attached over USB are offered. The system disk and internal disks are never listed.
@@ -75,8 +80,8 @@ pub fn help_sections_with(
 
 ## The window, from top to bottom
 • The top row shows the program name and version, a status chip for the tools it needs ("Ready" in green, "Missing tools" in amber with "Install missing dependencies" next to it) and "Help", which opens this documentation (F1 does the same).
-• The page has three numbered steps. 1 Image type: five equal cards. Four choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux and Other ISO); the fifth, "Hardening seed", makes a separate drive and needs no image file.
-• 2 Image: the panel under the cards changes with the card and shows where to get that kind of image. "Select existing ISO file..." picks the image you already have; the chosen file is shown with its name, folder, size and the type the program recognised (Windows 11, Linux, ChromeOS Flex or Unknown), with an optional SHA-256 check behind a link.
+• The page has three numbered steps. 1 Image type: six equal cards. Five choose the type of image (Google Chrome (ChromeOS Flex), Windows 11, Linux, macOS and Other ISO); the sixth, "Hardening seed", makes a separate drive and needs no image file.
+• 2 Image: the panel under the cards changes with the card and shows where to get that kind of image. "Select existing ISO file..." picks the image you already have; the chosen file is shown with its name, folder, size and the type the program recognised (Windows 11, Linux, ChromeOS Flex, macOS or Unknown), with an optional SHA-256 check behind a link.
 • 3 USB drive: the list of USB drives (read when the program starts and whenever you return to the window) and "Refresh USB drives list".
 • "Create Bootable USB Drive" (the blue button), the one "Cancel" button for whatever is running (a download, an extraction or the write), its progress bar, and "Show details", which opens the log.
 • Results appear under the Create button instead of in pop-up windows: a red box for a failed download, extraction, drive listing or tool installation (with "Try again" where it makes sense, and "Dismiss"), and a green box when the drive was written, verified and ejected, with "Make another" to start over. A failed or canceled write also keeps its pop-up, because the state of the drive matters.
@@ -159,9 +164,16 @@ pub fn help_sections_with(
 • The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. The log is C:\Windows\Temp\epma-hardening.log.
 • Extra, opt-in: in an elevated PowerShell run harden.ps1 with -DisableLegacyNetwork to also turn off NetBIOS over TCP/IP and WPAD proxy auto-discovery (it can break very old networks).
 
+## macOS (a second USB drive)
+• Choose the "Hardening seed" card and "macOS (run after install)", select a small USB drive and click "Create Seed Drive". The drive is erased and checked like any other; it is NOT an installer.
+• It works on a Mac that is already installed (it does not take part in the installation). Open the drive in Finder and double-click audit.command first: it only reports what is in effect and needs no password (lines marked [CHANGE] would be changed, lines marked [WARN] need a look). Then double-click harden.command, answer y and type your password in the Terminal window. If a .command file does not open, run: sudo bash /Volumes/EPMA-SEED/harden-macos.sh
+• It turns on the Application Firewall, stealth mode and Gatekeeper, enables automatic update checks and turns off the guest account and automatic login. It only reports FileVault, System Integrity Protection and Remote Login, and never changes them. Major macOS upgrades are not installed.
+• The files on the drive are not authenticated: run only a seed drive you made yourself and keep it with you. The log is /var/log/epma-hardening.log. Applying and undoing were tested against stand-in commands only, never on a real Mac.
+
 ## Undo
 • Linux: run the script again with --undo. It restores the files it backed up and removes the ones it created. It does not uninstall packages or turn services off.
-• Windows: double-click undo.cmd on the seed drive (or run harden.ps1 -Mode Undo as administrator). It restores the values it recorded before changing them. It does not turn SMBv1 or the PowerShell 2.0 feature back on, does not shrink the Security log, and cannot restore a setting that was already in the wanted state before. It may report a non-zero exit code when a step failed: read its lines."#.to_string()
+• Windows: double-click undo.cmd on the seed drive (or run harden.ps1 -Mode Undo as administrator). It restores the values it recorded before changing them. It does not turn SMBv1 or the PowerShell 2.0 feature back on, does not shrink the Security log, and cannot restore a setting that was already in the wanted state before. It may report a non-zero exit code when a step failed: read its lines.
+• macOS: double-click undo.command on the seed drive (or run sudo bash harden-macos.sh --undo). It puts back the values it remembered before changing them; a setting that was already in the wanted state is not remembered and stays as it is."#.to_string()
             .replace("@WINDOWS_SETTINGS@", &windows_settings)
             .replace("@NOT_CHANGED@", &windows_not_changed),
         ),
@@ -211,8 +223,8 @@ pub fn help_sections_with(
 • A file that fails the checksum is deleted.
 
 ## Select existing ISO file...
-• Picks an image you already have (.iso, .bin or .img; a ChromeOS Flex .zip is extracted for you). The card (Windows, Linux or Google Chrome) is chosen from the contents of the image, not from its name. You can still click another card.
-• If the file clearly does not match the card (for example a Linux ISO under "Windows 11"), the program asks before erasing anything; a file that is not a ChromeOS Flex image under "Google Chrome" is refused.
+• Picks an image you already have (.iso, .bin or .img; a ChromeOS Flex .zip is extracted for you). The card (Windows, Linux, macOS or Google Chrome) is chosen from the contents of the image, not from its name. You can still click another card.
+• If the file clearly does not match the card (for example a Linux ISO under "Windows 11"), the program asks before erasing anything; a file that is not a ChromeOS Flex image under "Google Chrome" is refused. A file that does not look like a macOS disk image under "macOS" is asked about in the same way.
 
 ## Verify the selected ISO (SHA-256)
 • A link under the file name, shown once an image is selected; click it to open the panel. Paste the expected hash, or the whole line from a SHA256SUMS file (the file name picks the right line), and click "Calculate SHA-256".
@@ -225,12 +237,12 @@ pub fn help_sections_with(
         (
             "The drive and the Create button".to_string(),
             format!(r#"## The cards
-• Google Chrome (ChromeOS Flex, disk image written directly), Windows 11 (GPT + FAT32, files copied), Linux and Other ISO (the ISO is written directly). The card is chosen from the image contents when you select a file; you can change it.
+• Google Chrome (ChromeOS Flex, disk image written directly), Windows 11 (GPT + FAT32, files copied), Linux, macOS and Other ISO (the image is written directly). The card is chosen from the image contents when you select a file; you can change it.
 • Hardening seed: a separate small drive (GPT + FAT32) with auto-install files; no image file is needed, so the image step is hidden and the button reads "Create Seed Drive".
 
 ## Dependencies
 • Windows mode needs wimlib (macOS: brew install wimlib). On Linux it also needs parted, mkfs.vfat (dosfstools), wipefs, partprobe, rsync and wimlib-imagex. On Windows 11 it needs nothing extra: PowerShell and DISM come with Windows (DISM splits install.wim when it is over 4 GB). On Windows a FAT32 volume is at most 30 GiB, so a bigger drive keeps the rest unallocated.
-• The Google Chrome, Linux and Other ISO cards need nothing extra. The Hardening seed card needs only parted, mkfs.vfat, wipefs and partprobe on Linux and nothing extra on macOS.
+• The Google Chrome, Linux, macOS and Other ISO cards need nothing extra. The Hardening seed card needs only parted, mkfs.vfat, wipefs and partprobe on Linux and nothing extra on macOS.
 • The dependencies are checked before anything is erased. When one is missing, the Create button stays disabled and a hint says what to install.
 • "Install missing dependencies" uses your package manager (apt-get, dnf, yum, pacman, zypper, apk or Homebrew) and asks for the administrator password on Linux.
 
@@ -242,7 +254,7 @@ pub fn help_sections_with(
 • Drives that do not look like a spare stick need you to type their identifier (for example disk4). That applies to drives larger than {large_gb} GB, with {used_gb} GB or more in use, with a name that suggests backups or personal data, that look like an external hard disk or SSD, with {MANY_VOLUMES} or more volumes, or whose contents could not be read.
 
 ## Administrator password
-• Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
+• Needed on Linux, and on macOS for the direct-write cards (Google Chrome, Linux, macOS and Other ISO). It is asked right after you confirm and checked before the drive is touched: a wrong or canceled password changes nothing.
 • On Windows there is no password: the program itself must run as Administrator (the installed shortcut asks Windows for it with the UAC prompt; from a terminal, open it with Run as administrator). Without it nothing is changed.
 • It is checked once. Normally it is then dropped and sudo's own credential timestamp carries the operation; only if this computer does not keep that timestamp does the password stay in memory, until the operation ends. It is used only to run local disk commands and is never logged, written to disk or sent anywhere.
 
@@ -272,7 +284,7 @@ pub fn help_sections_with(
         (
             "Verification and eject".to_string(),
             r#"## Verification
-• Linux and ChromeOS Flex modes: the whole image is read back from the drive and compared byte for byte with the file.
+• Linux, ChromeOS Flex and macOS modes: the whole image is read back from the drive and compared byte for byte with the file.
 • Windows mode: the drive is unmounted and mounted again so it is read from the device, then every file is compared by checksum with the ISO. A split install image is also checked with wimlib-imagex verify.
 • Verification cannot be skipped. If anything differs, the drive is NOT ejected, the message says so, and the drive must not be used. Write it again; if it keeps failing, try another USB port or another drive.
 
@@ -288,12 +300,12 @@ pub fn help_sections_with(
 
 ## Commands
 • list [--json] — USB drives that can be used.
-• detect ISO [--json] — prints windows, linux, chromeos or unknown.
+• detect ISO [--json] — prints windows, linux, chromeos, macos or unknown.
 • fetch-chromeos [--dest DIR] [--keep-zip] [--json] — downloads ChromeOS Flex from Google and extracts the disk image. It does not write a drive.
 • sha256 ISO [--expected HASH] [--json] — checksum of an ISO; exits {EXIT_VERIFY_FAILED} when it differs from --expected.
-• write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
-• harden-seed --target ubuntu|fedora|debian|windows --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
-• harden-files --target windows|windows-seed|ubuntu|fedora|debian --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive. No drive is involved and no administrator rights are needed.
+• write --iso ISO --disk DISK [--mode auto|windows|linux|chromeos|macos] [--hardened] [--dry-run] [--yes] [--no-eject] [--json] [-v] — write a drive.
+• harden-seed --target ubuntu|fedora|debian|windows|macos --disk DISK [--dry-run] [--yes] [--no-eject] [--json] [-v] — erase a small separate USB drive and write the hardening seed files on it.
+• harden-files --target windows|windows-seed|ubuntu|fedora|debian|macos --out DIR [--json] — write the hardening files into a new or empty folder. "windows" is the set for the same USB drive as Windows; "windows-seed" is the set for the Windows seed drive; "macos" is the set for the macOS seed drive. No drive is involved and no administrator rights are needed.
 • gui, or no command — open this window.
 • --version, --help — program version and the full help.
 
@@ -307,6 +319,7 @@ pub fn help_sections_with(
 • harden-seed asks for the same confirmation as write (type the disk identifier, or pass --yes), checks the drive the same way, verifies what it wrote and ejects. The seed drive is erased like any other target.
 • The seed files never choose a disk, never partition or format anything and never create accounts or set passwords: storage and the user account stay interactive in the installer.
 • harden-seed --target windows makes the Windows 11 seed drive (label EPMA-SEED): harden.cmd, audit.cmd, undo.cmd, harden.ps1 and a README to run as administrator on an installed Windows.
+• harden-seed --target macos makes the macOS seed drive (label EPMA-SEED): harden.command, audit.command, undo.command, harden-macos.sh and a README to run on a Mac that is already installed.
 • harden-files refuses a folder that is not empty and never overwrites anything.
 
 ## Exit codes

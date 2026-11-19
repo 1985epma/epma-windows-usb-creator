@@ -9,6 +9,7 @@
 
 mod basic;
 mod hardening;
+mod macos;
 mod misc;
 
 use super::{run, Engine, Env, Interrupts, OutStream};
@@ -92,6 +93,16 @@ pub fn seed_files(target: SeedTarget) -> (String, Files) {
                 ("undo.cmd", b"@echo off\r\n"),
                 ("harden.ps1", b"\xef\xbb\xbf# harden\r\n"),
                 ("README.txt", b"hello\r\n"),
+            ]),
+        ),
+        SeedTarget::MacOs => (
+            "EPMA-SEED".into(),
+            files_of(&[
+                ("harden.command", b"#!/bin/bash\n"),
+                ("audit.command", b"#!/bin/bash\n"),
+                ("undo.command", b"#!/bin/bash\n"),
+                ("harden-macos.sh", b"#!/bin/bash\n"),
+                ("README.txt", b"hello\n"),
             ]),
         ),
     }

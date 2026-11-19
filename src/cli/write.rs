@@ -76,7 +76,7 @@ pub fn prepare_write(env: &Env, args: &WriteArgs) -> Result<Plan, CliError> {
     if mode == Mode::Auto {
         mode = detected_mode.ok_or_else(|| {
             CliError::with_code(
-                "Could not tell what kind of image this is. Pass --mode windows, --mode linux or --mode chromeos.",
+                "Could not tell what kind of image this is. Pass --mode windows, --mode linux, --mode chromeos or --mode macos.",
                 EXIT_USAGE,
             )
         })?;
@@ -86,7 +86,7 @@ pub fn prepare_write(env: &Env, args: &WriteArgs) -> Result<Plan, CliError> {
     let mut hardening_names = Vec::new();
     if args.hardened {
         if mode != Mode::Windows {
-            // --mode auto resolved to a Linux or ChromeOS image
+            // --mode auto resolved to a Linux, ChromeOS or macOS image
             return Err(CliError::with_code(HARDENED_WINDOWS_ONLY, EXIT_USAGE));
         }
         hardening_names = hardening_file_names(env, FilesKind::Windows)?;
@@ -94,8 +94,11 @@ pub fn prepare_write(env: &Env, args: &WriteArgs) -> Result<Plan, CliError> {
     let iso_size = std::fs::metadata(&iso).map_err(|e| CliError::new(e.to_string()))?.len();
     let size = disk.size;
     if mode.is_raw() {
-        let checked =
-            if mode == Mode::ChromeOs { engine.validate_disk_image(&iso) } else { engine.validate_hybrid_iso(&iso) };
+        let checked = match mode {
+            Mode::ChromeOs => engine.validate_disk_image(&iso),
+            Mode::MacOs => engine.validate_macos_image(&iso),
+            _ => engine.validate_hybrid_iso(&iso),
+        };
         checked.map_err(value_to_cli)?;
         if engine.chromeos_drive_too_small(mode, size) {
             env.warn(&format!(
