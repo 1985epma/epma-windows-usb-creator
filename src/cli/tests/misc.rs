@@ -408,7 +408,7 @@ fn auto_mode_demands_an_explicit_mode_for_unknown_content() {
     assert!(err.contains("--mode"), "{err}");
     assert!(
         err.contains(
-            "Could not tell what kind of image this is. Pass --mode windows, --mode linux or --mode chromeos."
+            "Could not tell what kind of image this is. Pass --mode windows, --mode linux, --mode chromeos or --mode macos."
         ),
         "{err}"
     );

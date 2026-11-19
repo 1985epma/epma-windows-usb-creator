@@ -23,7 +23,9 @@ use crate::types::{
     BuildOptions, CancelToken, Ctx, Disk, Error, Files, Hardening, Identity, Log, Mode, Privilege, Result,
 };
 use crate::util::{human_size, silent_rmdir};
-use crate::validate::{dev_path, validate_device_name, validate_disk_image, validate_hybrid_iso, validate_iso_path};
+use crate::validate::{
+    dev_path, validate_device_name, validate_disk_image, validate_hybrid_iso, validate_iso_path, validate_macos_image,
+};
 use crate::{harden_windows, linux, macos, seed, windows};
 use std::any::Any;
 use std::cell::RefCell;
@@ -775,6 +777,7 @@ pub fn validate_image_for_mode_on<O: EngineOps + ?Sized>(
     match mode {
         Mode::Linux => validate_hybrid_iso(&iso_path)?,
         Mode::ChromeOs => validate_disk_image(&iso_path)?,
+        Mode::MacOs => validate_macos_image(&iso_path)?,
         _ => {}
     }
     // Raw modes write the image as it is; Windows mode copies its contents. Either way it must fit (the copy of a

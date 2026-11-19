@@ -85,7 +85,7 @@ fn every_target_is_accepted() {
         };
         assert_eq!(args.target.as_str(), target);
     }
-    assert_eq!(crate::cli::HARDEN_FILES_TARGETS, ["windows", "windows-seed", "ubuntu", "fedora", "debian"]);
+    assert_eq!(crate::cli::HARDEN_FILES_TARGETS, ["windows", "windows-seed", "ubuntu", "fedora", "debian", "macos"]);
 }
 
 #[test]
@@ -121,7 +121,7 @@ fn bad_arguments_are_usage_errors() {
         &["harden-files", "--target", "windows"],
         &["harden-files", "--target", "windows-seed"],
         &["harden-files", "--out", "x"],
-        &["harden-files", "--target", "macos", "--out", "x"],
+        &["harden-files", "--target", "bogus", "--out", "x"],
         &["harden-files", "--target", "windows", "--out", "x", "--yes"], // no drive, nothing to confirm
         &["harden-files", "--target", "windows", "--out", "x", "--dry-run"],
     ];

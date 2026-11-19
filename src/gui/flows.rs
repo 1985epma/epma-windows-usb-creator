@@ -72,8 +72,27 @@ pub fn image_matches_choice(be: &dyn Backend, dialogs: &dyn Dialogs, mode: Mode,
         );
         return false;
     }
-    if mode == Mode::Windows && matches!(kind, IsoKind::Linux | IsoKind::ChromeOs) {
-        let name = if kind == IsoKind::Linux { tr("a Linux image") } else { tr("a ChromeOS image") };
+    if mode == Mode::MacOs && kind != IsoKind::MacOs {
+        // The engine refuses an image without a partition table before anything is erased; this asks earlier, when
+        // the file is clearly something else (a Windows or Linux ISO under the macOS card).
+        return dialogs.ask_yes_no(
+            &tr("This does not look like a macOS disk image"),
+            &trf(
+                "The selected file does not look like a macOS disk image:\n{path}\n\n\
+                 The macOS card writes a whole-disk image (a partition table with Apple partitions) as it is. \
+                 Choose the matching card instead, or continue only if you are sure.\n\n\
+                 Continue anyway?",
+                &[("path", image.into())],
+            ),
+            true,
+        );
+    }
+    if mode == Mode::Windows && matches!(kind, IsoKind::Linux | IsoKind::ChromeOs | IsoKind::MacOs) {
+        let name = match kind {
+            IsoKind::Linux => tr("a Linux image"),
+            IsoKind::MacOs => tr("a macOS image"),
+            _ => tr("a ChromeOS image"),
+        };
         return dialogs.ask_yes_no(
             &tr("This does not look like Windows"),
             &trf(

@@ -208,6 +208,51 @@ pub fn validate_disk_image(path: impl AsRef<Path>) -> Result<()> {
     Ok(())
 }
 
+/// A raw macOS disk image that can be written to a USB drive as it is, or `ValueError`.
+///
+/// The image is written byte for byte, so it has to be a whole-disk image: a partition table (it carries the MBR
+/// boot signature, as a GPT disk does) and the partitions. A compressed .dmg, or one volume without a partition
+/// table, would erase the drive for nothing.
+pub fn validate_macos_image(path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let head = read_head(path, 512)?;
+    if head.starts_with(b"PK\x03\x04") {
+        return Err(Error::value(
+            "This is a ZIP archive, not the disk image inside it. Extract it first, then select the .img or .dmg file.",
+        ));
+    }
+    if has_mbr_signature(&head) {
+        return Ok(());
+    }
+    if has_udif_trailer(path)? {
+        return Err(Error::value(
+            "This is a compressed Apple disk image (.dmg) or a single volume, so it cannot be written to a USB drive \
+             as it is. On a Mac, convert it to a whole-disk image first:\n\n\
+             hdiutil convert FILE.dmg -format UDRW -o FILE-raw.dmg\n\n\
+             and select the converted file. Apple's own installer is better made with 'createinstallmedia'.",
+        ));
+    }
+    Err(Error::value(
+        "This file is not a whole-disk macOS image (it has no partition table), so it cannot boot from a USB drive \
+         when written as it is. Use an image that was made for a whole disk (.img or .dmg), or make Apple's \
+         installer with 'createinstallmedia'.",
+    ))
+}
+
+/// True when the file ends with the 512-byte "koly" trailer of an Apple disk image (.dmg).
+fn has_udif_trailer(path: &Path) -> std::io::Result<bool> {
+    use std::io::{Seek, SeekFrom};
+    let mut file = std::fs::File::open(path)?;
+    let size = file.metadata()?.len();
+    if size < 512 {
+        return Ok(false);
+    }
+    file.seek(SeekFrom::Start(size - 512))?;
+    let mut magic = [0u8; 4];
+    file.read_exact(&mut magic)?;
+    Ok(&magic == b"koly")
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Download URL
 // ---------------------------------------------------------------------------------------------------------------

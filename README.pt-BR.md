@@ -5,7 +5,7 @@
 > A versão oficial deste documento é o [README.md em inglês](README.md). Esta
 > tradução é mantida por conveniência e pode ficar desatualizada em relação a ela.
 
-Aplicação multiplataforma (**Windows 11**, **macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…) e o **ChromeOS Flex do Google** direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
+Aplicação multiplataforma (**Windows 11**, **macOS** e **qualquer distribuição Linux**) para baixar a ISO oficial do Windows 11 e gravar um pendrive bootável no padrão **UEFI (GPT + FAT32)**. Também grava **qualquer ISO híbrida** (Ubuntu, Debian, Fedora, Mint, Arch…), o **ChromeOS Flex do Google** e **imagens de disco do macOS** já prontas direto no pendrive, e toda gravação é **relida e verificada** antes de o pendrive ser ejetado.
 
 Tem interface gráfica (em inglês americano) e um [modo linha de comando](#linha-de-comando).
 
@@ -27,6 +27,7 @@ Escrita em **Rust** — um único programa autossuficiente (janela e linha de co
 ## Índice
 
 - [Recursos](#recursos)
+- [Novidades da 1.2.0](#novidades-da-120)
 - [Novidades da 1.1.0](#novidades-da-110)
 - [Como funciona](#como-funciona)
 - [Requisitos](#requisitos)
@@ -47,7 +48,7 @@ Escrita em **Rust** — um único programa autossuficiente (janela e linha de co
 - **Formatação automática** do pendrive como GPT + FAT32 com rótulo `WIN11USB` (compatível com boot UEFI, sem precisar desativar o Secure Boot).
 - **Divisão automática do `install.wim` / `install.esd`**: esses arquivos costumam passar de 4 GB, o limite do FAT32. A aplicação detecta o caso e divide o arquivo em `.swm` usando `wimlib-imagex`.
 - **Instalação automática de dependências**: detecta o gerenciador de pacotes (`apt-get`, `dnf`, `yum`, `pacman`, `zypper`, `apk`) ou o Homebrew no macOS e instala o que estiver faltando. Ferramentas ausentes são detectadas **antes** de apagar qualquer coisa: o botão Create fica desativado, com uma dica do que instalar.
-- **Quatro cartões de imagem**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* e *Other ISO*. O *Windows 11* é formatado como GPT + FAT32 e tem os arquivos copiados; os outros três são gravados byte a byte, como o `dd` (*Linux* e *Other ISO* gravam do mesmo jeito). O cartão é escolhido pelo **conteúdo** da imagem, não pelo nome do arquivo, e você sempre pode trocá-lo.
+- **Cinco cartões de imagem**: *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux*, *macOS* e *Other ISO*. O *Windows 11* é formatado como GPT + FAT32 e tem os arquivos copiados; os outros quatro são gravados byte a byte, como o `dd` (*Linux* e *Other ISO* gravam do mesmo jeito). O cartão é escolhido pelo **conteúdo** da imagem, não pelo nome do arquivo, e você sempre pode trocá-lo.
 - **ChromeOS Flex**: o cartão *Google Chrome* baixa a imagem oficial do Google (`dl.google.com`, HTTPS, com retomada), extrai do ZIP com segurança e a prepara para o pendrive. O ChromeOS comum não é distribuído para PCs em geral; por isso o Flex — o ChromeOS gratuito do Google para PCs e Macs — é a opção oficial.
 - **Gravação verificada**: depois de gravar, o pendrive é relido e comparado com a ISO (byte a byte nas imagens Linux; comparação de checksum e `wimlib-imagex verify` no Windows). Se algo for diferente, o pendrive **não** é ejetado e você é avisado para não usá-lo.
 - **Eject confiável** depois da verificação, com mensagem clara se o sistema recusar.
@@ -59,8 +60,15 @@ Escrita em **Rust** — um único programa autossuficiente (janela e linha de co
 - **Modo linha de comando** (`list`, `write`, `detect`, `sha256`, `--dry-run`, saída JSON, códigos de saída) para scripts.
 - **Documentação integrada**: abra **Help → EPMA USB CREATOR Help** (ou tecle **F1**) para ver guias rápidos, uma referência da janela e dos cinco cartões, segurança, verificação e eject, linha de comando, solução de problemas e os arquivos/configurações usados (a documentação da janela é em inglês).
 - **Verificação de integridade**: downloads só por HTTPS, avisos para servidores desconhecidos e o checksum SHA-256 da imagem baixada.
-- **Reforço da instalação (opcional, experimental):** uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL, Debian e Windows 11 que fazem uma instalação nova começar com configurações mais seguras; veja [Reforço da instalação](#reforço-da-instalação-opcional).
+- **Reforço da instalação (opcional, experimental):** uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL, Debian, Windows 11 e macOS que fazem uma instalação nova começar com configurações mais seguras; veja [Reforço da instalação](#reforço-da-instalação-opcional).
 - **Log em tempo real** de todos os comandos executados, dentro da própria janela: abra **Show details** para lê-lo (ele abre sozinho quando uma gravação falha).
+
+## Novidades da 1.2.0
+
+- **Reescrito em Rust**: um programa único e autocontido (janela e linha de comando), sem Python nem Tk. O comportamento, as mensagens, os códigos de saída e todas as verificações de segurança continuam iguais.
+- **Funciona no Windows 11**, além do macOS e do Linux, com arquivos de versão para os três.
+- **Um tipo de imagem macOS**: o cartão *macOS* grava, byte a byte, uma imagem de disco inteiro do macOS já pronta e a relê para conferir (`--mode macos` na linha de comando).
+- **Reforço da instalação (opcional)**: uma opção do Windows e um pendrive *Hardening seed* para Ubuntu, Fedora/RHEL, Debian, Windows 11 e macOS; veja [Reforço da instalação](#reforço-da-instalação-opcional).
 
 ## Novidades da 1.1.0
 
@@ -131,8 +139,8 @@ No Linux, particionar/formatar/montar um dispositivo de bloco exige privilégios
 Baixe `epma-usb-creator-<versão>-x86_64-pc-windows-msvc.zip` na página de [Releases](https://github.com/1985epma/epma-windows-usb-creator/releases), confira e descompacte:
 
 ```powershell
-Get-FileHash .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256   # compare com o SHA256SUMS.txt
-Expand-Archive .\epma-usb-creator-v1.1.0-x86_64-pc-windows-msvc.zip -DestinationPath .
+Get-FileHash .\epma-usb-creator-v1.2.0-x86_64-pc-windows-msvc.zip -Algorithm SHA256   # compare com o SHA256SUMS.txt
+Expand-Archive .\epma-usb-creator-v1.2.0-x86_64-pc-windows-msvc.zip -DestinationPath .
 .\epma-usb-creator-x86_64-pc-windows-msvc\epma-usb-creator.exe   # abre a janela (pede Administrador: aviso do UAC)
 ```
 
@@ -158,7 +166,7 @@ tap.
 Cada [release](https://github.com/1985epma/epma-windows-usb-creator/releases) traz o programa para Linux (`x86_64`), macOS (Apple silicon) e Windows 11 (`x86_64`), os checksums e a lista de componentes (SBOM). Baixe, confira e execute (Linux e macOS):
 
 ```bash
-V=v1.1.0
+V=v1.2.0
 T=x86_64-unknown-linux-gnu        # macOS (Apple silicon): aarch64-apple-darwin
 curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/epma-usb-creator-$V-$T.tar.gz
 curl -fsSLO https://github.com/1985epma/epma-windows-usb-creator/releases/download/$V/SHA256SUMS.txt
@@ -194,13 +202,14 @@ epma-usb-creator
 
 ### A janela
 
-Uma janela só, com três etapas numeradas — **1 Image type** (cinco cartões: os quatro tipos de imagem e o opcional **Hardening seed**), **2 Image** (onde obter e o arquivo) e **3 USB drive** — e o botão **Create**. Um cabeçalho fino mostra a versão, um indicador **Ready** / **Missing tools** das ferramentas necessárias e o **Help**.
+Uma janela só, com três etapas numeradas — **1 Image type** (seis cartões: os cinco tipos de imagem e o opcional **Hardening seed**), **2 Image** (onde obter e o arquivo) e **3 USB drive** — e o botão **Create**. Um cabeçalho fino mostra a versão, um indicador **Ready** / **Missing tools** das ferramentas necessárias e o **Help**.
 
-1. **Escolha um cartão** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux* ou *Other ISO*. O painel sob os cartões mostra onde obter esse tipo de imagem. Ao selecionar um arquivo de imagem, o cartão certo é escolhido para você, pelo **conteúdo** do arquivo.
+1. **Escolha um cartão** — *Google Chrome* (ChromeOS Flex), *Windows 11*, *Linux*, *macOS* ou *Other ISO*. O painel sob os cartões mostra onde obter esse tipo de imagem. Ao selecionar um arquivo de imagem, o cartão certo é escolhido para você, pelo **conteúdo** do arquivo.
 2. **Obtenha a imagem** (pule se já tiver):
    - **Windows 11** — clique em **"Open Microsoft's official page"**, escolha *Windows 11 (multi-edition ISO)* e o idioma, **clique com o botão direito** no botão azul de 64 bits e escolha **"Copiar endereço do link"** (não clique nele). Cole o link, opcionalmente cole o SHA-256 da Microsoft e clique em **"Download ISO"**.
    - **Google Chrome (ChromeOS Flex)** — clique em **"Download ChromeOS Flex from Google"**; o ZIP é baixado (com retomada), extraído e selecionado para você. Detalhes abaixo.
    - **Linux / Other ISO** — baixe a ISO no site da sua distribuição.
+   - **macOS** — use uma imagem de disco inteiro já pronta (`.img`, ou um `.dmg` convertido com `hdiutil convert ARQUIVO.dmg -format UDRW -o ARQUIVO-raw.dmg`), por exemplo um instalador OpenCore. Para o instalador da própria Apple, use o `createinstallmedia` em um Mac.
 3. **Selecione o arquivo** com **"Select existing ISO file..."** (um `.zip` do ChromeOS Flex é extraído para você). Aparece o link **"Verify the selected ISO (SHA-256)"** sob o nome do arquivo: clique nele, cole o hash publicado (ou uma linha do `SHA256SUMS`) e clique em **"Calculate SHA-256"**.
 4. **Escolha o pendrive** — conecte-o (**mínimo 8 GB**; **16 GB ou mais** para o ChromeOS Flex) e selecione a linha dele (modelo, tamanho, volumes e um selo `USB`). A lista é lida ao abrir o programa e sempre que você volta à janela; clique em **"Refresh USB drives list"** se o pendrive não aparecer. Enquanto o **Create** está desativado, uma dica abaixo dele diz o motivo.
 5. Clique em **"Create Bootable USB Drive"**. O diálogo final mostra modelo, tamanho e volumes do pendrive. Para um **disco de alto risco** (maior que 256 GB, com muitos dados ou parecido com disco externo/de backup) você também precisa digitar o identificador (por exemplo `disk4`). Em seguida o pendrive é apagado, a imagem é gravada, verificada e o pendrive é ejetado. **Cancel** interrompe; o pendrive fica inutilizável até ser gravado de novo. Os resultados aparecem sob o botão, sem janelas pop-up: uma caixa verde quando o pendrive foi verificado e ejetado (com **Make another**) e uma vermelha com **Try again** para um download que falhou.
@@ -209,11 +218,12 @@ O que cada cartão faz:
 
 - **Windows 11** — GPT + FAT32, os arquivos da ISO são copiados (o `install.wim` é dividido quando passa de 4 GB).
 - **Linux** e **Other ISO** — a imagem é gravada byte a byte no pendrive (como o `dd`). Use *Linux* para Ubuntu, Debian, Fedora, Mint, Arch… e *Other ISO* para qualquer outra imagem de boot. Imagens sem assinatura de boot são recusadas antes de apagar qualquer coisa.
+- **macOS** — uma imagem de disco inteiro do macOS já pronta, também gravada byte a byte. Ela precisa ter tabela de partições: um `.dmg` compactado ou um volume avulso é recusado antes de apagar qualquer coisa, com o comando `hdiutil` que o converte. O programa reconhece essas imagens pelas partições da Apple (HFS+, APFS) ou pelo final do `.dmg`.
 - **Google Chrome (ChromeOS Flex)** — imagem de disco do Google, também gravada byte a byte. O pendrive precisa ser do tamanho da imagem ou maior (o Google pede 16 GB ou mais).
 
-Se o arquivo claramente não combina com o cartão (por exemplo uma ISO Linux em *Windows 11*), o programa pergunta antes de apagar qualquer coisa, e um arquivo que não é imagem do ChromeOS Flex em *Google Chrome* é recusado.
+Se o arquivo claramente não combina com o cartão (por exemplo uma ISO Linux em *Windows 11*), o programa pergunta antes de apagar qualquer coisa, e um arquivo que não é imagem do ChromeOS Flex em *Google Chrome* é recusado. Um arquivo que não parece uma imagem de disco do macOS em *macOS* gera a mesma pergunta.
 
-> Senha de administrador é necessária no Linux e, no macOS, nos cartões de gravação direta (*Google Chrome*, *Linux*, *Other ISO*). Ela é pedida e verificada logo após a confirmação, **antes** de mexer no pendrive (senha errada ou cancelada não altera nada). Uma barra de progresso mostra porcentagem, velocidade e tempo restante.
+> Senha de administrador é necessária no Linux e, no macOS, nos cartões de gravação direta (*Google Chrome*, *Linux*, *macOS*, *Other ISO*). Ela é pedida e verificada logo após a confirmação, **antes** de mexer no pendrive (senha errada ou cancelada não altera nada). Uma barra de progresso mostra porcentagem, velocidade e tempo restante.
 >
 > **macOS e imagens Linux/ChromeOS:** o macOS não lê essas imagens. Por isso o pendrive pronto **não aparece no Finder** e o macOS pode dizer que o disco "não pôde ser lido". Clique em **Ignorar** — nunca em *Inicializar*. O conteúdo já foi verificado contra a imagem.
 
@@ -233,7 +243,7 @@ O Google lista estes requisitos para o computador: processador Intel ou AMD de 6
 
 Arquivos opcionais para que uma instalação nova comece com configurações mais seguras. Eles são **inspirados em baselines de segurança comuns**; o programa **não** afirma que o resultado esteja em conformidade com, ou certificado por, qualquer padrão. Nada aqui escolhe disco, cria conta nem define senha ou chave: o Windows Setup e os instaladores Linux continuam interativos.
 
-> **Experimental.** Os scripts foram verificados só com testes automatizados e sistemas simulados (nenhuma instalação real de Windows, Debian, Ubuntu ou Fedora foi executada). Teste primeiro em um computador reserva ou numa máquina virtual e leia os arquivos antes de usar: o `harden-files` grava tudo numa pasta, sem tocar em nenhum pendrive.
+> **Experimental.** Os scripts foram verificados só com testes automatizados e sistemas simulados (nenhuma instalação real de Windows, Debian, Ubuntu, Fedora ou macOS foi alterada). Teste primeiro em um computador reserva ou numa máquina virtual e leia os arquivos antes de usar: o `harden-files` grava tudo numa pasta, sem tocar em nenhum pendrive.
 
 <p align="center">
   <img src="docs/images/interface-hardening.png" alt="O cartão Hardening seed: um segundo pendrive pequeno com configurações de instalação automática, o sistema de destino (Ubuntu, Fedora / RHEL, Debian) e o botão Create Seed Drive" width="620">
@@ -241,6 +251,7 @@ Arquivos opcionais para que uma instalação nova comece com configurações mai
 
 - **Windows 11 (no mesmo pendrive):** marque **"Add hardening settings to the Windows installation (optional)"** no cartão Windows 11. Um script roda no **fim** da instalação do Windows (log: `C:\Windows\Temp\epma-hardening.log`) e desliga SMBv1 e LLMNR e o AutoRun/AutoPlay, liga o firewall, aplica algumas proteções do Microsoft Defender (uma regra de redução de superfície em modo Block e quatro em modo Audit), desativa o recurso PowerShell 2.0 e o cache de credenciais WDigest, liga o log de blocos de script e uma política de auditoria avançada (o log de Segurança sobe para 128 MiB). **"What does it change?"** lista cada ajuste com o seu risco. BitLocker, níveis de NTLM, contas, discos, idioma e chave do produto não são alterados. Os arquivos são conferidos byte a byte junto com o resto do pendrive, e se a imagem já contiver algum deles o programa para **antes** de apagar qualquer coisa.
 - **Linux e outros (um segundo pendrive):** ISOs gravadas direto não aceitam arquivos extras, então o cartão **Hardening seed** apaga um **segundo pendrive pequeno** (GPT + FAT32) e grava os arquivos nele. Mantenha o pendrive do instalador e conecte o do kit ao lado. **Ubuntu** (`autoinstall`, rótulo `CIDATA`; acrescente `autoinstall` na linha de boot, todas as telas continuam interativas), **Fedora / RHEL** (kickstart, rótulo `OEMDRV`, o instalador encontra sozinho) e **Debian** (o instalador **não** encontra o pendrive: monte-o depois de instalar e rode `sudo bash harden-linux.sh`, ou `su -` se não houver sudo).
+- **macOS (um segundo pendrive):** o mesmo cartão tem a opção **macOS (run after install)**, para um Mac **já instalado**. Abra o pendrive no Finder, dê dois cliques em `audit.command` (relatório só de leitura, sem pedir senha; linhas `[CHANGE] (dry-run)` são o que o script mudaria, linhas `[WARN]` merecem atenção), depois em `harden.command` (pede `y` e a sua senha na janela do Terminal); `undo.command` desfaz. Ele liga o Firewall de aplicativos, o modo furtivo e o Gatekeeper, ativa a verificação automática de atualizações e desliga a conta de convidado e o login automático. Ele **só relata** o FileVault, a Proteção da Integridade do Sistema e o Login Remoto, e nunca os altera. O `harden-macos.sh` é texto puro, funciona com o bash que vem no macOS e aceita `--dry-run`, `--yes`, `--undo` e `--help`; ele guarda cada valor que muda (em `/var/db/epma-hardening`) para o `--undo` devolver o original, e registra em `/var/log/epma-hardening.log`. Se um arquivo `.command` não abrir a partir do pendrive FAT, rode `sudo bash /Volumes/EPMA-SEED/harden-macos.sh` no Terminal. O relatório foi executado em um Mac de verdade; aplicar e desfazer só foram testados com comandos de mentira.
 - **Windows 11 (um segundo pendrive):** o mesmo cartão tem a opção **Windows 11 (run after install)**, que serve para um Windows 11 **já instalado** (não participa da instalação do Windows): abra o pendrive, dê dois cliques em `audit.cmd` (relatório só de leitura; linhas `[DIFF]` não estão em vigor), depois em `harden.cmd` (pede `y` e o aviso de administrador); `undo.cmd` desfaz (nunca religa o SMBv1 nem o PowerShell 2.0 e não restaura o que já estava assim antes). Os arquivos do pendrive não são autenticados: use só um pendrive de kit que você mesmo fez e mantenha-o com você. Extra opcional: `harden.ps1 -DisableLegacyNetwork` (NetBIOS sobre TCP/IP e WPAD desligados).
 - **O script Linux** (`harden-linux.sh`) é texto puro, aceita `--dry-run`, `--yes`, `--undo` e `--help`, guarda cópia de cada arquivo que altera (`.epma-bak`), mostra cada mudança e grava em `/var/log/epma-hardening.log`. É idempotente e tenta não trancar você para fora: login de root ou por senha no SSH só é desligado quando existe uma conta de administrador com chave, e o firewall não é ligado num computador com Docker, libvirt ou LXD, a não ser que você use `--yes`.
 
@@ -249,6 +260,7 @@ epma-usb-creator harden-files --target ubuntu --out ./ubuntu-seed          # só
 epma-usb-creator harden-seed --target fedora --disk disk4 --dry-run        # plano de um pendrive de kit
 epma-usb-creator harden-seed --target windows --disk disk4                 # kit do Windows 11
 epma-usb-creator harden-files --target windows-seed --out ./win-seed        # arquivos do kit Windows, sem pendrive
+epma-usb-creator harden-seed --target macos --disk disk4                    # kit do macOS
 epma-usb-creator write --iso Win11.iso --disk disk4 --hardened             # Windows + arquivos de reforço
 ```
 
@@ -259,12 +271,13 @@ O mesmo motor está disponível sem a janela:
 ```bash
 epma-usb-creator --help                 # Homebrew: epma-windows-usb-creator
 epma-usb-creator list                       # pendrives USB utilizáveis (--json disponível)
-epma-usb-creator detect ubuntu.iso          # windows | linux | chromeos | unknown
+epma-usb-creator detect ubuntu.iso          # windows | linux | chromeos | macos | unknown
 epma-usb-creator sha256 ubuntu.iso --expected <hash>
 epma-usb-creator write --iso ubuntu.iso --disk disk4 --dry-run   # mostra o plano, não altera nada
 epma-usb-creator write --iso ubuntu.iso --disk disk4             # pede para digitar o id do disco
 epma-usb-creator fetch-chromeos --dest ~/Downloads               # ChromeOS Flex: baixar + extrair
 epma-usb-creator write --iso ~/Downloads/<imagem>.bin --disk disk4 --mode chromeos
+epma-usb-creator write --iso macos-disk.img --disk disk4 --mode macos   # uma imagem de disco inteiro do macOS
 ```
 
 Os comandos de reforço (`harden-files`, `harden-seed`, `write --hardened`) estão em [Reforço da instalação](#reforço-da-instalação-opcional).

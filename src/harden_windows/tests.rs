@@ -251,7 +251,7 @@ fn contract_constants() {
     assert_eq!(Hardening::ALL, [Hardening::None, Hardening::Baseline]);
     assert_eq!(crate::types::SeedTarget::Windows.as_str(), "windows");
     let targets: Vec<&str> = crate::types::SeedTarget::ALL.iter().map(|t| t.as_str()).collect();
-    assert_eq!(targets, ["ubuntu", "fedora", "debian", "windows"]);
+    assert_eq!(targets, ["ubuntu", "fedora", "debian", "windows", "macos"]);
 }
 
 #[test]

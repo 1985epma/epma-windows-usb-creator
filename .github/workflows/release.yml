@@ -26,10 +26,10 @@
 #
 # COMO PUBLICAR UMA VERSÃO
 # ------------------------
-#   1. No CHANGELOG.md, renomeie o título "## [1.1.0] - unreleased" com a data
+#   1. No CHANGELOG.md, renomeie o título "## [1.2.0] - unreleased" com a data
 #      (o título precisa conter [X.Y.Z], igual à tag sem o "v").
-#   2. git tag v1.1.0
-#      git push origin v1.1.0
+#   2. git tag v1.2.0
+#      git push origin v1.2.0
 #
 # O resto acontece sozinho.
 # =============================================================================

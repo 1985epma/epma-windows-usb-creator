@@ -1364,6 +1364,11 @@ impl AppState {
             self.show_success(&title, &note, ejected);
             return;
         }
+        if mode == Mode::Seed && target == Some(SeedTarget::MacOs) {
+            let (title, note) = texts::macos_seed_success_texts(ejected);
+            self.show_success(&title, &note, ejected);
+            return;
+        }
         if mode == Mode::Seed {
             let (title, note) = texts::seed_success_texts(ejected);
             self.show_success(&title, &note, ejected);

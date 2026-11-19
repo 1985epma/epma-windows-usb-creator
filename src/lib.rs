@@ -35,6 +35,7 @@ pub mod seed;
 pub mod windows;
 
 pub mod harden_linux;
+pub mod harden_macos;
 pub mod harden_windows;
 pub mod help;
 pub mod seed_files;

@@ -46,6 +46,16 @@ What was **not** verified (do this before trusting it with a drive that holds da
 * Text changes in the built-in Help: the About sentence about "no third-party dependencies / Python standard library" now
   says the program is written in Rust; the Tkinter troubleshooting entry and "(no Tkinter needed)" are gone.
 * Invalid enum values (`unknown mode/profile/target`) cannot exist in Rust; those Python tests became parser tests.
+* New in the Rust build, not in the Python: the **macOS** image type (card `Card::Mac`, `Mode::MacOs`, `IsoKind::MacOs`,
+  `--mode macos`). It is a raw whole-disk write like ChromeOS (`validate_macos_image`, detection by Apple GPT partition
+  types or the `.dmg` `koly` trailer) and uses the existing raw-write scripts unchanged. The built-in Help names it in
+  the sections that list the image types; `tests/test_help_a5.rs` lists those sentences one by one. Not exercised on a
+  real drive.
+* New in the Rust build, not in the Python: the **macOS** target of the Hardening seed (`SeedTarget::MacOs`,
+  `harden_macos.rs`, `assets/harden-macos.sh`, `harden-seed --target macos`, `harden-files --target macos`). It mirrors
+  the Windows seed (three launchers, a script and a README on a FAT32 volume labelled `EPMA-SEED`). Its tests are in
+  `tests/test_hardening_macos.rs` (the script runs in bash against a fake root with stand-in commands) and there is
+  no Python golden for it. Applying and undoing were never run on a real Mac; the report was.
 
 ## Not ported (CI-only infrastructure that drove the Python module)
 

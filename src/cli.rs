@@ -2,7 +2,7 @@
 //!
 //!   epma-usb-creator                 open the window (same as `epma-usb-creator gui`)
 //!   epma-usb-creator list            list the USB drives that can be written
-//!   epma-usb-creator detect ISO      windows / linux / chromeos / unknown
+//!   epma-usb-creator detect ISO      windows / linux / chromeos / macos / unknown
 //!   epma-usb-creator sha256 ISO      checksum, optionally compared with --expected
 //!   epma-usb-creator write ...       create the bootable drive
 //!   epma-usb-creator fetch-chromeos | harden-seed | harden-files

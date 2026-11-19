@@ -225,16 +225,19 @@ fn the_password_never_reaches_a_command_line() {
 // 2. Numbers in the help that must come from the constants
 // ---------------------------------------------------------------------------
 #[test]
-fn overview_counts_the_four_cards() {
+fn overview_counts_the_five_image_cards() {
     let overview = help_section("Overview");
-    assert!(!overview.contains("Three image types"));
-    assert!(overview.contains("Four image types"));
-    for card in ["Google Chrome", "Windows 11", "Linux", "Other ISO"] {
+    assert!(!overview.contains("Three image types") && !overview.contains("Four image types"));
+    assert!(overview.contains("Five image types"));
+    for card in ["Google Chrome", "Windows 11", "Linux", "macOS", "Other ISO"] {
         assert!(overview.contains(card), "the overview does not name {card}");
     }
     use epma_usb_creator::types::{Card, Mode};
     let image_cards: Vec<Card> = Card::ORDER.iter().copied().filter(|c| *c != Card::Seed).collect();
-    assert_eq!(image_cards, vec![Card::Chrome, Card::Windows, Card::Linux, Card::Other]);
+    assert_eq!(image_cards, vec![Card::Chrome, Card::Windows, Card::Linux, Card::Mac, Card::Other]);
+    // macOS is a raw whole-disk write of its own
+    assert_eq!(Card::Mac.mode(), Mode::MacOs);
+    assert!(Mode::MacOs.is_raw());
     // Linux and Other ISO are two cards that write the same way
     assert_eq!(Card::Linux.mode(), Card::Other.mode());
     assert_eq!(Card::Linux.mode(), Mode::Linux);
